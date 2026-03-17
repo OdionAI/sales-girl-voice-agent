@@ -1,0 +1,27 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+
+# Env / secrets
+.env
+.env.*
+*.env
+!.env.example
+web-ui/.env.local
+agent-starter-react/.env
+
+# Node / build artifacts
+node_modules/
+web-ui/.next/
+agent-starter-react/.next/
+dist/
+build/
+
+# OS / editor junk
+.DS_Store
+*.log
+
+# SQLite database (optional, recommended)
+appointments.db
+conversation_memory.db

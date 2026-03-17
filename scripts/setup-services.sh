@@ -1,0 +1,103 @@
+#!/bin/bash
+set -e
+
+# Setup systemd services for SalesGirl Voice Agent
+# Run this once after VM creation (or as part of deployment)
+
+# Detect app path: repo may be cloned to /opt/sales-girl-voice-agent (flat) or nested.
+ROOT="/opt/sales-girl-voice-agent"
+if [ -f "${ROOT}/sales-girl-voice-agent/main.py" ] && [ -d "${ROOT}/sales-girl-voice-agent/backend" ]; then
+  APP_PATH="${ROOT}/sales-girl-voice-agent"
+elif [ -f "${ROOT}/main.py" ] && [ -d "${ROOT}/backend" ]; then
+  APP_PATH="${ROOT}"
+else
+  echo "❌ Could not find app (main.py + backend/) under ${ROOT}"
+  exit 1
+fi
+VM_USER="${VM_USER:-salesgirl}"
+
+echo "🔧 Setting up systemd services (APP_PATH=${APP_PATH})..."
+
+# Backend service
+cat > /tmp/sales-girl-backend.service <<EOF
+[Unit]
+Description=SalesGirl Voice Agent - FastAPI Backend
+After=network.target
+
+[Service]
+Type=simple
+User=${VM_USER}
+WorkingDirectory=${APP_PATH}
+EnvironmentFile=${APP_PATH}/.env
+Environment="PATH=${APP_PATH}/.venv/bin"
+ExecStart=${APP_PATH}/.venv/bin/uvicorn backend.api:app --host 0.0.0.0 --port 8000
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# English agent service
+cat > /tmp/sales-girl-agent-en.service <<EOF
+[Unit]
+Description=SalesGirl Voice Agent - sales-girl-agent-en (English)
+After=network.target
+
+[Service]
+Type=simple
+User=${VM_USER}
+WorkingDirectory=${APP_PATH}
+EnvironmentFile=${APP_PATH}/.env
+Environment="AGENT_NAME=sales-girl-agent-en"
+Environment="PATH=${APP_PATH}/.venv/bin"
+ExecStart=${APP_PATH}/.venv/bin/python main.py start
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# French agent service
+cat > /tmp/sales-girl-agent-fr.service <<EOF
+[Unit]
+Description=SalesGirl Voice Agent - sales-girl-agent-fr (French)
+After=network.target
+
+[Service]
+Type=simple
+User=${VM_USER}
+WorkingDirectory=${APP_PATH}
+EnvironmentFile=${APP_PATH}/.env
+Environment="AGENT_NAME=sales-girl-agent-fr"
+Environment="PATH=${APP_PATH}/.venv/bin"
+ExecStart=${APP_PATH}/.venv/bin/python main.py start
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# Install services
+cp /tmp/sales-girl-backend.service /etc/systemd/system/
+cp /tmp/sales-girl-agent-en.service /etc/systemd/system/
+cp /tmp/sales-girl-agent-fr.service /etc/systemd/system/
+
+# Reload systemd
+systemctl daemon-reload
+
+# Enable services
+systemctl enable sales-girl-backend sales-girl-agent-en sales-girl-agent-fr
+
+# Start services
+systemctl start sales-girl-backend sales-girl-agent-en sales-girl-agent-fr
+
+echo "✅ Systemd services installed and started"

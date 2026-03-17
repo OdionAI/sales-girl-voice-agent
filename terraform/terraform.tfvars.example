@@ -1,0 +1,13 @@
+# Copy this file to terraform.tfvars and fill in your values
+# terraform.tfvars is gitignored - never commit secrets!
+
+gcp_project_id = "your-gcp-project-id"
+gcp_region      = "us-central1"
+gcp_zone        = "us-central1-a"
+environment     = "staging"  # or "prod"
+machine_type    = "e2-small"
+disk_size_gb    = 20
+repo_url        = "https://github.com/YOUR_USERNAME/odion-voice-agent-merge.git"
+repo_branch     = "main"
+vm_user         = "odion"
+app_directory   = "odion-voice-agent"
