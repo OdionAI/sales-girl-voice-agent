@@ -16,6 +16,15 @@ else
 fi
 VM_USER="${VM_USER:-salesgirl}"
 
+if [ -f "${APP_PATH}/.env" ]; then
+  set -a
+  # shellcheck disable=SC1090
+  . "${APP_PATH}/.env"
+  set +a
+fi
+
+ENABLE_FRENCH_AGENT="${ENABLE_FRENCH_AGENT:-false}"
+
 echo "🔧 Setting up systemd services (APP_PATH=${APP_PATH})..."
 
 # Backend service
@@ -89,15 +98,29 @@ EOF
 # Install services
 cp /tmp/sales-girl-backend.service /etc/systemd/system/
 cp /tmp/sales-girl-agent-en.service /etc/systemd/system/
-cp /tmp/sales-girl-agent-fr.service /etc/systemd/system/
+if [ "${ENABLE_FRENCH_AGENT}" = "true" ]; then
+  cp /tmp/sales-girl-agent-fr.service /etc/systemd/system/
+else
+  rm -f /etc/systemd/system/sales-girl-agent-fr.service
+fi
 
 # Reload systemd
 systemctl daemon-reload
 
 # Enable services
-systemctl enable sales-girl-backend sales-girl-agent-en sales-girl-agent-fr
+systemctl enable sales-girl-backend sales-girl-agent-en
+if [ "${ENABLE_FRENCH_AGENT}" = "true" ]; then
+  systemctl enable sales-girl-agent-fr
+else
+  systemctl disable sales-girl-agent-fr 2>/dev/null || true
+fi
 
 # Start services
-systemctl start sales-girl-backend sales-girl-agent-en sales-girl-agent-fr
+systemctl start sales-girl-backend sales-girl-agent-en
+if [ "${ENABLE_FRENCH_AGENT}" = "true" ]; then
+  systemctl start sales-girl-agent-fr
+else
+  systemctl stop sales-girl-agent-fr 2>/dev/null || true
+fi
 
-echo "✅ Systemd services installed and started"
+echo "✅ Systemd services installed and started (ENABLE_FRENCH_AGENT=${ENABLE_FRENCH_AGENT})"
