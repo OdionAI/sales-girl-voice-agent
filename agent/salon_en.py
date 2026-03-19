@@ -50,9 +50,9 @@ class SalonAgentEN(Agent):
     async def lookup_customer_account(
         self,
         ctx: RunContext,
-        customer_identifier: str,
+        customer_identifier: str | None = None,
     ) -> dict:
-        """Look up a customer's electricity account profile using account number, phone number, or email."""
+        """Look up the caller's electricity account profile. You can provide an account number, phone number, or email, but if omitted the caller email from the session is used automatically."""
         return await lookup_customer_account_api(
             customer_identifier=customer_identifier,
             metadata=_tool_metadata(ctx),
@@ -62,9 +62,9 @@ class SalonAgentEN(Agent):
     async def get_tariff_profile(
         self,
         ctx: RunContext,
-        customer_identifier: str,
+        customer_identifier: str | None = None,
     ) -> dict:
-        """Retrieve tariff band, meter type, feeder, and service-area details using the customer's account number, phone, or email."""
+        """Retrieve the caller's tariff band, meter type, feeder, and service-area details. If no identifier is provided, use the current caller automatically."""
         return await get_tariff_profile_api(
             customer_identifier=customer_identifier,
             metadata=_tool_metadata(ctx),
@@ -74,9 +74,9 @@ class SalonAgentEN(Agent):
     async def get_payment_summary(
         self,
         ctx: RunContext,
-        customer_identifier: str,
+        customer_identifier: str | None = None,
     ) -> dict:
-        """Retrieve recent bill and payment history using the customer's account number, phone, or email."""
+        """Retrieve the caller's recent bill and payment history. If no identifier is provided, use the current caller automatically."""
         return await get_payment_summary_api(
             customer_identifier=customer_identifier,
             metadata=_tool_metadata(ctx),
@@ -86,9 +86,9 @@ class SalonAgentEN(Agent):
     async def get_vending_history(
         self,
         ctx: RunContext,
-        customer_identifier: str,
+        customer_identifier: str | None = None,
     ) -> dict:
-        """Retrieve recent token vending and meter interaction history using the customer's account number, phone, or email."""
+        """Retrieve the caller's recent token vending and meter interaction history. If no identifier is provided, use the current caller automatically."""
         return await get_vending_history_api(
             customer_identifier=customer_identifier,
             metadata=_tool_metadata(ctx),
@@ -98,13 +98,13 @@ class SalonAgentEN(Agent):
     async def create_complaint_ticket(
         self,
         ctx: RunContext,
-        customer_identifier: str,
         title: str,
         description: str,
+        customer_identifier: str | None = None,
         priority: str = "high",
         case_reference: str | None = None,
     ) -> dict:
-        """Create a complaint ticket for billing, technical, or account issues."""
+        """Create a complaint ticket for the caller for billing, technical, or account issues. If no identifier is provided, use the current caller automatically."""
         result = await create_complaint_ticket_api(
             customer_identifier=customer_identifier,
             title=title,
@@ -121,11 +121,11 @@ class SalonAgentEN(Agent):
     async def report_outage(
         self,
         ctx: RunContext,
-        customer_identifier: str,
         summary: str,
+        customer_identifier: str | None = None,
         priority: str = "high",
     ) -> dict:
-        """Report a power outage or low-voltage issue and log the required follow-up."""
+        """Report a power outage or low-voltage issue for the caller. If no identifier is provided, use the current caller automatically."""
         result = await report_outage_api(
             customer_identifier=customer_identifier,
             summary=summary,
@@ -140,11 +140,11 @@ class SalonAgentEN(Agent):
     async def create_meter_request(
         self,
         ctx: RunContext,
-        customer_identifier: str,
         summary: str,
+        customer_identifier: str | None = None,
         priority: str = "normal",
     ) -> dict:
-        """Create a meter-related request for installation, programming, or follow-up."""
+        """Create a meter-related request for the caller. If no identifier is provided, use the current caller automatically."""
         result = await create_meter_request_api(
             customer_identifier=customer_identifier,
             summary=summary,
@@ -159,13 +159,13 @@ class SalonAgentEN(Agent):
     async def escalate_issue(
         self,
         ctx: RunContext,
-        customer_identifier: str,
         title: str,
         description: str,
+        customer_identifier: str | None = None,
         priority: str = "high",
         case_reference: str | None = None,
     ) -> dict:
-        """Escalate human-handled issues like outages, transformer faults, or billing reconciliation."""
+        """Escalate a human-handled issue for the caller. If no identifier is provided, use the current caller automatically."""
         result = await escalate_issue_api(
             customer_identifier=customer_identifier,
             title=title,

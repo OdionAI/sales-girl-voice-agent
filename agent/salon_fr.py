@@ -50,9 +50,9 @@ class SalonAgentFR(Agent):
     async def lookup_customer_account(
         self,
         ctx: RunContext,
-        customer_identifier: str,
+        customer_identifier: str | None = None,
     ) -> dict:
-        """Recuperer le profil du client a partir du numero de compte, du telephone ou de l'email."""
+        """Recuperer le profil du client a partir du numero de compte, du telephone ou de l'email. Si aucun identifiant n'est fourni, utiliser automatiquement l'email de l'appelant."""
         return await lookup_customer_account_api(
             customer_identifier=customer_identifier,
             metadata=_tool_metadata(ctx),
@@ -62,9 +62,9 @@ class SalonAgentFR(Agent):
     async def get_tariff_profile(
         self,
         ctx: RunContext,
-        customer_identifier: str,
+        customer_identifier: str | None = None,
     ) -> dict:
-        """Recuperer la bande tarifaire, le type de compteur et les details du service a partir du numero de compte, du telephone ou de l'email."""
+        """Recuperer la bande tarifaire, le type de compteur et les details du service a partir du numero de compte, du telephone ou de l'email. Si aucun identifiant n'est fourni, utiliser automatiquement l'email de l'appelant."""
         return await get_tariff_profile_api(
             customer_identifier=customer_identifier,
             metadata=_tool_metadata(ctx),
@@ -74,9 +74,9 @@ class SalonAgentFR(Agent):
     async def get_payment_summary(
         self,
         ctx: RunContext,
-        customer_identifier: str,
+        customer_identifier: str | None = None,
     ) -> dict:
-        """Recuperer l'historique recent des factures et paiements a partir du numero de compte, du telephone ou de l'email."""
+        """Recuperer l'historique recent des factures et paiements a partir du numero de compte, du telephone ou de l'email. Si aucun identifiant n'est fourni, utiliser automatiquement l'email de l'appelant."""
         return await get_payment_summary_api(
             customer_identifier=customer_identifier,
             metadata=_tool_metadata(ctx),
@@ -86,9 +86,9 @@ class SalonAgentFR(Agent):
     async def get_vending_history(
         self,
         ctx: RunContext,
-        customer_identifier: str,
+        customer_identifier: str | None = None,
     ) -> dict:
-        """Recuperer l'historique recent des achats de token et du compteur a partir du numero de compte, du telephone ou de l'email."""
+        """Recuperer l'historique recent des achats de token et du compteur a partir du numero de compte, du telephone ou de l'email. Si aucun identifiant n'est fourni, utiliser automatiquement l'email de l'appelant."""
         return await get_vending_history_api(
             customer_identifier=customer_identifier,
             metadata=_tool_metadata(ctx),
@@ -98,13 +98,13 @@ class SalonAgentFR(Agent):
     async def create_complaint_ticket(
         self,
         ctx: RunContext,
-        customer_identifier: str,
         title: str,
         description: str,
+        customer_identifier: str | None = None,
         priority: str = "high",
         case_reference: str | None = None,
     ) -> dict:
-        """Creer un ticket de plainte pour un probleme de facturation, technique ou de compte."""
+        """Creer un ticket de plainte pour un probleme de facturation, technique ou de compte. Si aucun identifiant n'est fourni, utiliser automatiquement l'email de l'appelant."""
         result = await create_complaint_ticket_api(
             customer_identifier=customer_identifier,
             title=title,
@@ -121,11 +121,11 @@ class SalonAgentFR(Agent):
     async def report_outage(
         self,
         ctx: RunContext,
-        customer_identifier: str,
         summary: str,
+        customer_identifier: str | None = None,
         priority: str = "high",
     ) -> dict:
-        """Signaler une panne de courant ou un probleme de basse tension."""
+        """Signaler une panne de courant ou un probleme de basse tension. Si aucun identifiant n'est fourni, utiliser automatiquement l'email de l'appelant."""
         result = await report_outage_api(
             customer_identifier=customer_identifier,
             summary=summary,
@@ -140,11 +140,11 @@ class SalonAgentFR(Agent):
     async def create_meter_request(
         self,
         ctx: RunContext,
-        customer_identifier: str,
         summary: str,
+        customer_identifier: str | None = None,
         priority: str = "normal",
     ) -> dict:
-        """Creer une demande liee au compteur, a l'installation ou a la programmation."""
+        """Creer une demande liee au compteur, a l'installation ou a la programmation. Si aucun identifiant n'est fourni, utiliser automatiquement l'email de l'appelant."""
         result = await create_meter_request_api(
             customer_identifier=customer_identifier,
             summary=summary,
@@ -159,13 +159,13 @@ class SalonAgentFR(Agent):
     async def escalate_issue(
         self,
         ctx: RunContext,
-        customer_identifier: str,
         title: str,
         description: str,
+        customer_identifier: str | None = None,
         priority: str = "high",
         case_reference: str | None = None,
     ) -> dict:
-        """Escalader les problemes qui exigent une intervention humaine ou terrain."""
+        """Escalader les problemes qui exigent une intervention humaine ou terrain. Si aucun identifiant n'est fourni, utiliser automatiquement l'email de l'appelant."""
         result = await escalate_issue_api(
             customer_identifier=customer_identifier,
             title=title,
