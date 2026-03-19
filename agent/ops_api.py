@@ -113,96 +113,56 @@ def _trace(tool_name: str, metadata: dict[str, Any] | None, user_id: str | None 
     )
 
 
-@observe(name="tool.resolve_customer", as_type="tool")
-async def resolve_customer(*, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+@observe(name="tool.lookup_customer_account", as_type="tool")
+async def lookup_customer_account(*, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
     caller_id = str((metadata or {}).get("end_user_id") or "")
-    _trace("resolve_customer", metadata, user_id=caller_id)
+    _trace("lookup_customer_account", metadata, user_id=caller_id)
     return await _request_json(
         "POST",
-        "/v1/tools/resolve-customer",
-        json_body={"create_if_missing": True},
+        "/v1/tools/customer-account/lookup",
+        json_body={},
         metadata=metadata,
     )
 
 
-@observe(name="tool.search_passport_application", as_type="tool")
-async def search_passport_application(
-    *,
-    application_id: str | None = None,
-    metadata: dict[str, Any] | None = None,
-) -> dict[str, Any]:
+@observe(name="tool.get_tariff_profile", as_type="tool")
+async def get_tariff_profile(*, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
     caller_id = str((metadata or {}).get("end_user_id") or "")
-    _trace("applications_search", metadata, user_id=caller_id)
-    body: dict[str, Any] = {}
-    if application_id:
-        body["application_id"] = application_id
+    _trace("get_tariff_profile", metadata, user_id=caller_id)
     return await _request_json(
         "POST",
-        "/v1/tools/applications/search",
-        json_body=body,
+        "/v1/tools/tariff-profile",
+        json_body={},
         metadata=metadata,
     )
 
 
-@observe(name="tool.search_certificate_request", as_type="tool")
-async def search_certificate_request(
-    *,
-    certificate_id: str | None = None,
-    metadata: dict[str, Any] | None = None,
-) -> dict[str, Any]:
+@observe(name="tool.get_payment_summary", as_type="tool")
+async def get_payment_summary(*, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
     caller_id = str((metadata or {}).get("end_user_id") or "")
-    _trace("certificates_search", metadata, user_id=caller_id)
-    body: dict[str, Any] = {}
-    if certificate_id:
-        body["certificate_id"] = certificate_id
+    _trace("get_payment_summary", metadata, user_id=caller_id)
     return await _request_json(
         "POST",
-        "/v1/tools/certificates/search",
-        json_body=body,
+        "/v1/tools/payments/summary",
+        json_body={},
         metadata=metadata,
     )
 
 
-@observe(name="tool.dispatch_passport_now", as_type="tool")
-async def dispatch_passport_now(
-    *,
-    application_id: str | None = None,
-    metadata: dict[str, Any] | None = None,
-) -> dict[str, Any]:
+@observe(name="tool.get_vending_history", as_type="tool")
+async def get_vending_history(*, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
     caller_id = str((metadata or {}).get("end_user_id") or "")
-    _trace("dispatch_create", metadata, user_id=caller_id)
-    body: dict[str, Any] = {"address_confirmed": True}
-    if application_id:
-        body["application_id"] = application_id
+    _trace("get_vending_history", metadata, user_id=caller_id)
     return await _request_json(
         "POST",
-        "/v1/tools/dispatch/create",
-        json_body=body,
+        "/v1/tools/vending/history",
+        json_body={},
         metadata=metadata,
     )
 
 
-@observe(name="tool.issue_certificate_now", as_type="tool")
-async def issue_certificate_now(
-    *,
-    certificate_id: str | None = None,
-    metadata: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    caller_id = str((metadata or {}).get("end_user_id") or "")
-    _trace("certificate_issue", metadata, user_id=caller_id)
-    body: dict[str, Any] = {}
-    if certificate_id:
-        body["certificate_id"] = certificate_id
-    return await _request_json(
-        "POST",
-        "/v1/tools/certificates/issue",
-        json_body=body,
-        metadata=metadata,
-    )
-
-
-@observe(name="tool.create_escalation_ticket", as_type="tool")
-async def create_escalation_ticket(
+@observe(name="tool.create_complaint_ticket", as_type="tool")
+async def create_complaint_ticket(
     *,
     title: str,
     description: str,
@@ -211,7 +171,78 @@ async def create_escalation_ticket(
     metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     caller_id = str((metadata or {}).get("end_user_id") or "")
-    _trace("create_escalation_ticket", metadata, user_id=caller_id)
+    _trace("create_complaint_ticket", metadata, user_id=caller_id)
+    body: dict[str, Any] = {
+        "title": title,
+        "description": description,
+        "priority": priority,
+        "conversation_id": str((metadata or {}).get("conversation_id") or ""),
+    }
+    if case_reference:
+        body["case_reference"] = case_reference
+    return await _request_json(
+        "POST",
+        "/v1/tools/complaints/create",
+        json_body=body,
+        metadata=metadata,
+    )
+
+
+@observe(name="tool.report_outage", as_type="tool")
+async def report_outage(
+    *,
+    summary: str,
+    priority: str = "high",
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    caller_id = str((metadata or {}).get("end_user_id") or "")
+    _trace("report_outage", metadata, user_id=caller_id)
+    body: dict[str, Any] = {
+        "summary": summary,
+        "priority": priority,
+        "conversation_id": str((metadata or {}).get("conversation_id") or ""),
+    }
+    return await _request_json(
+        "POST",
+        "/v1/tools/outages/report",
+        json_body=body,
+        metadata=metadata,
+    )
+
+
+@observe(name="tool.create_meter_request", as_type="tool")
+async def create_meter_request(
+    *,
+    summary: str,
+    priority: str = "normal",
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    caller_id = str((metadata or {}).get("end_user_id") or "")
+    _trace("create_meter_request", metadata, user_id=caller_id)
+    body: dict[str, Any] = {
+        "summary": summary,
+        "priority": priority,
+        "conversation_id": str((metadata or {}).get("conversation_id") or ""),
+    }
+    return await _request_json(
+        "POST",
+        "/v1/tools/meter-requests/create",
+        json_body=body,
+        metadata=metadata,
+    )
+
+
+@observe(name="tool.escalate_issue", as_type="tool")
+async def escalate_issue(
+    *,
+    title: str,
+    description: str,
+    priority: str = "high",
+    case_reference: str | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    caller_id = str((metadata or {}).get("end_user_id") or "")
+    _trace("escalate_issue", metadata, user_id=caller_id)
     body: dict[str, Any] = {
         "title": title,
         "description": description,

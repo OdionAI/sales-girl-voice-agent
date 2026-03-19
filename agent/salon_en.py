@@ -4,12 +4,14 @@ import os
 from livekit.agents import Agent, RunContext, function_tool
 
 from .ops_api import (
-    create_escalation_ticket as create_escalation_ticket_api,
-    dispatch_passport_now as dispatch_passport_now_api,
-    issue_certificate_now as issue_certificate_now_api,
-    resolve_customer as resolve_customer_api,
-    search_certificate_request as search_certificate_request_api,
-    search_passport_application as search_passport_application_api,
+    create_complaint_ticket as create_complaint_ticket_api,
+    create_meter_request as create_meter_request_api,
+    escalate_issue as escalate_issue_api,
+    get_payment_summary as get_payment_summary_api,
+    get_tariff_profile as get_tariff_profile_api,
+    get_vending_history as get_vending_history_api,
+    lookup_customer_account as lookup_customer_account_api,
+    report_outage as report_outage_api,
 )
 
 logger = logging.getLogger(__name__)
@@ -39,93 +41,45 @@ def _tool_metadata(ctx: RunContext) -> dict:
     }
 
 
-def _intake_description(ctx: RunContext, *, request_type: str) -> str:
-    md = _tool_metadata(ctx)
-    customer_email = str(md.get("end_user_id") or "").strip()
-    last_user_text = str(md.get("last_user_transcript") or "").strip()
-    if request_type == "certificate":
-        action = "start a new certificate application"
-    else:
-        action = "start a new passport application"
-    return (
-        f"Customer requested to {action}. "
-        f"Authenticated email: {customer_email or '-unknown-'}. "
-        f"Latest caller message: {last_user_text or '-none-'}."
-    )
-
-
 class SalonAgentEN(Agent):
     """
-    Benin call-center assistant agent (English).
+    EKEDC customer support agent (English).
     """
 
     @function_tool()
-    async def resolve_caller(
+    async def lookup_customer_account(
         self,
         ctx: RunContext,
     ) -> dict:
-        """Resolve the currently authenticated caller profile from session identity."""
-        inferred = str(getattr(getattr(ctx, "session", None), "userdata", {}).get("end_user_id") or "").strip()
-        if not inferred:
-            return {"status": "failed", "message": "Authenticated caller identity is missing."}
-        return await resolve_customer_api(metadata=_tool_metadata(ctx))
+        """Look up the authenticated customer's electricity account profile."""
+        return await lookup_customer_account_api(metadata=_tool_metadata(ctx))
 
     @function_tool()
-    async def check_passport_application(
+    async def get_tariff_profile(
         self,
         ctx: RunContext,
-        application_id: str | None = None,
     ) -> dict:
-        """Check passport application and dispatch status for the authenticated caller."""
-        return await search_passport_application_api(
-            application_id=application_id,
-            metadata=_tool_metadata(ctx),
-        )
+        """Retrieve tariff band, meter type, feeder, and service-area details for the caller."""
+        return await get_tariff_profile_api(metadata=_tool_metadata(ctx))
 
     @function_tool()
-    async def check_certificate_request(
+    async def get_payment_summary(
         self,
         ctx: RunContext,
-        certificate_id: str | None = None,
     ) -> dict:
-        """Check certificate request status for the authenticated caller."""
-        return await search_certificate_request_api(
-            certificate_id=certificate_id,
-            metadata=_tool_metadata(ctx),
-        )
+        """Retrieve recent bill and payment history for the caller."""
+        return await get_payment_summary_api(metadata=_tool_metadata(ctx))
 
     @function_tool()
-    async def dispatch_passport_now(
+    async def get_vending_history(
         self,
         ctx: RunContext,
-        application_id: str | None = None,
     ) -> dict:
-        """Trigger passport dispatch for the authenticated caller's application (auto-select latest eligible if ID not provided)."""
-        result = await dispatch_passport_now_api(
-            application_id=application_id,
-            metadata=_tool_metadata(ctx),
-        )
-        if result.get("status") != "failed":
-            logger.info("[TOOL] dispatch_passport_now application_id=%s", application_id)
-        return result
+        """Retrieve recent token vending and meter interaction history for the caller."""
+        return await get_vending_history_api(metadata=_tool_metadata(ctx))
 
     @function_tool()
-    async def issue_certificate_now(
-        self,
-        ctx: RunContext,
-        certificate_id: str | None = None,
-    ) -> dict:
-        """Issue certificate for the authenticated caller (auto-select latest eligible if ID not provided)."""
-        result = await issue_certificate_now_api(
-            certificate_id=certificate_id,
-            metadata=_tool_metadata(ctx),
-        )
-        if result.get("status") != "failed":
-            logger.info("[TOOL] issue_certificate_now certificate_id=%s", certificate_id)
-        return result
-
-    @function_tool()
-    async def create_escalation_ticket(
+    async def create_complaint_ticket(
         self,
         ctx: RunContext,
         title: str,
@@ -133,46 +87,69 @@ class SalonAgentEN(Agent):
         priority: str = "high",
         case_reference: str | None = None,
     ) -> dict:
-        """Create a CRM escalation ticket for the authenticated caller."""
-        inferred = str(getattr(getattr(ctx, "session", None), "userdata", {}).get("end_user_id") or "").strip()
-        if not inferred:
-            return {"status": "failed", "message": "Authenticated caller identity is required for escalation."}
-        return await create_escalation_ticket_api(
+        """Create a complaint ticket for billing, technical, or account issues."""
+        result = await create_complaint_ticket_api(
             title=title,
             description=description,
             priority=priority,
             case_reference=case_reference,
             metadata=_tool_metadata(ctx),
         )
+        if result.get("status") != "failed":
+            logger.info("[TOOL] create_complaint_ticket title=%s case_reference=%s", title, case_reference)
+        return result
 
     @function_tool()
-    async def start_certificate_application(
+    async def report_outage(
         self,
         ctx: RunContext,
+        summary: str,
+        priority: str = "high",
     ) -> dict:
-        """Create a human-handled intake ticket to start a new certificate application."""
-        inferred = str(getattr(getattr(ctx, "session", None), "userdata", {}).get("end_user_id") or "").strip()
-        if not inferred:
-            return {"status": "failed", "message": "Authenticated caller identity is required for intake."}
-        return await create_escalation_ticket_api(
-            title="New certificate application request",
-            description=_intake_description(ctx, request_type="certificate"),
-            priority="high",
+        """Report a power outage or low-voltage issue and log the required follow-up."""
+        result = await report_outage_api(
+            summary=summary,
+            priority=priority,
             metadata=_tool_metadata(ctx),
         )
+        if result.get("status") != "failed":
+            logger.info("[TOOL] report_outage priority=%s", priority)
+        return result
 
     @function_tool()
-    async def start_passport_application(
+    async def create_meter_request(
         self,
         ctx: RunContext,
+        summary: str,
+        priority: str = "normal",
     ) -> dict:
-        """Create a human-handled intake ticket to start a new passport application."""
-        inferred = str(getattr(getattr(ctx, "session", None), "userdata", {}).get("end_user_id") or "").strip()
-        if not inferred:
-            return {"status": "failed", "message": "Authenticated caller identity is required for intake."}
-        return await create_escalation_ticket_api(
-            title="New passport application request",
-            description=_intake_description(ctx, request_type="passport"),
-            priority="high",
+        """Create a meter-related request for installation, programming, or follow-up."""
+        result = await create_meter_request_api(
+            summary=summary,
+            priority=priority,
             metadata=_tool_metadata(ctx),
         )
+        if result.get("status") != "failed":
+            logger.info("[TOOL] create_meter_request priority=%s", priority)
+        return result
+
+    @function_tool()
+    async def escalate_issue(
+        self,
+        ctx: RunContext,
+        title: str,
+        description: str,
+        priority: str = "high",
+        case_reference: str | None = None,
+    ) -> dict:
+        """Escalate human-handled issues like outages, transformer faults, or billing reconciliation."""
+        result = await escalate_issue_api(
+            title=title,
+            description=description,
+            priority=priority,
+            case_reference=case_reference,
+            metadata=_tool_metadata(ctx),
+        )
+        if result.get("status") != "failed":
+            logger.info("[TOOL] escalate_issue title=%s case_reference=%s", title, case_reference)
+        return result

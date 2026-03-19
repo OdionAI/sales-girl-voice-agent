@@ -6,7 +6,7 @@ The LiveKit worker/runtime layer for SalesGirl voice sessions.
 - join LiveKit rooms
 - resolve agent config
 - persist conversation/session activity
-- call demo CRM and billing hooks
+- call demo CRM hooks
 
 ## Local run
 ```bash
@@ -34,8 +34,6 @@ Some legacy deployment scripts are still present and will be migrated in a later
 - `OPS_SERVICE_TOKEN`
 - `AGENT_CLIENT_ID`
 - `REQUIRE_VERIFIED_PHONE`
-- `BILLING_HOOK_BASE_URL`
-- `BILLING_HOOK_SERVICE_TOKEN`
 
 The staging/prod environment contract for this repo is documented centrally in:
 - `sales-girl-platform-infra/docs/voice-stack-wiring.md`

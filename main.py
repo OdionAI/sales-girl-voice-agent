@@ -30,9 +30,10 @@ from agent.conversation_service_api import (
 )
 from agent.agent_config_api import get_active_config as get_agent_active_config
 from agent.ops_api import (
-    resolve_customer as ops_resolve_customer,
-    search_certificate_request as ops_search_certificate_request,
-    search_passport_application as ops_search_passport_application,
+    get_payment_summary as ops_get_payment_summary,
+    get_tariff_profile as ops_get_tariff_profile,
+    get_vending_history as ops_get_vending_history,
+    lookup_customer_account as ops_lookup_customer_account,
 )
 from agent.odion_tts import OdionTTS
 from agent.observability import flush_traces, trace_conversation_event
@@ -825,17 +826,17 @@ async def _instructions_with_context(base_prompt: str, userdata: dict[str, Any])
     base_prompt = (
         f"{base_prompt}\n\n"
         "Domain lock:\n"
-        "- You are a consular operations assistant for passport/certificate workflows.\n"
-        "- Never present yourself as a beauty, hair, or appointment-booking assistant.\n"
-        "- Do not use beauty/hair/appointment framing in your replies.\n\n"
+        "- You are an EKEDC electricity customer support assistant.\n"
+        "- Never present yourself as a beauty, hair, appointment-booking, or consular assistant.\n"
+        "- Do not use beauty, appointment, passport, or certificate framing in your replies.\n\n"
         "Role lock:\n"
         "- You MUST follow the current role and responsibilities in this prompt.\n"
         "- Historical snippets may contain outdated assistant behavior from older versions.\n"
         "- Never switch back to an old business persona if it conflicts with this prompt.\n\n"
-        "Intake lock:\n"
-        "- If caller asks to START a certificate or passport application, do not refuse and do not say you only check status.\n"
-        "- You MUST create an escalation intake ticket immediately using the dedicated intake tool.\n"
-        "- After successful ticket creation, tell caller exactly that a human agent has been notified and they should check back in 48 hours for progress."
+        "Issue handling lock:\n"
+        "- If the caller needs a complaint, outage report, meter request, or escalation, use the available EKEDC tools.\n"
+        "- Do not claim an action was completed unless the tool confirms it.\n"
+        "- If the issue is outage, faulty transformer, meter installation, disconnection, DT mapping, or billing reconciliation, escalate it."
     )
     channel = "web" if str(userdata.get("identity_type") or "").lower() == "web" else "voice"
     business_id = _normalize_business_id(str(userdata.get("business_id") or ""))
@@ -957,30 +958,9 @@ def _effective_base_prompt(
         logger.info("Ignoring default-like dashboard instructions; keeping static domain prompt.")
         return static_prompt
 
-    incompatible_tokens = (
-        "salon",
-        "appointment",
-        "hair",
-        "beauty",
-        "booking",
-        "barber",
-        "spa",
-        "receptionist",
-    )
+    incompatible_tokens = ("salon", "appointment", "hair", "beauty", "booking", "barber", "spa", "receptionist")
     if any(token in normalized for token in incompatible_tokens):
-        logger.warning("Ignoring incompatible dashboard instructions containing non-consular persona terms.")
-        return static_prompt
-
-    required_domain_tokens = (
-        "passport",
-        "certificate",
-        "consular",
-        "passeport",
-        "certificat",
-        "consulaire",
-    )
-    if not any(token in normalized for token in required_domain_tokens):
-        logger.info("Ignoring dashboard instructions without explicit consular domain keywords.")
+        logger.warning("Ignoring incompatible dashboard instructions containing stale non-EKEDC persona terms.")
         return static_prompt
 
     return (
@@ -1008,98 +988,87 @@ async def _build_preloaded_ops_context(userdata: dict[str, Any]) -> str:
         return ""
 
     customer: dict[str, Any] = {}
-    apps: dict[str, Any] = {}
-    certs: dict[str, Any] = {}
+    tariff: dict[str, Any] = {}
+    payments: dict[str, Any] = {}
+    vending: dict[str, Any] = {}
 
     try:
-        resolved_customer = await ops_resolve_customer(metadata=md)
+        resolved_customer = await ops_lookup_customer_account(metadata=md)
         if isinstance(resolved_customer, dict):
             customer = resolved_customer
     except Exception as exc:  # noqa: BLE001
         logger.warning("Ops preload customer lookup failed for %s: %s", caller_id, exc)
 
     try:
-        resolved_apps = await ops_search_passport_application(metadata=md)
-        if isinstance(resolved_apps, dict):
-            apps = resolved_apps
+        resolved_tariff = await ops_get_tariff_profile(metadata=md)
+        if isinstance(resolved_tariff, dict):
+            tariff = resolved_tariff
     except Exception as exc:  # noqa: BLE001
-        logger.warning("Ops preload passport lookup failed for %s: %s", caller_id, exc)
+        logger.warning("Ops preload tariff lookup failed for %s: %s", caller_id, exc)
 
     try:
-        resolved_certs = await ops_search_certificate_request(metadata=md)
-        if isinstance(resolved_certs, dict):
-            certs = resolved_certs
+        resolved_payments = await ops_get_payment_summary(metadata=md)
+        if isinstance(resolved_payments, dict):
+            payments = resolved_payments
     except Exception as exc:  # noqa: BLE001
-        logger.warning("Ops preload certificate lookup failed for %s: %s", caller_id, exc)
+        logger.warning("Ops preload payment lookup failed for %s: %s", caller_id, exc)
+
+    try:
+        resolved_vending = await ops_get_vending_history(metadata=md)
+        if isinstance(resolved_vending, dict):
+            vending = resolved_vending
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Ops preload vending lookup failed for %s: %s", caller_id, exc)
 
     customer_name = str(customer.get("name") or "").strip() if isinstance(customer, dict) else ""
     customer_email = str(customer.get("email") or "").strip() if isinstance(customer, dict) else ""
     customer_phone = str(customer.get("phone") or "").strip() if isinstance(customer, dict) else ""
-    applications = apps.get("applications") if isinstance(apps, dict) else []
-    certificates = certs.get("certificates") if isinstance(certs, dict) else []
-    app_items = applications if isinstance(applications, list) else []
-    cert_items = certificates if isinstance(certificates, list) else []
-
-    app_lines: list[str] = []
-    for item in app_items[:5]:
-        if not isinstance(item, dict):
-            continue
-        app_lines.append(
-            f"- {item.get('application_id')}: status={item.get('status')}, dispatch={item.get('dispatch_status')}, tracking={item.get('tracking_number')}"
-        )
-    cert_lines: list[str] = []
-    for item in cert_items[:5]:
-        if not isinstance(item, dict):
-            continue
-        missing_docs = item.get("missing_docs") or []
-        missing_repr = ", ".join(str(x) for x in missing_docs) if isinstance(missing_docs, list) and missing_docs else "none"
-        cert_lines.append(
-            f"- {item.get('certificate_id')}: status={item.get('status')}, payment={item.get('payment_status')}, missing_docs={missing_repr}, issued={item.get('issued_certificate_number')}"
-        )
-
-    # Keep the caller profile usable even if one of the preload endpoints omitted fields.
-    if not customer_name:
-        for item in [*app_items, *cert_items]:
-            if isinstance(item, dict) and str(item.get("customer_name") or "").strip():
-                customer_name = str(item.get("customer_name") or "").strip()
-                break
-    if not customer_email:
-        for item in [*app_items, *cert_items]:
-            if isinstance(item, dict) and str(item.get("customer_email") or "").strip():
-                customer_email = str(item.get("customer_email") or "").strip()
-                break
-    if not customer_phone:
-        for item in [*app_items, *cert_items]:
-            if isinstance(item, dict) and str(item.get("customer_phone") or "").strip():
-                customer_phone = str(item.get("customer_phone") or "").strip()
-                break
+    account_number = str(customer.get("account_number") or tariff.get("account_number") or "").strip()
+    tariff_band = str(tariff.get("tariff_band") or customer.get("tariff_band") or "").strip()
+    meter_type = str(tariff.get("meter_type") or customer.get("meter_type") or "").strip()
+    business_unit = str(tariff.get("business_unit") or customer.get("business_unit") or "").strip()
+    service_address = str(tariff.get("service_address") or customer.get("service_address") or "").strip()
+    feeder_name = str(tariff.get("feeder_name") or customer.get("feeder_name") or "").strip()
+    payment_items = payments.get("payments") if isinstance(payments, dict) else []
+    vend_items = vending.get("vend_history") if isinstance(vending, dict) else []
+    payment_lines = []
+    for item in payment_items[:3] if isinstance(payment_items, list) else []:
+        if isinstance(item, dict):
+            payment_lines.append(f"- {item.get('date')}: amount={item.get('amount')} status={item.get('status')}")
+    vend_lines = []
+    for item in vend_items[:3] if isinstance(vend_items, list) else []:
+        if isinstance(item, dict):
+            vend_lines.append(
+                f"- {item.get('date')}: amount={item.get('amount')} token_status={item.get('token_status')} load_status={item.get('load_status')}"
+            )
 
     logger.info(
-        "Preloaded caller context: email=%s passport_count=%s certificate_count=%s",
+        "Preloaded caller context: email=%s tariff_band=%s payments=%s vending=%s",
         caller_id,
-        len(app_items),
-        len(cert_items),
-    )
-    logger.info(
-        "Preloaded caller details: caller=%s apps=%s certs=%s",
-        {"name": customer_name, "email": customer_email or caller_id, "phone": customer_phone},
-        app_items,
-        cert_items,
+        tariff_band,
+        len(payment_items) if isinstance(payment_items, list) else 0,
+        len(vend_items) if isinstance(vend_items, list) else 0,
     )
     return (
         "Verified caller profile and case context (fetched before this conversation starts):\n"
         "- This caller has already been identified from the authenticated session context.\n"
-        "- Use the caller profile below confidently when the caller asks who they are or what cases they have.\n"
+        "- Use the caller profile below confidently when the caller asks about their account or recent activity.\n"
         "- If 'Caller name' is present below, never say you do not know the caller's name.\n"
         "- Do not read this whole block aloud at the start of the call. Use it only when relevant.\n"
         f"- Caller email: {customer_email or caller_id}\n"
         f"- Caller name: {customer_name or '-'}\n"
         f"- Caller phone: {customer_phone or '-'}\n"
-        f"- Passport applications found: {len(app_items)}\n"
-        f"{chr(10).join(app_lines) if app_lines else '- none'}\n"
-        f"- Certificate requests found: {len(cert_items)}\n"
-        f"{chr(10).join(cert_lines) if cert_lines else '- none'}\n"
-        "- Use this preloaded context first. Do not ask for application or certificate IDs.\n"
+        f"- Account number: {account_number or '-'}\n"
+        f"- Tariff band: {tariff_band or '-'}\n"
+        f"- Meter type: {meter_type or '-'}\n"
+        f"- Business unit: {business_unit or '-'}\n"
+        f"- Service address: {service_address or '-'}\n"
+        f"- Feeder name: {feeder_name or '-'}\n"
+        f"- Recent payments found: {len(payment_items) if isinstance(payment_items, list) else 0}\n"
+        f"{chr(10).join(payment_lines) if payment_lines else '- none'}\n"
+        f"- Recent vending records found: {len(vend_items) if isinstance(vend_items, list) else 0}\n"
+        f"{chr(10).join(vend_lines) if vend_lines else '- none'}\n"
+        "- Use this preloaded context first. Do not ask for the customer's email or account number as your first move.\n"
     )
 
 
@@ -1113,15 +1082,15 @@ def _kickoff_prompt_for_language(language: str) -> str:
     lang = str(language or "").strip().lower()
     if lang == "fr":
         return (
-            "Commencez la conversation maintenant. Saluez d'abord l'appelant en français, présentez-vous "
-            "brièvement et proposez votre aide concernant ses demandes en utilisant le contexte déjà disponible. "
-            "Ne demandez ni l'email, ni l'identifiant de demande, ni l'identifiant de certificat. "
-            "N'énumérez pas immédiatement tout le profil de l'appelant ; saluez d'abord puis attendez sa demande."
-        )
+        "Commencez la conversation maintenant. Saluez d'abord l'appelant en français, présentez-vous "
+        "brièvement et proposez votre aide concernant son compte EKEDC en utilisant le contexte déjà disponible. "
+        "Ne demandez pas d'abord l'email ou le numéro de compte. "
+        "N'énumérez pas immédiatement tout le profil de l'appelant ; saluez d'abord puis attendez sa demande."
+    )
     return (
         "Start the conversation now. Greet the caller first, introduce yourself briefly, and proactively "
-        "offer help with their account requests using the context you already have. Do not ask for email, "
-        "application ID, or certificate ID. Do not dump the caller profile immediately; greet first and "
+        "offer help with their EKEDC account requests using the context you already have. Do not ask for email "
+        "or account number as your first move. Do not dump the caller profile immediately; greet first and "
         "wait for the caller's request."
     )
 
