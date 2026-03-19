@@ -993,28 +993,40 @@ async def _build_preloaded_ops_context(userdata: dict[str, Any]) -> str:
     vending: dict[str, Any] = {}
 
     try:
-        resolved_customer = await ops_lookup_customer_account(metadata=md)
+        resolved_customer = await ops_lookup_customer_account(
+            customer_identifier=caller_id,
+            metadata=md,
+        )
         if isinstance(resolved_customer, dict):
             customer = resolved_customer
     except Exception as exc:  # noqa: BLE001
         logger.warning("Ops preload customer lookup failed for %s: %s", caller_id, exc)
 
     try:
-        resolved_tariff = await ops_get_tariff_profile(metadata=md)
+        resolved_tariff = await ops_get_tariff_profile(
+            customer_identifier=caller_id,
+            metadata=md,
+        )
         if isinstance(resolved_tariff, dict):
             tariff = resolved_tariff
     except Exception as exc:  # noqa: BLE001
         logger.warning("Ops preload tariff lookup failed for %s: %s", caller_id, exc)
 
     try:
-        resolved_payments = await ops_get_payment_summary(metadata=md)
+        resolved_payments = await ops_get_payment_summary(
+            customer_identifier=caller_id,
+            metadata=md,
+        )
         if isinstance(resolved_payments, dict):
             payments = resolved_payments
     except Exception as exc:  # noqa: BLE001
         logger.warning("Ops preload payment lookup failed for %s: %s", caller_id, exc)
 
     try:
-        resolved_vending = await ops_get_vending_history(metadata=md)
+        resolved_vending = await ops_get_vending_history(
+            customer_identifier=caller_id,
+            metadata=md,
+        )
         if isinstance(resolved_vending, dict):
             vending = resolved_vending
     except Exception as exc:  # noqa: BLE001
