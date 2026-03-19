@@ -50,38 +50,55 @@ class SalonAgentEN(Agent):
     async def lookup_customer_account(
         self,
         ctx: RunContext,
+        customer_identifier: str,
     ) -> dict:
-        """Look up the authenticated customer's electricity account profile."""
-        return await lookup_customer_account_api(metadata=_tool_metadata(ctx))
+        """Look up a customer's electricity account profile using account number, phone number, or email."""
+        return await lookup_customer_account_api(
+            customer_identifier=customer_identifier,
+            metadata=_tool_metadata(ctx),
+        )
 
     @function_tool()
     async def get_tariff_profile(
         self,
         ctx: RunContext,
+        customer_identifier: str,
     ) -> dict:
-        """Retrieve tariff band, meter type, feeder, and service-area details for the caller."""
-        return await get_tariff_profile_api(metadata=_tool_metadata(ctx))
+        """Retrieve tariff band, meter type, feeder, and service-area details using the customer's account number, phone, or email."""
+        return await get_tariff_profile_api(
+            customer_identifier=customer_identifier,
+            metadata=_tool_metadata(ctx),
+        )
 
     @function_tool()
     async def get_payment_summary(
         self,
         ctx: RunContext,
+        customer_identifier: str,
     ) -> dict:
-        """Retrieve recent bill and payment history for the caller."""
-        return await get_payment_summary_api(metadata=_tool_metadata(ctx))
+        """Retrieve recent bill and payment history using the customer's account number, phone, or email."""
+        return await get_payment_summary_api(
+            customer_identifier=customer_identifier,
+            metadata=_tool_metadata(ctx),
+        )
 
     @function_tool()
     async def get_vending_history(
         self,
         ctx: RunContext,
+        customer_identifier: str,
     ) -> dict:
-        """Retrieve recent token vending and meter interaction history for the caller."""
-        return await get_vending_history_api(metadata=_tool_metadata(ctx))
+        """Retrieve recent token vending and meter interaction history using the customer's account number, phone, or email."""
+        return await get_vending_history_api(
+            customer_identifier=customer_identifier,
+            metadata=_tool_metadata(ctx),
+        )
 
     @function_tool()
     async def create_complaint_ticket(
         self,
         ctx: RunContext,
+        customer_identifier: str,
         title: str,
         description: str,
         priority: str = "high",
@@ -89,6 +106,7 @@ class SalonAgentEN(Agent):
     ) -> dict:
         """Create a complaint ticket for billing, technical, or account issues."""
         result = await create_complaint_ticket_api(
+            customer_identifier=customer_identifier,
             title=title,
             description=description,
             priority=priority,
@@ -103,11 +121,13 @@ class SalonAgentEN(Agent):
     async def report_outage(
         self,
         ctx: RunContext,
+        customer_identifier: str,
         summary: str,
         priority: str = "high",
     ) -> dict:
         """Report a power outage or low-voltage issue and log the required follow-up."""
         result = await report_outage_api(
+            customer_identifier=customer_identifier,
             summary=summary,
             priority=priority,
             metadata=_tool_metadata(ctx),
@@ -120,11 +140,13 @@ class SalonAgentEN(Agent):
     async def create_meter_request(
         self,
         ctx: RunContext,
+        customer_identifier: str,
         summary: str,
         priority: str = "normal",
     ) -> dict:
         """Create a meter-related request for installation, programming, or follow-up."""
         result = await create_meter_request_api(
+            customer_identifier=customer_identifier,
             summary=summary,
             priority=priority,
             metadata=_tool_metadata(ctx),
@@ -137,6 +159,7 @@ class SalonAgentEN(Agent):
     async def escalate_issue(
         self,
         ctx: RunContext,
+        customer_identifier: str,
         title: str,
         description: str,
         priority: str = "high",
@@ -144,6 +167,7 @@ class SalonAgentEN(Agent):
     ) -> dict:
         """Escalate human-handled issues like outages, transformer faults, or billing reconciliation."""
         result = await escalate_issue_api(
+            customer_identifier=customer_identifier,
             title=title,
             description=description,
             priority=priority,
