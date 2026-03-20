@@ -13,6 +13,7 @@ OPS_SERVICE_TOKEN = os.getenv("OPS_SERVICE_TOKEN", "local-internal-service-token
 DEFAULT_TIMEOUT_SECONDS = float(os.getenv("OPS_SERVICE_TIMEOUT_SECONDS", "8"))
 AGENT_CLIENT_ID = os.getenv("AGENT_CLIENT_ID", "sales-girl-internal")
 AGENT_NAME = os.getenv("AGENT_NAME", "sales-girl-agent-en")
+OPS_SHARED_OWNER_EMAIL = str(os.getenv("OPS_SHARED_OWNER_EMAIL") or "").strip().lower()
 logger = logging.getLogger(__name__)
 
 
@@ -29,17 +30,20 @@ def _resolve_customer_identifier(
 
 def _service_headers(metadata: dict[str, Any] | None) -> dict[str, str]:
     md = metadata or {}
-    business_id = str(md.get("business_id") or "").strip()
-    return {
+    business_scope = OPS_SHARED_OWNER_EMAIL or str(md.get("business_id") or "").strip()
+    headers = {
         "X-Service-Token": OPS_SERVICE_TOKEN,
         "X-Service-Name": AGENT_CLIENT_ID,
-        "X-Business-ID": business_id,
+        "X-Business-ID": business_scope,
         "X-Client-ID": str(md.get("client_id") or AGENT_CLIENT_ID),
         "X-Agent-ID": str(md.get("agent_id") or AGENT_NAME),
         "X-Conversation-ID": str(md.get("conversation_id") or ""),
         "X-Session-ID": str(md.get("session_id") or ""),
         "X-End-User-ID": str(md.get("end_user_id") or ""),
     }
+    if OPS_SHARED_OWNER_EMAIL:
+        headers["X-Workspace-Owner-Email"] = OPS_SHARED_OWNER_EMAIL
+    return headers
 
 
 @observe(name="ops_api.request", as_type="span")
@@ -65,6 +69,14 @@ async def _request_json(
         }
     )
     try:
+        logger.info(
+            "OPS request %s %s business_scope=%s end_user=%s body=%s",
+            method,
+            path,
+            headers.get("X-Business-ID"),
+            headers.get("X-End-User-ID"),
+            json_body,
+        )
         async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT_SECONDS) as client:
             response = await client.request(
                 method=method,
