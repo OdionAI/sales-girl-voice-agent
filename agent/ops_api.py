@@ -204,6 +204,35 @@ async def get_vending_history(
     )
 
 
+@observe(name="tool.create_ticket", as_type="tool")
+async def create_ticket(
+    *,
+    customer_identifier: str | None = None,
+    title: str,
+    description: str,
+    issue_type: str = "general",
+    priority: str = "high",
+    requires_human: bool = True,
+    case_reference: str | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    caller_id = str((metadata or {}).get("end_user_id") or "")
+    _trace("create_ticket", metadata, user_id=caller_id)
+    resolved_customer_identifier = _resolve_customer_identifier(customer_identifier, metadata)
+    body: dict[str, Any] = {
+        "customer_identifier": resolved_customer_identifier,
+        "title": title,
+        "description": description,
+        "issue_type": issue_type,
+        "priority": priority,
+        "requires_human": requires_human,
+        "conversation_id": str((metadata or {}).get("conversation_id") or ""),
+    }
+    if case_reference:
+        body["case_reference"] = case_reference
+    return await _request_json("POST", "/v1/tools/tickets/create", json_body=body, metadata=metadata)
+
+
 @observe(name="tool.create_complaint_ticket", as_type="tool")
 async def create_complaint_ticket(
     *,
@@ -228,7 +257,7 @@ async def create_complaint_ticket(
         body["case_reference"] = case_reference
     return await _request_json(
         "POST",
-        "/v1/tools/complaints/create",
+        "/v1/tools/tickets/create",
         json_body=body,
         metadata=metadata,
     )
@@ -280,6 +309,106 @@ async def create_meter_request(
         "POST",
         "/v1/tools/meter-requests/create",
         json_body=body,
+        metadata=metadata,
+    )
+
+
+@observe(name="tool.apply_billing_adjustment", as_type="tool")
+async def apply_billing_adjustment(
+    *,
+    customer_identifier: str | None = None,
+    amount: float,
+    reason: str,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    caller_id = str((metadata or {}).get("end_user_id") or "")
+    _trace("apply_billing_adjustment", metadata, user_id=caller_id)
+    resolved_customer_identifier = _resolve_customer_identifier(customer_identifier, metadata)
+    return await _request_json(
+        "POST",
+        "/v1/tools/billing/apply-adjustment",
+        json_body={
+            "customer_identifier": resolved_customer_identifier,
+            "amount": amount,
+            "reason": reason,
+            "conversation_id": str((metadata or {}).get("conversation_id") or ""),
+        },
+        metadata=metadata,
+    )
+
+
+@observe(name="tool.refresh_meter_token_state", as_type="tool")
+async def refresh_meter_token_state(
+    *,
+    customer_identifier: str | None = None,
+    reason: str,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    caller_id = str((metadata or {}).get("end_user_id") or "")
+    _trace("refresh_meter_token_state", metadata, user_id=caller_id)
+    resolved_customer_identifier = _resolve_customer_identifier(customer_identifier, metadata)
+    return await _request_json(
+        "POST",
+        "/v1/tools/metering/refresh-token-state",
+        json_body={
+            "customer_identifier": resolved_customer_identifier,
+            "reason": reason,
+            "conversation_id": str((metadata or {}).get("conversation_id") or ""),
+        },
+        metadata=metadata,
+    )
+
+
+@observe(name="tool.update_customer_record", as_type="tool")
+async def update_customer_record(
+    *,
+    customer_identifier: str | None = None,
+    email: str | None = None,
+    phone: str | None = None,
+    service_address: str | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    caller_id = str((metadata or {}).get("end_user_id") or "")
+    _trace("update_customer_record", metadata, user_id=caller_id)
+    resolved_customer_identifier = _resolve_customer_identifier(customer_identifier, metadata)
+    return await _request_json(
+        "POST",
+        "/v1/tools/customers/update-record",
+        json_body={
+            "customer_identifier": resolved_customer_identifier,
+            "email": email,
+            "phone": phone,
+            "service_address": service_address,
+            "conversation_id": str((metadata or {}).get("conversation_id") or ""),
+        },
+        metadata=metadata,
+    )
+
+
+@observe(name="tool.create_payment_plan", as_type="tool")
+async def create_payment_plan(
+    *,
+    customer_identifier: str | None = None,
+    plan_name: str,
+    installment_count: int,
+    monthly_amount: float,
+    reason: str,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    caller_id = str((metadata or {}).get("end_user_id") or "")
+    _trace("create_payment_plan", metadata, user_id=caller_id)
+    resolved_customer_identifier = _resolve_customer_identifier(customer_identifier, metadata)
+    return await _request_json(
+        "POST",
+        "/v1/tools/payments/create-plan",
+        json_body={
+            "customer_identifier": resolved_customer_identifier,
+            "plan_name": plan_name,
+            "installment_count": installment_count,
+            "monthly_amount": monthly_amount,
+            "reason": reason,
+            "conversation_id": str((metadata or {}).get("conversation_id") or ""),
+        },
         metadata=metadata,
     )
 
