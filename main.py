@@ -30,7 +30,9 @@ from agent.conversation_service_api import (
 )
 from agent.agent_config_api import get_active_config as get_agent_active_config
 from agent.ops_api import (
+    get_account_overview as ops_get_account_overview,
     get_payment_summary as ops_get_payment_summary,
+    get_recent_transactions as ops_get_recent_transactions,
     get_tariff_profile as ops_get_tariff_profile,
     get_vending_history as ops_get_vending_history,
     lookup_customer_account as ops_lookup_customer_account,
@@ -60,6 +62,19 @@ load_dotenv()
 # AgentServer allows only one rtc_session per process. To support both English and
 # French, run two worker processes with EN/FR-prefixed names.
 AGENT_NAME = os.environ.get("AGENT_NAME", "sales-girl-agent-en")
+DEFAULT_BUSINESS_USE_CASE = str(os.environ.get("DEFAULT_BUSINESS_USE_CASE", "ekedc") or "ekedc").strip().lower()
+FIDELITY_BUSINESS_IDS = {
+    item.strip() for item in str(os.environ.get("FIDELITY_BUSINESS_IDS") or "").split(",") if item.strip()
+}
+EKEDC_BUSINESS_IDS = {
+    item.strip() for item in str(os.environ.get("EKEDC_BUSINESS_IDS") or "").split(",") if item.strip()
+}
+FIDELITY_STATIC_PROMPT_EN = (
+    "You are Fidelity Bank's AI customer care assistant. Help callers with account inquiries, "
+    "recent transaction questions, transaction status checks, card block and unblock requests, "
+    "failed transaction reversals when the backend confirms eligibility, and ticket creation "
+    "for issues that require human review."
+)
 
 
 def _is_en_agent_name(name: str) -> bool:
@@ -813,6 +828,7 @@ async def _instructions_with_context(base_prompt: str, userdata: dict[str, Any])
     end_user_id = str(userdata.get("end_user_id") or "")
     if not end_user_id:
         return base_prompt
+    business_use_case = str(userdata.get("business_use_case") or "ekedc").strip().lower()
     configured_agent_name = str(userdata.get("configured_agent_name") or "").strip()
     if configured_agent_name:
         logger.info("Applying configured agent name to prompt: %s", configured_agent_name)
@@ -822,22 +838,55 @@ async def _instructions_with_context(base_prompt: str, userdata: dict[str, Any])
             f"- If a customer asks your name, respond that your name is '{configured_agent_name}'.\n"
             "- Do not say you don't have a name."
         )
-    # Prevent old assistant personas in historical context from overriding current role.
-    base_prompt = (
-        f"{base_prompt}\n\n"
-        "Domain lock:\n"
-        "- You are an EKEDC electricity customer support assistant.\n"
-        "- Never present yourself as a beauty, hair, appointment-booking, or consular assistant.\n"
-        "- Do not use beauty, appointment, passport, or certificate framing in your replies.\n\n"
-        "Role lock:\n"
-        "- You MUST follow the current role and responsibilities in this prompt.\n"
-        "- Historical snippets may contain outdated assistant behavior from older versions.\n"
-        "- Never switch back to an old business persona if it conflicts with this prompt.\n\n"
-        "Issue handling lock:\n"
-        "- If the caller needs a complaint, outage report, meter request, or escalation, use the available EKEDC tools.\n"
-        "- Do not claim an action was completed unless the tool confirms it.\n"
-        "- If the issue is outage, faulty transformer, meter installation, disconnection, DT mapping, or billing reconciliation, escalate it."
-    )
+    if business_use_case == "fidelity":
+        base_prompt = (
+            f"{base_prompt}\n\n"
+            "Domain lock:\n"
+            "- You are Fidelity Bank's customer care assistant.\n"
+            "- Never present yourself as an electricity, salon, passport, certificate, or appointment assistant.\n"
+            "- Use banking framing in your replies: account, card, transaction, balance, reversal, and ticket.\n\n"
+            "Role lock:\n"
+            "- You MUST follow the current banking role and responsibilities in this prompt.\n"
+            "- Historical snippets may contain outdated assistant behavior from older versions.\n"
+            "- Never switch back to an old non-banking persona if it conflicts with this prompt.\n\n"
+            "Issue handling lock:\n"
+            "- Use the available banking tools for account overview, recent transactions, transaction checks, card actions, reversals, and ticket creation.\n"
+            "- Do not claim an action was completed unless the tool confirms it.\n"
+            "- For fraud, suspicious activity, compliance restrictions, or other sensitive cases, create a ticket instead of promising a direct resolution."
+        )
+    elif business_use_case == "hotel":
+        base_prompt = (
+            f"{base_prompt}\n\n"
+            "Domain lock:\n"
+            "- You are a hotel guest support and booking assistant for this business.\n"
+            "- Never present yourself as an electricity or banking assistant.\n"
+            "- Use hotel knowledge, live availability, bookings, and tickets where appropriate.\n\n"
+            "Role lock:\n"
+            "- You MUST follow the current hotel role and responsibilities in this prompt.\n"
+            "- Historical snippets may contain outdated assistant behavior from older versions.\n"
+            "- Never switch back to an old non-hotel persona if it conflicts with this prompt.\n\n"
+            "Issue handling lock:\n"
+            "- Use the available hotel tools for room availability, bookings, and guest tickets.\n"
+            "- Do not claim a booking or ticket was completed unless the tool confirms it.\n"
+            "- If the live availability endpoint is missing, explain that live room data is not connected yet and offer human follow-up."
+        )
+    else:
+        # Prevent old assistant personas in historical context from overriding current role.
+        base_prompt = (
+            f"{base_prompt}\n\n"
+            "Domain lock:\n"
+            "- You are an EKEDC electricity customer support assistant.\n"
+            "- Never present yourself as a beauty, hair, appointment-booking, or consular assistant.\n"
+            "- Do not use beauty, appointment, passport, or certificate framing in your replies.\n\n"
+            "Role lock:\n"
+            "- You MUST follow the current role and responsibilities in this prompt.\n"
+            "- Historical snippets may contain outdated assistant behavior from older versions.\n"
+            "- Never switch back to an old business persona if it conflicts with this prompt.\n\n"
+            "Issue handling lock:\n"
+            "- If the caller needs a complaint, outage report, meter request, or escalation, use the available EKEDC tools.\n"
+            "- Do not claim an action was completed unless the tool confirms it.\n"
+            "- If the issue is outage, faulty transformer, meter installation, disconnection, DT mapping, or billing reconciliation, escalate it."
+        )
     channel = "web" if str(userdata.get("identity_type") or "").lower() == "web" else "voice"
     business_id = _normalize_business_id(str(userdata.get("business_id") or ""))
     config_agent_id = str(userdata.get("agent_config_id") or userdata.get("agent_id") or AGENT_NAME)
@@ -939,14 +988,61 @@ async def _fetch_active_agent_runtime_config(userdata: dict[str, Any]) -> dict[s
     return payload if isinstance(payload, dict) else {}
 
 
+def _detect_business_use_case(
+    *,
+    active_agent_config: dict[str, Any] | None,
+    userdata: dict[str, Any],
+) -> str:
+    business_id = _normalize_business_id(str(userdata.get("business_id") or ""))
+    if business_id and business_id in FIDELITY_BUSINESS_IDS:
+        return "fidelity"
+    if business_id and business_id in EKEDC_BUSINESS_IDS:
+        return "ekedc"
+
+    cfg = active_agent_config or {}
+    text = " ".join(
+        [
+            str(cfg.get("name") or ""),
+            str(cfg.get("description") or ""),
+            str(cfg.get("instructions") or ""),
+            str(userdata.get("configured_agent_name") or ""),
+        ]
+    ).lower()
+    if any(token in text for token in ("fidelity", "fidelity bank", "block card", "recent transactions", "failed transaction", "account balance")):
+        return "fidelity"
+    if any(token in text for token in ("hotel", "guest support", "room availability", "booking", "bookings", "reservation", "concierge", "accommodation")):
+        return "hotel"
+    if any(token in text for token in ("ekedc", "electricity", "tariff", "meter", "outage", "token vending")):
+        return "ekedc"
+
+    return DEFAULT_BUSINESS_USE_CASE if DEFAULT_BUSINESS_USE_CASE in {"ekedc", "fidelity", "generic"} else "ekedc"
+
+
 def _effective_base_prompt(
     *,
     static_prompt: str,
     active_agent_config: dict[str, Any] | None,
+    business_use_case: str,
+    language: str,
 ) -> str:
     cfg = active_agent_config or {}
     configured_instructions = str(cfg.get("instructions") or "").strip()
     if not configured_instructions:
+        if business_use_case == "hotel":
+            if str(language or "").strip().lower() == "fr":
+                return (
+                    "Vous êtes l'assistant IA de support et de réservation de l'hôtel pour ce business.\n"
+                    "Répondez de façon claire, calme et professionnelle.\n"
+                    "Utilisez les connaissances de l'hôtel, la disponibilité en direct si elle est connectée, "
+                    "et créez des réservations ou des tickets uniquement lorsque les outils confirment l'action."
+                )
+            return (
+                "You are the hotel's AI guest support and booking assistant for this business.\n"
+                "Respond clearly, calmly, and professionally.\n"
+                "Use hotel knowledge, live availability only if connected, and create bookings or tickets only when the tools confirm the action."
+            )
+        if business_use_case == "fidelity":
+            return FIDELITY_STATIC_PROMPT_EN
         return static_prompt
 
     normalized = " ".join(configured_instructions.lower().split())
@@ -956,7 +1052,38 @@ def _effective_base_prompt(
     }
     if normalized in default_like:
         logger.info("Ignoring default-like dashboard instructions; keeping static domain prompt.")
+        if business_use_case == "fidelity":
+            return FIDELITY_STATIC_PROMPT_EN
+        if business_use_case == "hotel":
+            if str(language or "").strip().lower() == "fr":
+                return (
+                    "Vous êtes l'assistant IA de support et de réservation de l'hôtel pour ce business.\n"
+                    "Répondez de façon claire, calme et professionnelle.\n"
+                    "Utilisez les connaissances de l'hôtel, la disponibilité en direct si elle est connectée, "
+                    "et créez des réservations ou des tickets uniquement lorsque les outils confirment l'action."
+                )
+            return (
+                "You are the hotel's AI guest support and booking assistant for this business.\n"
+                "Respond clearly, calmly, and professionally.\n"
+                "Use hotel knowledge, live availability only if connected, and create bookings or tickets only when the tools confirm the action."
+            )
         return static_prompt
+
+    if business_use_case == "fidelity":
+        return configured_instructions
+
+    if business_use_case == "hotel":
+        return (
+            f"{configured_instructions.rstrip()}\n\n"
+            "Hotel tool guardrails:\n"
+            "- Use create_ticket for complaints, unresolved guest issues, or human follow-up.\n"
+            "- Use create_booking for confirmed room reservations when you have enough details.\n"
+            "- Infer ticket titles and descriptions yourself from the conversation; do not ask the guest to write them for you.\n"
+            "- Only ask a follow-up question before creating a ticket if a concrete missing fact is essential.\n"
+            "- Never say a ticket was created unless create_ticket returned success.\n"
+            "- Never say a booking was created unless create_booking returned success.\n"
+            "- If a tool call fails, explain that clearly and offer the next best fallback.\n"
+        )
 
     incompatible_tokens = ("salon", "appointment", "hair", "beauty", "booking", "barber", "spa", "receptionist")
     if any(token in normalized for token in incompatible_tokens):
@@ -975,6 +1102,7 @@ def _ops_tool_metadata_from_userdata(userdata: dict[str, Any]) -> dict[str, Any]
         "client_id": os.getenv("AGENT_CLIENT_ID", "sales-girl-internal"),
         "agent_id": os.getenv("AGENT_NAME", AGENT_NAME),
         "business_id": str(userdata.get("business_id") or ""),
+        "business_use_case": str(userdata.get("business_use_case") or ""),
         "conversation_id": str(userdata.get("conversation_id") or ""),
         "session_id": str(userdata.get("session_id") or ""),
         "end_user_id": str(userdata.get("end_user_id") or ""),
@@ -986,6 +1114,80 @@ async def _build_preloaded_ops_context(userdata: dict[str, Any]) -> str:
     caller_id = str(md.get("end_user_id") or "").strip()
     if not caller_id:
         return ""
+    business_use_case = str(userdata.get("business_use_case") or "").strip().lower()
+
+    if business_use_case == "hotel":
+        return ""
+
+    if business_use_case == "fidelity":
+        overview: dict[str, Any] = {}
+        transactions_payload: dict[str, Any] = {}
+        try:
+            resolved_overview = await ops_get_account_overview(
+                customer_identifier=caller_id,
+                metadata=md,
+            )
+            if isinstance(resolved_overview, dict):
+                overview = resolved_overview
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Ops preload Fidelity account overview failed for %s: %s", caller_id, exc)
+
+        try:
+            resolved_transactions = await ops_get_recent_transactions(
+                customer_identifier=caller_id,
+                limit=5,
+                metadata=md,
+            )
+            if isinstance(resolved_transactions, dict):
+                transactions_payload = resolved_transactions
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Ops preload Fidelity transactions failed for %s: %s", caller_id, exc)
+
+        account = overview.get("account") if isinstance(overview, dict) else {}
+        cards = overview.get("cards") if isinstance(overview, dict) else []
+        transactions = transactions_payload.get("transactions") if isinstance(transactions_payload, dict) else None
+        if not isinstance(transactions, list) or not transactions:
+            transactions = overview.get("recent_transactions") if isinstance(overview, dict) else []
+
+        card_lines = []
+        for item in cards[:2] if isinstance(cards, list) else []:
+            if isinstance(item, dict):
+                card_lines.append(
+                    f"- {item.get('card_type') or 'Card'} ending {item.get('last4') or '----'} status={item.get('card_status') or item.get('status')}"
+                )
+        transaction_lines = []
+        for item in transactions[:3] if isinstance(transactions, list) else []:
+            if isinstance(item, dict):
+                transaction_lines.append(
+                    f"- {item.get('transaction_date') or item.get('date')}: {item.get('narration') or item.get('title') or 'Transaction'} amount={item.get('amount_naira') or item.get('amount')} status={item.get('transaction_status') or item.get('status')}"
+                )
+
+        customer_name = str(overview.get("customer_name") or overview.get("name") or "").strip()
+        logger.info(
+            "Preloaded Fidelity caller context: email=%s cards=%s transactions=%s",
+            caller_id,
+            len(cards) if isinstance(cards, list) else 0,
+            len(transactions) if isinstance(transactions, list) else 0,
+        )
+        return (
+            "Verified caller profile and banking context (fetched before this conversation starts):\n"
+            "- This caller has already been identified from the authenticated session context.\n"
+            "- Use the caller profile below confidently for account and transaction questions.\n"
+            "- If caller name is present below, do not say you do not know the caller.\n"
+            "- Do not read this whole block aloud at the start of the call. Use it only when relevant.\n"
+            f"- Caller email: {caller_id}\n"
+            f"- Caller name: {customer_name or account.get('account_name') or '-'}\n"
+            f"- Account number: {account.get('account_number') or '-'}\n"
+            f"- Account name: {account.get('account_name') or '-'}\n"
+            f"- Account type: {account.get('account_type') or '-'}\n"
+            f"- Available balance: {account.get('available_balance_naira') or account.get('available_balance') or '-'}\n"
+            f"- Current balance: {account.get('balance_naira') or account.get('balance') or '-'}\n"
+            f"- Cards found: {len(cards) if isinstance(cards, list) else 0}\n"
+            f"{chr(10).join(card_lines) if card_lines else '- none'}\n"
+            f"- Recent transactions found: {len(transactions) if isinstance(transactions, list) else 0}\n"
+            f"{chr(10).join(transaction_lines) if transaction_lines else '- none'}\n"
+            "- Use this preloaded context first. Do not ask for the customer's email as your first move.\n"
+        )
 
     customer: dict[str, Any] = {}
     tariff: dict[str, Any] = {}
@@ -1090,15 +1292,36 @@ def _instructions_with_preloaded_ops_context(base_prompt: str, preloaded_context
     return f"{base_prompt}\n\n{preloaded_context}\n"
 
 
-def _kickoff_prompt_for_language(language: str) -> str:
+def _kickoff_prompt_for_language(language: str, business_use_case: str) -> str:
     lang = str(language or "").strip().lower()
     if lang == "fr":
+        if business_use_case == "hotel":
+            return (
+                "Commencez la conversation maintenant. Saluez d'abord l'appelant en français, présentez-vous "
+                "brièvement et proposez votre aide concernant sa demande d'hotel en utilisant le contexte déjà disponible. "
+                "Ne demandez pas d'abord l'email ou le numéro de compte. "
+                "N'énumérez pas immédiatement tout le profil de l'appelant ; saluez d'abord puis attendez sa demande."
+            )
         return (
         "Commencez la conversation maintenant. Saluez d'abord l'appelant en français, présentez-vous "
         "brièvement et proposez votre aide concernant son compte EKEDC en utilisant le contexte déjà disponible. "
         "Ne demandez pas d'abord l'email ou le numéro de compte. "
         "N'énumérez pas immédiatement tout le profil de l'appelant ; saluez d'abord puis attendez sa demande."
     )
+    if business_use_case == "fidelity":
+        return (
+            "Start the conversation now. Greet the caller first, introduce yourself briefly, and proactively "
+            "offer help with their Fidelity Bank account requests using the context you already have. Do not ask "
+            "for their email as your first move. Do not dump the caller profile immediately; greet first and "
+            "wait for the caller's request."
+        )
+    if business_use_case == "hotel":
+        return (
+            "Start the conversation now. Greet the guest first, introduce yourself briefly, and proactively "
+            "offer help with hotel questions, room availability, and booking requests using the context you already have. "
+            "Do not ask for their email as your first move. Do not dump the guest profile immediately; greet first and "
+            "wait for the guest's request."
+        )
     return (
         "Start the conversation now. Greet the caller first, introduce yourself briefly, and proactively "
         "offer help with their EKEDC account requests using the context you already have. Do not ask for email "
@@ -1107,10 +1330,10 @@ def _kickoff_prompt_for_language(language: str) -> str:
     )
 
 
-def _trigger_first_turn(session: AgentSession, *, language: str) -> None:
+def _trigger_first_turn(session: AgentSession, *, language: str, business_use_case: str) -> None:
     try:
         session.generate_reply(
-            instructions=_kickoff_prompt_for_language(language),
+            instructions=_kickoff_prompt_for_language(language, business_use_case),
             input_modality="text",
         )
     except Exception as exc:  # noqa: BLE001
@@ -1149,10 +1372,20 @@ async def entrypoint(ctx: JobContext):
     if _is_en_agent_name(AGENT_NAME):
         userdata = await _init_session_userdata(ctx, language="en")
         active_agent_config = await _fetch_active_agent_runtime_config(userdata)
+        business_use_case = _detect_business_use_case(
+            active_agent_config=active_agent_config,
+            userdata=userdata,
+        )
+        userdata["business_use_case"] = business_use_case
         config_name = str(active_agent_config.get("name") or "").strip()
         if config_name:
             userdata["configured_agent_name"] = config_name
-        base_prompt = _effective_base_prompt(static_prompt=SYSTEM_PROMPT_EN, active_agent_config=active_agent_config)
+        base_prompt = _effective_base_prompt(
+            static_prompt=SYSTEM_PROMPT_EN,
+            active_agent_config=active_agent_config,
+            business_use_case=business_use_case,
+            language="en",
+        )
         prompt_preview = " ".join(str(base_prompt).split())[:220]
         logger.info(
             "Prompt source: %s preview=%s",
@@ -1160,8 +1393,8 @@ async def entrypoint(ctx: JobContext):
             prompt_preview,
         )
         if "salon" in str(base_prompt).lower():
-            logger.warning("Active prompt contains 'salon' text for this session. Forcing English static consular prompt.")
-            base_prompt = SYSTEM_PROMPT_EN
+            logger.warning("Active prompt contains 'salon' text for this session. Forcing safe fallback prompt.")
+            base_prompt = FIDELITY_STATIC_PROMPT_EN if business_use_case == "fidelity" else SYSTEM_PROMPT_EN
         preloaded_context = await _build_preloaded_ops_context(userdata)
         instructions = _instructions_with_preloaded_ops_context(base_prompt, preloaded_context)
         instructions = await _instructions_with_context(instructions, userdata)
@@ -1316,7 +1549,7 @@ async def entrypoint(ctx: JobContext):
                 room=ctx.room,
                 room_options=room_io.RoomOptions(delete_room_on_close=True),
             )
-            _trigger_first_turn(session, language="en")
+            _trigger_first_turn(session, language="en", business_use_case=business_use_case)
             shutdown_reason = await _wait_for_job_shutdown(ctx)
             logger.info("Session shutdown received (en): reason=%s", shutdown_reason or "unknown")
         finally:
@@ -1334,10 +1567,20 @@ async def entrypoint(ctx: JobContext):
     else:
         userdata = await _init_session_userdata(ctx, language="fr")
         active_agent_config = await _fetch_active_agent_runtime_config(userdata)
+        business_use_case = _detect_business_use_case(
+            active_agent_config=active_agent_config,
+            userdata=userdata,
+        )
+        userdata["business_use_case"] = business_use_case
         config_name = str(active_agent_config.get("name") or "").strip()
         if config_name:
             userdata["configured_agent_name"] = config_name
-        base_prompt = _effective_base_prompt(static_prompt=SYSTEM_PROMPT_FR, active_agent_config=active_agent_config)
+        base_prompt = _effective_base_prompt(
+            static_prompt=SYSTEM_PROMPT_FR,
+            active_agent_config=active_agent_config,
+            business_use_case=business_use_case,
+            language="fr",
+        )
         prompt_preview = " ".join(str(base_prompt).split())[:220]
         logger.info(
             "Prompt source: %s preview=%s",
@@ -1446,7 +1689,7 @@ async def entrypoint(ctx: JobContext):
                 room=ctx.room,
                 room_options=room_io.RoomOptions(delete_room_on_close=True),
             )
-            _trigger_first_turn(session, language="fr")
+            _trigger_first_turn(session, language="fr", business_use_case=business_use_case)
             shutdown_reason = await _wait_for_job_shutdown(ctx)
             logger.info("Session shutdown received (fr): reason=%s", shutdown_reason or "unknown")
         finally:

@@ -3,18 +3,38 @@ from __future__ import annotations
 import os
 import logging
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 
 from .observability import observe, trace_tool, update_observation
 
 OPS_SERVICE_BASE_URL = os.getenv("OPS_SERVICE_BASE_URL", "http://sales-girl-demo-crm-service:8095").rstrip("/")
+HOTEL_OPS_SERVICE_BASE_URL = os.getenv("HOTEL_OPS_SERVICE_BASE_URL", "").rstrip("/")
+FIDELITY_OPS_SERVICE_BASE_URL = os.getenv(
+    "FIDELITY_OPS_SERVICE_BASE_URL",
+    "http://sales-girl-fidelity-ops-service:8095",
+).rstrip("/")
 OPS_SERVICE_TOKEN = os.getenv("OPS_SERVICE_TOKEN", "local-internal-service-token")
 DEFAULT_TIMEOUT_SECONDS = float(os.getenv("OPS_SERVICE_TIMEOUT_SECONDS", "8"))
 AGENT_CLIENT_ID = os.getenv("AGENT_CLIENT_ID", "sales-girl-internal")
 AGENT_NAME = os.getenv("AGENT_NAME", "sales-girl-agent-en")
 OPS_SHARED_OWNER_EMAIL = str(os.getenv("OPS_SHARED_OWNER_EMAIL") or "").strip().lower()
 logger = logging.getLogger(__name__)
+
+
+def _business_use_case(metadata: dict[str, Any] | None) -> str:
+    md = metadata or {}
+    return str(md.get("business_use_case") or "").strip().lower()
+
+
+def _ops_base_url(metadata: dict[str, Any] | None) -> str:
+    use_case = _business_use_case(metadata)
+    if use_case == "hotel":
+        return HOTEL_OPS_SERVICE_BASE_URL
+    if use_case == "fidelity" and FIDELITY_OPS_SERVICE_BASE_URL:
+        return FIDELITY_OPS_SERVICE_BASE_URL
+    return OPS_SERVICE_BASE_URL
 
 
 def _resolve_customer_identifier(
@@ -26,6 +46,16 @@ def _resolve_customer_identifier(
         return explicit
     md = metadata or {}
     return str(md.get("end_user_id") or "").strip()
+
+
+def _normalize_http_url(value: str | None) -> str:
+    resolved = str(value or "").strip()
+    if not resolved:
+        return ""
+    parsed = urlparse(resolved)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return ""
+    return parsed.geturl().rstrip("/")
 
 
 def _service_headers(metadata: dict[str, Any] | None) -> dict[str, str]:
@@ -54,7 +84,12 @@ async def _request_json(
     json_body: dict[str, Any] | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    url = f"{OPS_SERVICE_BASE_URL}{path}"
+    base_url = _ops_base_url(metadata)
+    if not str(base_url or "").strip():
+        output = {"status": "failed", "message": "Hotel ops backend is not configured."}
+        update_observation(output=output)
+        return output
+    url = f"{base_url}{path}"
     headers = _service_headers(metadata)
     if not str(headers.get("X-Business-ID") or "").strip():
         output = {"status": "failed", "message": "Missing business scope for ops request."}
@@ -70,9 +105,10 @@ async def _request_json(
     )
     try:
         logger.info(
-            "OPS request %s %s business_scope=%s end_user=%s body=%s",
+            "OPS request %s %s base_url=%s business_scope=%s end_user=%s body=%s",
             method,
             path,
+            base_url,
             headers.get("X-Business-ID"),
             headers.get("X-End-User-ID"),
             json_body,
@@ -204,6 +240,136 @@ async def get_vending_history(
     )
 
 
+@observe(name="tool.get_account_overview", as_type="tool")
+async def get_account_overview(
+    *,
+    customer_identifier: str | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    caller_id = str((metadata or {}).get("end_user_id") or "")
+    _trace("get_account_overview", metadata, user_id=caller_id)
+    resolved_customer_identifier = _resolve_customer_identifier(customer_identifier, metadata)
+    return await _request_json(
+        "POST",
+        "/v1/tools/account/overview",
+        json_body={"customer_identifier": resolved_customer_identifier},
+        metadata=metadata,
+    )
+
+
+@observe(name="tool.get_recent_transactions", as_type="tool")
+async def get_recent_transactions(
+    *,
+    customer_identifier: str | None = None,
+    limit: int = 5,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    caller_id = str((metadata or {}).get("end_user_id") or "")
+    _trace("get_recent_transactions", metadata, user_id=caller_id)
+    resolved_customer_identifier = _resolve_customer_identifier(customer_identifier, metadata)
+    return await _request_json(
+        "POST",
+        "/v1/tools/transactions/recent",
+        json_body={
+            "customer_identifier": resolved_customer_identifier,
+            "limit": limit,
+        },
+        metadata=metadata,
+    )
+
+
+@observe(name="tool.check_transaction_status", as_type="tool")
+async def check_transaction_status(
+    *,
+    customer_identifier: str | None = None,
+    transaction_reference: str | None = None,
+    amount_naira: float | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    caller_id = str((metadata or {}).get("end_user_id") or "")
+    _trace("check_transaction_status", metadata, user_id=caller_id)
+    resolved_customer_identifier = _resolve_customer_identifier(customer_identifier, metadata)
+    return await _request_json(
+        "POST",
+        "/v1/tools/transactions/status",
+        json_body={
+            "customer_identifier": resolved_customer_identifier,
+            "transaction_reference": transaction_reference,
+            "amount_naira": amount_naira,
+        },
+        metadata=metadata,
+    )
+
+
+@observe(name="tool.block_card", as_type="tool")
+async def block_card(
+    *,
+    customer_identifier: str | None = None,
+    last4: str | None = None,
+    reason: str,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    caller_id = str((metadata or {}).get("end_user_id") or "")
+    _trace("block_card", metadata, user_id=caller_id)
+    resolved_customer_identifier = _resolve_customer_identifier(customer_identifier, metadata)
+    return await _request_json(
+        "POST",
+        "/v1/tools/cards/block",
+        json_body={
+            "customer_identifier": resolved_customer_identifier,
+            "last4": last4,
+            "reason": reason,
+        },
+        metadata=metadata,
+    )
+
+
+@observe(name="tool.unblock_card", as_type="tool")
+async def unblock_card(
+    *,
+    customer_identifier: str | None = None,
+    last4: str | None = None,
+    reason: str,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    caller_id = str((metadata or {}).get("end_user_id") or "")
+    _trace("unblock_card", metadata, user_id=caller_id)
+    resolved_customer_identifier = _resolve_customer_identifier(customer_identifier, metadata)
+    return await _request_json(
+        "POST",
+        "/v1/tools/cards/unblock",
+        json_body={
+            "customer_identifier": resolved_customer_identifier,
+            "last4": last4,
+            "reason": reason,
+        },
+        metadata=metadata,
+    )
+
+
+@observe(name="tool.reverse_failed_transaction", as_type="tool")
+async def reverse_failed_transaction(
+    *,
+    customer_identifier: str | None = None,
+    transaction_reference: str,
+    reason: str,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    caller_id = str((metadata or {}).get("end_user_id") or "")
+    _trace("reverse_failed_transaction", metadata, user_id=caller_id)
+    resolved_customer_identifier = _resolve_customer_identifier(customer_identifier, metadata)
+    return await _request_json(
+        "POST",
+        "/v1/tools/transactions/reverse",
+        json_body={
+            "customer_identifier": resolved_customer_identifier,
+            "transaction_reference": transaction_reference,
+            "reason": reason,
+        },
+        metadata=metadata,
+    )
+
+
 @observe(name="tool.create_ticket", as_type="tool")
 async def create_ticket(
     *,
@@ -218,6 +384,21 @@ async def create_ticket(
 ) -> dict[str, Any]:
     caller_id = str((metadata or {}).get("end_user_id") or "")
     _trace("create_ticket", metadata, user_id=caller_id)
+    if _business_use_case(metadata) == "hotel":
+        conversation_id = str((metadata or {}).get("conversation_id") or "").strip() or None
+        agent_id = str((metadata or {}).get("agent_id") or "").strip() or None
+        body: dict[str, Any] = {
+            "customer_name": str((metadata or {}).get("end_user_name") or "").strip() or None,
+            "customer_contact": str((metadata or {}).get("caller_phone_e164") or "").strip() or None,
+            "title": title,
+            "description": description,
+            "priority": priority,
+            "status": "open",
+            "conversation_id": conversation_id,
+            "agent_id": agent_id,
+        }
+        return await _request_json("POST", "/v1/tickets", json_body=body, metadata=metadata)
+
     resolved_customer_identifier = _resolve_customer_identifier(customer_identifier, metadata)
     body: dict[str, Any] = {
         "customer_identifier": resolved_customer_identifier,
@@ -231,6 +412,136 @@ async def create_ticket(
     if case_reference:
         body["case_reference"] = case_reference
     return await _request_json("POST", "/v1/tools/tickets/create", json_body=body, metadata=metadata)
+
+
+@observe(name="tool.create_booking", as_type="tool")
+async def create_booking(
+    *,
+    customer_identifier: str | None = None,
+    guest_name: str | None = None,
+    room_type: str,
+    check_in_date: str,
+    check_out_date: str,
+    guest_count: int = 1,
+    special_requests: str | None = None,
+    price_snapshot: dict[str, Any] | str | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    caller_id = str((metadata or {}).get("end_user_id") or "")
+    _trace("create_booking", metadata, user_id=caller_id)
+    if _business_use_case(metadata) == "hotel":
+        conversation_id = str((metadata or {}).get("conversation_id") or "").strip() or None
+        agent_id = str((metadata or {}).get("agent_id") or "").strip() or None
+        body: dict[str, Any] = {
+            "customer_name": guest_name or str((metadata or {}).get("end_user_name") or "").strip() or None,
+            "customer_contact": str((metadata or {}).get("caller_phone_e164") or "").strip() or None,
+            "room_type": room_type,
+            "stay_start": check_in_date,
+            "stay_end": check_out_date,
+            "guest_count": guest_count,
+            "price_snapshot": price_snapshot if isinstance(price_snapshot, dict) else None,
+            "status": "pending",
+            "notes": special_requests,
+            "conversation_id": conversation_id,
+            "agent_id": agent_id,
+        }
+        return await _request_json("POST", "/v1/bookings", json_body=body, metadata=metadata)
+
+    resolved_customer_identifier = _resolve_customer_identifier(customer_identifier, metadata)
+    body: dict[str, Any] = {
+        "customer_identifier": resolved_customer_identifier,
+        "guest_name": guest_name,
+        "room_type": room_type,
+        "check_in_date": check_in_date,
+        "check_out_date": check_out_date,
+        "guest_count": guest_count,
+        "special_requests": special_requests,
+        "price_snapshot": price_snapshot,
+        "conversation_id": str((metadata or {}).get("conversation_id") or ""),
+    }
+    return await _request_json("POST", "/v1/tools/bookings/create", json_body=body, metadata=metadata)
+
+
+@observe(name="tool.fetch_room_availability", as_type="tool")
+async def fetch_room_availability(
+    *,
+    endpoint_url: str | None = None,
+    room_type: str | None = None,
+    check_in_date: str | None = None,
+    check_out_date: str | None = None,
+    guest_count: int | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    caller_id = str((metadata or {}).get("end_user_id") or "")
+    _trace("fetch_room_availability", metadata, user_id=caller_id)
+    resolved_endpoint = _normalize_http_url(
+        endpoint_url or (metadata or {}).get("live_data_endpoint")
+    )
+    if not resolved_endpoint:
+        output = {"status": "failed", "message": "Hotel live availability endpoint is not configured."}
+        update_observation(output=output)
+        return output
+
+    headers = {
+        "Content-Type": "application/json",
+        "X-Business-ID": str((metadata or {}).get("business_id") or ""),
+        "X-Conversation-ID": str((metadata or {}).get("conversation_id") or ""),
+        "X-Session-ID": str((metadata or {}).get("session_id") or ""),
+        "X-End-User-ID": str((metadata or {}).get("end_user_id") or ""),
+        "X-Client-ID": str((metadata or {}).get("client_id") or AGENT_CLIENT_ID),
+        "X-Agent-ID": str((metadata or {}).get("agent_id") or AGENT_NAME),
+    }
+    body: dict[str, Any] = {
+        "room_type": room_type,
+        "check_in_date": check_in_date,
+        "check_out_date": check_out_date,
+        "guest_count": guest_count,
+    }
+    update_observation(
+        input={
+            "method": "POST",
+            "path": resolved_endpoint,
+            "json": body,
+            "headers": headers,
+        }
+    )
+    try:
+        async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT_SECONDS) as client:
+            response = await client.post(resolved_endpoint, json=body, headers=headers)
+    except httpx.TimeoutException:
+        output = {"status": "failed", "message": "Room availability request timed out."}
+        update_observation(output=output)
+        return output
+    except httpx.HTTPError:
+        output = {"status": "failed", "message": "Room availability service is unavailable."}
+        update_observation(output=output)
+        return output
+
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = None
+
+    if response.status_code >= 400:
+        detail = "Request failed."
+        if isinstance(payload, dict):
+            detail = str(payload.get("detail") or payload.get("message") or detail)
+        output = {"status": "failed", "message": detail, "http_status": response.status_code}
+        update_observation(output=output)
+        return output
+
+    if isinstance(payload, dict):
+        payload.setdefault("status", "success")
+        update_observation(output=payload)
+        return payload
+    if isinstance(payload, list):
+        output = {"status": "success", "items": payload}
+        update_observation(output=output)
+        return output
+
+    output = {"status": "failed", "message": "Invalid response from room availability service."}
+    update_observation(output=output)
+    return output
 
 
 @observe(name="tool.create_complaint_ticket", as_type="tool")
