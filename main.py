@@ -1089,6 +1089,21 @@ def _active_tool_url(active_agent_config: dict[str, Any] | None, tool_name: str)
     return ""
 
 
+def _demo_live_endpoint_for_use_case(business_use_case: str) -> str:
+    base_url = str(os.getenv("DASHBOARD_PUBLIC_BASE_URL") or "").strip().rstrip("/")
+    if not base_url:
+        return ""
+    path_by_use_case = {
+        "hotel": "/api/demo/room-availability",
+        "restaurant": "/api/demo/menu-availability",
+        "fashion": "/api/demo/product-availability",
+    }
+    path = path_by_use_case.get(str(business_use_case or "").strip().lower(), "")
+    if not path:
+        return ""
+    return f"{base_url}{path}"
+
+
 def _hydrate_userdata_from_active_agent_config(
     userdata: dict[str, Any],
     active_agent_config: dict[str, Any] | None,
@@ -1103,7 +1118,10 @@ def _hydrate_userdata_from_active_agent_config(
     if not tool_name:
         userdata["live_data_endpoint"] = ""
         return
-    userdata["live_data_endpoint"] = _active_tool_url(active_agent_config, tool_name)
+    userdata["live_data_endpoint"] = (
+        _active_tool_url(active_agent_config, tool_name)
+        or _demo_live_endpoint_for_use_case(business_use_case)
+    )
 
 
 def _strip_live_connectivity_lines(text: str) -> str:
@@ -1174,7 +1192,10 @@ def _effective_base_prompt(
         "restaurant": "fetch_menu_availability",
         "fashion": "fetch_product_availability",
     }
-    live_endpoint_url = _active_tool_url(cfg, live_tool_by_use_case.get(business_use_case, ""))
+    live_endpoint_url = (
+        _active_tool_url(cfg, live_tool_by_use_case.get(business_use_case, ""))
+        or _demo_live_endpoint_for_use_case(business_use_case)
+    )
     live_data_connected = bool(str(live_endpoint_url or "").strip())
     if not configured_instructions:
         if business_use_case == "hotel":
