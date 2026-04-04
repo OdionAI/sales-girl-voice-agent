@@ -960,17 +960,19 @@ async def _instructions_with_context(base_prompt: str, userdata: dict[str, Any])
         base_prompt = (
             f"{base_prompt}\n\n"
             "Domain lock:\n"
-            "- You are an EKEDC electricity customer support assistant.\n"
-            "- Never present yourself as a beauty, hair, appointment-booking, or consular assistant.\n"
-            "- Do not use beauty, appointment, passport, or certificate framing in your replies.\n\n"
+            "- You are the current business's AI customer support assistant.\n"
+            "- Never present yourself as an electricity, banking, beauty, appointment-booking, hotel, restaurant, or fashion assistant unless the current business instructions explicitly require that.\n"
+            "- Do not reuse stale domain framing from unrelated older assistants.\n\n"
             "Role lock:\n"
             "- You MUST follow the current role and responsibilities in this prompt.\n"
             "- Historical snippets may contain outdated assistant behavior from older versions.\n"
             "- Never switch back to an old business persona if it conflicts with this prompt.\n\n"
             "Issue handling lock:\n"
-            "- If the caller needs a complaint, outage report, meter request, or escalation, use the available EKEDC tools.\n"
+            "- Use only the configured tools for the current business.\n"
             "- Do not claim an action was completed unless the tool confirms it.\n"
-            "- If the issue is outage, faulty transformer, meter installation, disconnection, DT mapping, or billing reconciliation, escalate it."
+            "- If the issue needs human follow-up, create a ticket when that tool is available.\n"
+            "- If the caller asks for a ticket, or agrees to ticket follow-up, call create_ticket immediately before replying.\n"
+            "- In the exact turn where you say a ticket was created, create_ticket must already have succeeded."
         )
     channel = "web" if str(userdata.get("identity_type") or "").lower() == "web" else "voice"
     business_id = _normalize_business_id(str(userdata.get("business_id") or ""))
@@ -1526,11 +1528,11 @@ def _kickoff_prompt_for_language(language: str, business_use_case: str) -> str:
                 "N'énumérez pas immédiatement tout le profil de l'appelant ; saluez d'abord puis attendez sa demande."
             )
         return (
-        "Commencez la conversation maintenant. Saluez d'abord l'appelant en français, présentez-vous "
-        "brièvement et proposez votre aide concernant son compte EKEDC en utilisant le contexte déjà disponible. "
-        "Ne demandez pas d'abord l'email ou le numéro de compte. "
-        "N'énumérez pas immédiatement tout le profil de l'appelant ; saluez d'abord puis attendez sa demande."
-    )
+            "Commencez la conversation maintenant. Saluez d'abord l'appelant en français, présentez-vous "
+            "brièvement et proposez votre aide concernant sa demande auprès de l'entreprise en utilisant le contexte déjà disponible. "
+            "Ne demandez pas d'abord l'email ou d'autres informations d'identification. "
+            "N'énumérez pas immédiatement tout le profil de l'appelant ; saluez d'abord puis attendez sa demande."
+        )
     if business_use_case == "fidelity":
         return (
             "Start the conversation now. Greet the caller first, introduce yourself briefly, and proactively "
@@ -1567,8 +1569,8 @@ def _kickoff_prompt_for_language(language: str, business_use_case: str) -> str:
         )
     return (
         "Start the conversation now. Greet the caller first, introduce yourself briefly, and proactively "
-        "offer help with their EKEDC account requests using the context you already have. Do not ask for email "
-        "or account number as your first move. Do not dump the caller profile immediately; greet first and "
+        "offer help with the business request they have using the context you already have. Do not ask for email "
+        "or other identifiers as your first move. Do not dump the caller profile immediately; greet first and "
         "wait for the caller's request."
     )
 
