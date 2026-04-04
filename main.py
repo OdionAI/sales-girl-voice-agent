@@ -62,7 +62,7 @@ load_dotenv()
 # AgentServer allows only one rtc_session per process. To support both English and
 # French, run two worker processes with EN/FR-prefixed names.
 AGENT_NAME = os.environ.get("AGENT_NAME", "sales-girl-agent-en")
-DEFAULT_BUSINESS_USE_CASE = str(os.environ.get("DEFAULT_BUSINESS_USE_CASE", "ekedc") or "ekedc").strip().lower()
+DEFAULT_BUSINESS_USE_CASE = str(os.environ.get("DEFAULT_BUSINESS_USE_CASE", "generic") or "generic").strip().lower()
 FIDELITY_BUSINESS_IDS = {
     item.strip() for item in str(os.environ.get("FIDELITY_BUSINESS_IDS") or "").split(",") if item.strip()
 }
@@ -74,6 +74,26 @@ FIDELITY_STATIC_PROMPT_EN = (
     "recent transaction questions, transaction status checks, card block and unblock requests, "
     "failed transaction reversals when the backend confirms eligibility, and ticket creation "
     "for issues that require human review."
+)
+
+RESTAURANT_STATIC_PROMPT_EN = (
+    "You are a restaurant host and customer support assistant for this business. "
+    "Help callers with menu questions, reservations, order-related questions, service policies, "
+    "and support requests. Use live availability only when connected, never invent current menu "
+    "availability or pricing, and create tickets when human follow-up is needed."
+)
+
+FASHION_STATIC_PROMPT_EN = (
+    "You are a fashion sales and customer support assistant for this business. "
+    "Help callers with product questions, sizes, styles, availability, delivery or return policies, "
+    "and support requests. Use live product availability only when connected, never invent stock or pricing, "
+    "and create tickets when human follow-up is needed."
+)
+
+GENERIC_STATIC_PROMPT_EN = (
+    "You are the business's AI voice assistant. Represent the business clearly, calmly, and professionally. "
+    "Use the saved business instructions and knowledge first, use tools only when relevant, never invent live data, "
+    "and create a support ticket when human follow-up is needed."
 )
 
 
@@ -325,6 +345,13 @@ ENABLE_ODION_TTS_EN = os.getenv("ENABLE_ODION_TTS_EN", "false").lower() == "true
 ODION_TTS_EXPERIMENT_OWNER_ID = str(os.getenv("ODION_TTS_EXPERIMENT_OWNER_ID") or "").strip()
 ODION_TTS_EXPERIMENT_VOICE_ID = str(os.getenv("ODION_TTS_EXPERIMENT_VOICE_ID") or "").strip()
 ODION_TTS_EXPERIMENT_LANGUAGE_HINT = str(os.getenv("ODION_TTS_EXPERIMENT_LANGUAGE_HINT") or "English").strip() or "English"
+try:
+    _odion_seed_raw = str(os.getenv("ODION_TTS_EXPERIMENT_SEED") or "").strip()
+    ODION_TTS_EXPERIMENT_SEED = int(_odion_seed_raw) if _odion_seed_raw else None
+    if ODION_TTS_EXPERIMENT_SEED is not None and ODION_TTS_EXPERIMENT_SEED < 0:
+        ODION_TTS_EXPERIMENT_SEED = None
+except ValueError:
+    ODION_TTS_EXPERIMENT_SEED = None
 
 
 def _normalize_business_id(value: str | None) -> str:
@@ -825,6 +852,14 @@ def _instructions_with_resume_context(base_prompt: str, userdata: dict[str, Any]
 
 
 async def _instructions_with_context(base_prompt: str, userdata: dict[str, Any]) -> str:
+    base_prompt = (
+        f"{base_prompt}\n\n"
+        "Closing behavior:\n"
+        "- End the conversation naturally once the caller's request is handled.\n"
+        "- Do not give a forced recap of the whole interaction at the end of every successful call.\n"
+        "- Only give a short summary when the caller explicitly asks for one or when a brief confirmation is genuinely useful.\n"
+        "- If the caller says thank you, says they are done, or clearly signals the conversation is over, respond naturally and close politely.\n"
+    )
     end_user_id = str(userdata.get("end_user_id") or "")
     if not end_user_id:
         return base_prompt
@@ -869,6 +904,56 @@ async def _instructions_with_context(base_prompt: str, userdata: dict[str, Any])
             "- Use the available hotel tools for room availability, bookings, and guest tickets.\n"
             "- Do not claim a booking or ticket was completed unless the tool confirms it.\n"
             "- If the live availability endpoint is missing, explain that live room data is not connected yet and offer human follow-up."
+        )
+    elif business_use_case == "restaurant":
+        base_prompt = (
+            f"{base_prompt}\n\n"
+            "Domain lock:\n"
+            "- You are a restaurant host and customer support assistant for this business.\n"
+            "- Never present yourself as a hotel, electricity, or banking assistant.\n"
+            "- Use restaurant knowledge, menu availability, orders, reservations, and tickets where appropriate.\n\n"
+            "Role lock:\n"
+            "- You MUST follow the current restaurant role and responsibilities in this prompt.\n"
+            "- Historical snippets may contain outdated assistant behavior from older versions.\n"
+            "- Never switch back to an old non-restaurant persona if it conflicts with this prompt.\n\n"
+            "Issue handling lock:\n"
+            "- Use the available restaurant tools for orders and customer tickets.\n"
+            "- Do not claim an order or ticket was completed unless the tool confirms it.\n"
+            "- If live menu data is missing, explain that live availability is not connected yet and offer human follow-up.\n"
+        )
+    elif business_use_case == "fashion":
+        base_prompt = (
+            f"{base_prompt}\n\n"
+            "Domain lock:\n"
+            "- You are a fashion sales and customer support assistant for this business.\n"
+            "- Never present yourself as a hotel, electricity, or banking assistant.\n"
+            "- Use fashion product knowledge, live availability, orders, and tickets where appropriate.\n\n"
+            "Role lock:\n"
+            "- You MUST follow the current fashion retail role and responsibilities in this prompt.\n"
+            "- Historical snippets may contain outdated assistant behavior from older versions.\n"
+            "- Never switch back to an old non-fashion persona if it conflicts with this prompt.\n\n"
+            "Issue handling lock:\n"
+            "- Use the available fashion tools for orders and customer tickets.\n"
+            "- Do not claim an order or ticket was completed unless the tool confirms it.\n"
+            "- If live product data is missing, explain that live availability is not connected yet and offer human follow-up.\n"
+        )
+    elif business_use_case == "generic":
+        base_prompt = (
+            f"{base_prompt}\n\n"
+            "Domain lock:\n"
+            "- You are the business's AI voice assistant for this specific company.\n"
+            "- Never present yourself as an electricity, banking, hotel, restaurant, or fashion assistant unless the business instructions explicitly say so.\n"
+            "- Use the saved business instructions, knowledge, and configured tools for this business only.\n\n"
+            "Role lock:\n"
+            "- You MUST follow the current business-specific role and responsibilities in this prompt.\n"
+            "- Historical snippets may contain outdated assistant behavior from older versions.\n"
+            "- Never switch to an old persona if it conflicts with this prompt.\n\n"
+            "Issue handling lock:\n"
+            "- Use configured tools only when they are relevant and available.\n"
+            "- Do not claim any action succeeded unless the tool confirms it.\n"
+            "- If a request needs human attention, create a ticket if that tool is available.\n"
+            "- If the caller asks for a ticket, or agrees to ticket follow-up, call create_ticket immediately before replying.\n"
+            "- In the exact turn where you say a ticket was created, create_ticket must already have succeeded.\n"
         )
     else:
         # Prevent old assistant personas in historical context from overriding current role.
@@ -988,6 +1073,57 @@ async def _fetch_active_agent_runtime_config(userdata: dict[str, Any]) -> dict[s
     return payload if isinstance(payload, dict) else {}
 
 
+def _active_tool_url(active_agent_config: dict[str, Any] | None, tool_name: str) -> str:
+    cfg = active_agent_config or {}
+    tools = cfg.get("tools")
+    if not isinstance(tools, list):
+        return ""
+    for tool in tools:
+        if not isinstance(tool, dict):
+            continue
+        if str(tool.get("name") or "").strip() != tool_name:
+            continue
+        return str(tool.get("url") or "").strip()
+    return ""
+
+
+def _hydrate_userdata_from_active_agent_config(
+    userdata: dict[str, Any],
+    active_agent_config: dict[str, Any] | None,
+    business_use_case: str,
+) -> None:
+    expected_tool_by_use_case = {
+        "hotel": "fetch_room_availability",
+        "restaurant": "fetch_menu_availability",
+        "fashion": "fetch_product_availability",
+    }
+    tool_name = expected_tool_by_use_case.get(str(business_use_case or "").strip().lower())
+    if not tool_name:
+        userdata["live_data_endpoint"] = ""
+        return
+    userdata["live_data_endpoint"] = _active_tool_url(active_agent_config, tool_name)
+
+
+def _strip_live_connectivity_lines(text: str) -> str:
+    blocked_fragments = (
+        "live room data is not connected",
+        "live menu data is not connected",
+        "live product data is not connected",
+        "live operational data is not connected",
+        "do not invent current availability",
+        "do not invent current menu availability",
+        "do not invent current product availability",
+        "offer to create a ticket for follow-up instead",
+    )
+    kept_lines: list[str] = []
+    for line in str(text or "").splitlines():
+        normalized = " ".join(line.lower().split())
+        if any(fragment in normalized for fragment in blocked_fragments):
+            continue
+        kept_lines.append(line)
+    return "\n".join(kept_lines).strip()
+
+
 def _detect_business_use_case(
     *,
     active_agent_config: dict[str, Any] | None,
@@ -1010,12 +1146,16 @@ def _detect_business_use_case(
     ).lower()
     if any(token in text for token in ("fidelity", "fidelity bank", "block card", "recent transactions", "failed transaction", "account balance")):
         return "fidelity"
-    if any(token in text for token in ("hotel", "guest support", "room availability", "booking", "bookings", "reservation", "concierge", "accommodation")):
+    if any(token in text for token in ("restaurant", "menu", "order tool", "create_order", "dining", "host stand", "reservation request", "pickup", "delivery")):
+        return "restaurant"
+    if any(token in text for token in ("fashion", "size", "sizes", "style", "styles", "product availability", "catalog", "boutique", "apparel")):
+        return "fashion"
+    if any(token in text for token in ("hotel", "guest support", "room availability", "check-in", "check out", "accommodation", "concierge", "room reservation")):
         return "hotel"
     if any(token in text for token in ("ekedc", "electricity", "tariff", "meter", "outage", "token vending")):
         return "ekedc"
 
-    return DEFAULT_BUSINESS_USE_CASE if DEFAULT_BUSINESS_USE_CASE in {"ekedc", "fidelity", "generic"} else "ekedc"
+    return DEFAULT_BUSINESS_USE_CASE if DEFAULT_BUSINESS_USE_CASE in {"ekedc", "fidelity", "hotel", "restaurant", "fashion", "generic"} else "generic"
 
 
 def _effective_base_prompt(
@@ -1027,6 +1167,13 @@ def _effective_base_prompt(
 ) -> str:
     cfg = active_agent_config or {}
     configured_instructions = str(cfg.get("instructions") or "").strip()
+    live_tool_by_use_case = {
+        "hotel": "fetch_room_availability",
+        "restaurant": "fetch_menu_availability",
+        "fashion": "fetch_product_availability",
+    }
+    live_endpoint_url = _active_tool_url(cfg, live_tool_by_use_case.get(business_use_case, ""))
+    live_data_connected = bool(str(live_endpoint_url or "").strip())
     if not configured_instructions:
         if business_use_case == "hotel":
             if str(language or "").strip().lower() == "fr":
@@ -1041,9 +1188,13 @@ def _effective_base_prompt(
                 "Respond clearly, calmly, and professionally.\n"
                 "Use hotel knowledge, live availability only if connected, and create bookings or tickets only when the tools confirm the action."
             )
+        if business_use_case == "restaurant":
+            return RESTAURANT_STATIC_PROMPT_EN
+        if business_use_case == "fashion":
+            return FASHION_STATIC_PROMPT_EN
         if business_use_case == "fidelity":
             return FIDELITY_STATIC_PROMPT_EN
-        return static_prompt
+        return GENERIC_STATIC_PROMPT_EN
 
     normalized = " ".join(configured_instructions.lower().split())
     default_like = {
@@ -1073,17 +1224,89 @@ def _effective_base_prompt(
         return configured_instructions
 
     if business_use_case == "hotel":
+        live_status_line = (
+            f"- Live room availability and pricing are connected at {live_endpoint_url}."
+            if live_data_connected
+            else "- Live room availability and pricing are not connected yet."
+        )
+        sanitized_instructions = (
+            _strip_live_connectivity_lines(configured_instructions)
+            if live_data_connected
+            else configured_instructions
+        )
         return (
-            f"{configured_instructions.rstrip()}\n\n"
+            f"{sanitized_instructions.rstrip()}\n\n"
+            "Current live data status:\n"
+            f"{live_status_line}\n\n"
             "Hotel tool guardrails:\n"
             "- Use create_ticket for complaints, unresolved guest issues, or human follow-up.\n"
-            "- Use create_booking for confirmed room reservations when you have enough details.\n"
+            "- Use create_booking only for confirmed room reservations after live availability and pricing have been checked.\n"
+            "- If the guest asks you to create a ticket, or agrees to ticket follow-up, call create_ticket immediately before replying.\n"
+            "- In the exact turn where you say a ticket was created, create_ticket must already have succeeded.\n"
+            "- If live room data is not connected, do not create or confirm a booking. Explain that live room data is unavailable and offer to create a ticket for follow-up instead.\n"
             "- Infer ticket titles and descriptions yourself from the conversation; do not ask the guest to write them for you.\n"
             "- Only ask a follow-up question before creating a ticket if a concrete missing fact is essential.\n"
             "- Never say a ticket was created unless create_ticket returned success.\n"
             "- Never say a booking was created unless create_booking returned success.\n"
             "- If a tool call fails, explain that clearly and offer the next best fallback.\n"
         )
+
+    if business_use_case == "restaurant":
+        live_status_line = (
+            f"- Live menu availability and pricing are connected at {live_endpoint_url}."
+            if live_data_connected
+            else "- Live menu availability and pricing are not connected yet."
+        )
+        sanitized_instructions = (
+            _strip_live_connectivity_lines(configured_instructions)
+            if live_data_connected
+            else configured_instructions
+        )
+        return (
+            f"{sanitized_instructions.rstrip()}\n\n"
+            "Current live data status:\n"
+            f"{live_status_line}\n\n"
+            "Restaurant tool guardrails:\n"
+            "- Use create_ticket for complaints, unresolved customer issues, or human follow-up.\n"
+            "- Use create_order only for confirmed orders when live menu availability and pricing have been checked.\n"
+            "- If the customer asks you to create a ticket, or agrees to ticket follow-up, call create_ticket immediately before replying.\n"
+            "- In the exact turn where you say a ticket was created, create_ticket must already have succeeded.\n"
+            "- If live menu data is not connected, do not create or confirm an order. Explain that live menu data is unavailable and offer to create a ticket for follow-up instead.\n"
+            "- Infer ticket titles and descriptions yourself from the conversation; do not ask the customer to write them for you.\n"
+            "- Never say a ticket was created unless create_ticket returned success.\n"
+            "- Never say an order was created unless create_order returned success.\n"
+            "- If a tool call fails, explain that clearly and offer the next best fallback.\n"
+        )
+
+    if business_use_case == "fashion":
+        live_status_line = (
+            f"- Live product availability and pricing are connected at {live_endpoint_url}."
+            if live_data_connected
+            else "- Live product availability and pricing are not connected yet."
+        )
+        sanitized_instructions = (
+            _strip_live_connectivity_lines(configured_instructions)
+            if live_data_connected
+            else configured_instructions
+        )
+        return (
+            f"{sanitized_instructions.rstrip()}\n\n"
+            "Current live data status:\n"
+            f"{live_status_line}\n\n"
+            "Fashion tool guardrails:\n"
+            "- Use create_ticket for complaints, unresolved customer issues, or human follow-up.\n"
+            "- Use create_order only for confirmed product orders when live product availability and pricing have been checked.\n"
+            "- If the customer asks you to create a ticket, or agrees to ticket follow-up, call create_ticket immediately before replying.\n"
+            "- In the exact turn where you say a ticket was created, create_ticket must already have succeeded.\n"
+            "- If live product data is not connected, do not create or confirm an order. Explain that live product data is unavailable and offer to create a ticket for follow-up instead.\n"
+            "- Infer ticket titles and descriptions yourself from the conversation; do not ask the customer to write them for you.\n"
+            "- Never say a ticket was created unless create_ticket returned success.\n"
+            "- Never say an order was created unless create_order returned success.\n"
+            "- If a tool call fails, explain that clearly and offer the next best fallback.\n"
+        )
+
+    if business_use_case == "generic":
+        return configured_instructions
 
     incompatible_tokens = ("salon", "appointment", "hair", "beauty", "booking", "barber", "spa", "receptionist")
     if any(token in normalized for token in incompatible_tokens):
@@ -1100,7 +1323,7 @@ def _effective_base_prompt(
 def _ops_tool_metadata_from_userdata(userdata: dict[str, Any]) -> dict[str, Any]:
     return {
         "client_id": os.getenv("AGENT_CLIENT_ID", "sales-girl-internal"),
-        "agent_id": os.getenv("AGENT_NAME", AGENT_NAME),
+        "agent_id": str(userdata.get("agent_config_id") or userdata.get("agent_id") or AGENT_NAME),
         "business_id": str(userdata.get("business_id") or ""),
         "business_use_case": str(userdata.get("business_use_case") or ""),
         "conversation_id": str(userdata.get("conversation_id") or ""),
@@ -1322,11 +1545,54 @@ def _kickoff_prompt_for_language(language: str, business_use_case: str) -> str:
             "Do not ask for their email as your first move. Do not dump the guest profile immediately; greet first and "
             "wait for the guest's request."
         )
+    if business_use_case == "restaurant":
+        return (
+            "Start the conversation now. Greet the customer first, introduce yourself briefly, and proactively "
+            "offer help with menu questions, reservations, and order requests using the context you already have. "
+            "Do not ask for their email as your first move. Do not dump the customer profile immediately; greet first and "
+            "wait for the customer's request."
+        )
+    if business_use_case == "fashion":
+        return (
+            "Start the conversation now. Greet the customer first, introduce yourself briefly, and proactively "
+            "offer help with product questions, sizes, availability, and order requests using the context you already have. "
+            "Do not ask for their email as your first move. Do not dump the customer profile immediately; greet first and "
+            "wait for the customer's request."
+        )
+    if business_use_case == "generic":
+        return (
+            "Start the conversation now. Greet the caller first, introduce yourself briefly, and proactively "
+            "offer help with the business request they have using the context you already have. Do not ask for email "
+            "or other identifiers as your first move. Greet first and wait for the caller's request."
+        )
     return (
         "Start the conversation now. Greet the caller first, introduce yourself briefly, and proactively "
         "offer help with their EKEDC account requests using the context you already have. Do not ask for email "
         "or account number as your first move. Do not dump the caller profile immediately; greet first and "
         "wait for the caller's request."
+    )
+
+
+def _build_session_for_language(
+    *,
+    language: str,
+    instructions: str,
+    userdata: dict[str, Any],
+    tts_engine: Any | None = None,
+) -> AgentSession:
+    if language == "fr":
+        return AgentSession(
+            stt=deepgram.STT(language="fr"),
+            tts=deepgram.TTS(model="aura-2-agathe-fr"),
+            llm=google.LLM(model="gemini-2.0-flash"),
+            userdata=userdata,
+        )
+
+    return AgentSession(
+        stt=deepgram.STT(language="en"),
+        tts=tts_engine,
+        llm=google.LLM(model="gemini-2.0-flash"),
+        userdata=userdata,
     )
 
 
@@ -1377,6 +1643,7 @@ async def entrypoint(ctx: JobContext):
             userdata=userdata,
         )
         userdata["business_use_case"] = business_use_case
+        _hydrate_userdata_from_active_agent_config(userdata, active_agent_config, business_use_case)
         config_name = str(active_agent_config.get("name") or "").strip()
         if config_name:
             userdata["configured_agent_name"] = config_name
@@ -1418,11 +1685,7 @@ async def entrypoint(ctx: JobContext):
         ctx.add_shutdown_callback(_cleanup_en)
 
         tts_engine: Any = deepgram.TTS(model="aura-asteria-en")
-        use_experiment_clone = (
-            AGENT_NAME == "odion-tts-staging-agent"
-            and bool(ODION_TTS_EXPERIMENT_OWNER_ID)
-            and bool(ODION_TTS_EXPERIMENT_VOICE_ID)
-        )
+        use_experiment_clone = bool(ODION_TTS_EXPERIMENT_OWNER_ID) and bool(ODION_TTS_EXPERIMENT_VOICE_ID)
         tts_voice_id = (
             ODION_TTS_EXPERIMENT_VOICE_ID
             if use_experiment_clone
@@ -1447,12 +1710,14 @@ async def entrypoint(ctx: JobContext):
                         owner_id=tts_owner_id,
                         voice_id=tts_voice_id,
                         language=tts_language_hint,
+                        seed=ODION_TTS_EXPERIMENT_SEED if use_experiment_clone else None,
                     )
                     logger.info(
-                        "Using Odion cloned TTS for English session: agent_config_id=%s voice_id=%s owner_id=%s",
+                        "Using Odion cloned TTS for English session: agent_config_id=%s voice_id=%s owner_id=%s seed=%s",
                         userdata.get("agent_config_id"),
                         tts_voice_id,
                         tts_owner_id,
+                        ODION_TTS_EXPERIMENT_SEED if use_experiment_clone else None,
                     )
                 elif use_odion_default:
                     # Default English voice path from Odion TTS when business has not cloned.
@@ -1460,6 +1725,7 @@ async def entrypoint(ctx: JobContext):
                         owner_id=tts_owner_id or business_id,
                         voice_id=None,
                         language=tts_language_hint,
+                        seed=None,
                     )
                     logger.info(
                         "Using Odion default TTS for English session: agent_config_id=%s owner_id=%s",
@@ -1471,11 +1737,11 @@ async def entrypoint(ctx: JobContext):
         else:
             logger.info("ENABLE_ODION_TTS_EN=false; using Deepgram TTS for English session.")
 
-        session = AgentSession(
-            stt=deepgram.STT(language="en"),
-            tts=tts_engine,
-            llm=google.LLM(model="gemini-2.0-flash"),
+        session = _build_session_for_language(
+            language="en",
+            instructions=instructions,
             userdata=userdata,
+            tts_engine=tts_engine,
         )
         _wire_session_timeline(session, session.userdata)
         try:
@@ -1572,6 +1838,7 @@ async def entrypoint(ctx: JobContext):
             userdata=userdata,
         )
         userdata["business_use_case"] = business_use_case
+        _hydrate_userdata_from_active_agent_config(userdata, active_agent_config, business_use_case)
         config_name = str(active_agent_config.get("name") or "").strip()
         if config_name:
             userdata["configured_agent_name"] = config_name
@@ -1611,10 +1878,9 @@ async def entrypoint(ctx: JobContext):
             )
 
         ctx.add_shutdown_callback(_cleanup_fr)
-        session = AgentSession(
-            stt=deepgram.STT(language="fr"),
-            tts=deepgram.TTS(model="aura-2-agathe-fr"),
-            llm=google.LLM(model="gemini-2.0-flash"),
+        session = _build_session_for_language(
+            language="fr",
+            instructions=instructions,
             userdata=userdata,
         )
         _wire_session_timeline(session, session.userdata)

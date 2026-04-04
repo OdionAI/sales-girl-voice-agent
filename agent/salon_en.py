@@ -9,10 +9,13 @@ from .ops_api import (
     check_transaction_status as check_transaction_status_api,
     create_payment_plan as create_payment_plan_api,
     create_booking as create_booking_api,
+    create_order as create_order_api,
     create_ticket as create_ticket_api,
     create_complaint_ticket as create_complaint_ticket_api,
     create_meter_request as create_meter_request_api,
     escalate_issue as escalate_issue_api,
+    fetch_menu_availability as fetch_menu_availability_api,
+    fetch_product_availability as fetch_product_availability_api,
     fetch_room_availability as fetch_room_availability_api,
     get_account_overview as get_account_overview_api,
     get_payment_summary as get_payment_summary_api,
@@ -189,6 +192,31 @@ class SalonAgentEN(Agent):
         return result
 
     @function_tool()
+    async def create_order(
+        self,
+        ctx: RunContext,
+        item_name: str,
+        quantity: int = 1,
+        customer_name: str | None = None,
+        notes: str | None = None,
+        price_snapshot: dict | str | None = None,
+        customer_identifier: str | None = None,
+    ) -> dict:
+        """Create a restaurant or fashion order inside the platform for the current customer and business."""
+        result = await create_order_api(
+            customer_identifier=customer_identifier,
+            customer_name=customer_name,
+            item_name=item_name,
+            quantity=quantity,
+            notes=notes,
+            price_snapshot=price_snapshot,
+            metadata=_tool_metadata(ctx),
+        )
+        if result.get("status") != "failed":
+            logger.info("[TOOL] create_order item_name=%s quantity=%s", item_name, quantity)
+        return result
+
+    @function_tool()
     async def fetch_room_availability(
         self,
         ctx: RunContext,
@@ -209,6 +237,46 @@ class SalonAgentEN(Agent):
         )
         if result.get("status") != "failed":
             logger.info("[TOOL] fetch_room_availability room_type=%s", room_type)
+        return result
+
+    @function_tool()
+    async def fetch_menu_availability(
+        self,
+        ctx: RunContext,
+        endpoint_url: str | None = None,
+        item_name: str | None = None,
+        party_size: int | None = None,
+    ) -> dict:
+        """Fetch current restaurant menu availability and prices from the live endpoint when it is configured."""
+        result = await fetch_menu_availability_api(
+            endpoint_url=endpoint_url,
+            item_name=item_name,
+            party_size=party_size,
+            metadata=_tool_metadata(ctx),
+        )
+        if result.get("status") != "failed":
+            logger.info("[TOOL] fetch_menu_availability item_name=%s", item_name)
+        return result
+
+    @function_tool()
+    async def fetch_product_availability(
+        self,
+        ctx: RunContext,
+        endpoint_url: str | None = None,
+        product_name: str | None = None,
+        size: str | None = None,
+        color: str | None = None,
+    ) -> dict:
+        """Fetch current product availability and prices from the live endpoint when it is configured."""
+        result = await fetch_product_availability_api(
+            endpoint_url=endpoint_url,
+            product_name=product_name,
+            size=size,
+            color=color,
+            metadata=_tool_metadata(ctx),
+        )
+        if result.get("status") != "failed":
+            logger.info("[TOOL] fetch_product_availability product_name=%s", product_name)
         return result
 
     @function_tool()

@@ -16,6 +16,7 @@ class _TTSOptions:
     owner_id: str
     voice_id: str | None
     language: str
+    seed: int | None
 
 
 class OdionTTS(tts.TTS):
@@ -25,6 +26,7 @@ class OdionTTS(tts.TTS):
         owner_id: str,
         voice_id: str,
         language: str = "Auto",
+        seed: int | None = None,
         base_url: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
@@ -38,6 +40,7 @@ class OdionTTS(tts.TTS):
             owner_id=str(owner_id or "").strip(),
             voice_id=(str(voice_id or "").strip() or None),
             language=str(language or "Auto").strip() or "Auto",
+            seed=seed if isinstance(seed, int) and seed >= 0 else None,
         )
         if not self._opts.owner_id:
             raise ValueError("owner_id is required for OdionTTS")
@@ -81,6 +84,8 @@ class ChunkedStream(tts.ChunkedStream):
         }
         if self._opts.voice_id:
             payload["voice_id"] = self._opts.voice_id
+        if self._opts.seed is not None:
+            payload["seed"] = self._opts.seed
         try:
             async with self._tts._ensure_session().post(
                 f"{self._opts.base_url}/api/v1/tts/stream",

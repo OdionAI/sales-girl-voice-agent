@@ -28,9 +28,13 @@ def _business_use_case(metadata: dict[str, Any] | None) -> str:
     return str(md.get("business_use_case") or "").strip().lower()
 
 
+def _uses_internal_business_ops(metadata: dict[str, Any] | None) -> bool:
+    return _business_use_case(metadata) in {"hotel", "restaurant", "fashion"}
+
+
 def _ops_base_url(metadata: dict[str, Any] | None) -> str:
     use_case = _business_use_case(metadata)
-    if use_case == "hotel":
+    if use_case in {"hotel", "restaurant", "fashion"}:
         return HOTEL_OPS_SERVICE_BASE_URL
     if use_case == "fidelity" and FIDELITY_OPS_SERVICE_BASE_URL:
         return FIDELITY_OPS_SERVICE_BASE_URL
@@ -384,7 +388,7 @@ async def create_ticket(
 ) -> dict[str, Any]:
     caller_id = str((metadata or {}).get("end_user_id") or "")
     _trace("create_ticket", metadata, user_id=caller_id)
-    if _business_use_case(metadata) == "hotel":
+    if _uses_internal_business_ops(metadata):
         conversation_id = str((metadata or {}).get("conversation_id") or "").strip() or None
         agent_id = str((metadata or {}).get("agent_id") or "").strip() or None
         body: dict[str, Any] = {
@@ -460,6 +464,48 @@ async def create_booking(
         "conversation_id": str((metadata or {}).get("conversation_id") or ""),
     }
     return await _request_json("POST", "/v1/tools/bookings/create", json_body=body, metadata=metadata)
+
+
+@observe(name="tool.create_order", as_type="tool")
+async def create_order(
+    *,
+    customer_identifier: str | None = None,
+    item_name: str,
+    quantity: int = 1,
+    customer_name: str | None = None,
+    notes: str | None = None,
+    price_snapshot: dict[str, Any] | str | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    caller_id = str((metadata or {}).get("end_user_id") or "")
+    _trace("create_order", metadata, user_id=caller_id)
+    if _business_use_case(metadata) in {"restaurant", "fashion"}:
+        conversation_id = str((metadata or {}).get("conversation_id") or "").strip() or None
+        agent_id = str((metadata or {}).get("agent_id") or "").strip() or None
+        body: dict[str, Any] = {
+            "customer_name": customer_name or str((metadata or {}).get("end_user_name") or "").strip() or None,
+            "customer_contact": str((metadata or {}).get("caller_phone_e164") or "").strip() or str((metadata or {}).get("end_user_id") or "").strip() or None,
+            "item_name": item_name,
+            "quantity": quantity,
+            "price_snapshot": price_snapshot if isinstance(price_snapshot, dict) else None,
+            "status": "pending",
+            "notes": notes,
+            "conversation_id": conversation_id,
+            "agent_id": agent_id,
+        }
+        return await _request_json("POST", "/v1/orders", json_body=body, metadata=metadata)
+
+    resolved_customer_identifier = _resolve_customer_identifier(customer_identifier, metadata)
+    body = {
+        "customer_identifier": resolved_customer_identifier,
+        "item_name": item_name,
+        "quantity": quantity,
+        "customer_name": customer_name,
+        "notes": notes,
+        "price_snapshot": price_snapshot,
+        "conversation_id": str((metadata or {}).get("conversation_id") or ""),
+    }
+    return await _request_json("POST", "/v1/tools/orders/create", json_body=body, metadata=metadata)
 
 
 @observe(name="tool.fetch_room_availability", as_type="tool")
@@ -542,6 +588,125 @@ async def fetch_room_availability(
     output = {"status": "failed", "message": "Invalid response from room availability service."}
     update_observation(output=output)
     return output
+
+
+async def _fetch_live_catalog(
+    *,
+    endpoint_url: str | None = None,
+    body: dict[str, Any] | None = None,
+    metadata: dict[str, Any] | None = None,
+    unavailable_message: str,
+    timeout_message: str,
+    service_unavailable_message: str,
+    invalid_response_message: str,
+) -> dict[str, Any]:
+    caller_id = str((metadata or {}).get("end_user_id") or "")
+    resolved_endpoint = _normalize_http_url(
+        endpoint_url or (metadata or {}).get("live_data_endpoint")
+    )
+    if not resolved_endpoint:
+        output = {"status": "failed", "message": unavailable_message}
+        update_observation(output=output)
+        return output
+
+    headers = {
+        "Content-Type": "application/json",
+        "X-Business-ID": str((metadata or {}).get("business_id") or ""),
+        "X-Conversation-ID": str((metadata or {}).get("conversation_id") or ""),
+        "X-Session-ID": str((metadata or {}).get("session_id") or ""),
+        "X-End-User-ID": str((metadata or {}).get("end_user_id") or ""),
+        "X-Client-ID": str((metadata or {}).get("client_id") or AGENT_CLIENT_ID),
+        "X-Agent-ID": str((metadata or {}).get("agent_id") or AGENT_NAME),
+    }
+    update_observation(
+        input={
+            "method": "POST",
+            "path": resolved_endpoint,
+            "json": body or {},
+            "headers": headers,
+            "caller_id": caller_id,
+        }
+    )
+    try:
+        async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT_SECONDS) as client:
+            response = await client.post(resolved_endpoint, json=body or {}, headers=headers)
+    except httpx.TimeoutException:
+        output = {"status": "failed", "message": timeout_message}
+        update_observation(output=output)
+        return output
+    except httpx.HTTPError:
+        output = {"status": "failed", "message": service_unavailable_message}
+        update_observation(output=output)
+        return output
+
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = None
+
+    if response.status_code >= 400:
+        detail = "Request failed."
+        if isinstance(payload, dict):
+            detail = str(payload.get("detail") or payload.get("message") or detail)
+        output = {"status": "failed", "message": detail, "http_status": response.status_code}
+        update_observation(output=output)
+        return output
+
+    if isinstance(payload, dict):
+        payload.setdefault("status", "success")
+        update_observation(output=payload)
+        return payload
+    if isinstance(payload, list):
+        output = {"status": "success", "items": payload}
+        update_observation(output=output)
+        return output
+
+    output = {"status": "failed", "message": invalid_response_message}
+    update_observation(output=output)
+    return output
+
+
+@observe(name="tool.fetch_menu_availability", as_type="tool")
+async def fetch_menu_availability(
+    *,
+    endpoint_url: str | None = None,
+    item_name: str | None = None,
+    party_size: int | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    caller_id = str((metadata or {}).get("end_user_id") or "")
+    _trace("fetch_menu_availability", metadata, user_id=caller_id)
+    return await _fetch_live_catalog(
+        endpoint_url=endpoint_url,
+        body={"item_name": item_name, "party_size": party_size},
+        metadata=metadata,
+        unavailable_message="Restaurant live menu endpoint is not configured.",
+        timeout_message="Menu availability request timed out.",
+        service_unavailable_message="Menu availability service is unavailable.",
+        invalid_response_message="Invalid response from menu availability service.",
+    )
+
+
+@observe(name="tool.fetch_product_availability", as_type="tool")
+async def fetch_product_availability(
+    *,
+    endpoint_url: str | None = None,
+    product_name: str | None = None,
+    size: str | None = None,
+    color: str | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    caller_id = str((metadata or {}).get("end_user_id") or "")
+    _trace("fetch_product_availability", metadata, user_id=caller_id)
+    return await _fetch_live_catalog(
+        endpoint_url=endpoint_url,
+        body={"product_name": product_name, "size": size, "color": color},
+        metadata=metadata,
+        unavailable_message="Product availability endpoint is not configured.",
+        timeout_message="Product availability request timed out.",
+        service_unavailable_message="Product availability service is unavailable.",
+        invalid_response_message="Invalid response from product availability service.",
+    )
 
 
 @observe(name="tool.create_complaint_ticket", as_type="tool")
