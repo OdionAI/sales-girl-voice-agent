@@ -524,7 +524,7 @@ async def fetch_room_availability(
         endpoint_url or (metadata or {}).get("live_data_endpoint")
     )
     if not resolved_endpoint:
-        output = {"status": "failed", "message": "Hotel live availability endpoint is not configured."}
+        output = {"status": "failed", "message": "Current room availability cannot be checked right now."}
         update_observation(output=output)
         return output
 
@@ -555,11 +555,11 @@ async def fetch_room_availability(
         async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT_SECONDS) as client:
             response = await client.post(resolved_endpoint, json=body, headers=headers)
     except httpx.TimeoutException:
-        output = {"status": "failed", "message": "Room availability request timed out."}
+        output = {"status": "failed", "message": "I couldn't check the current room availability in time."}
         update_observation(output=output)
         return output
     except httpx.HTTPError:
-        output = {"status": "failed", "message": "Room availability service is unavailable."}
+        output = {"status": "failed", "message": "I can't check the current room availability right now."}
         update_observation(output=output)
         return output
 
@@ -680,10 +680,10 @@ async def fetch_menu_availability(
         endpoint_url=endpoint_url,
         body={"item_name": item_name, "party_size": party_size},
         metadata=metadata,
-        unavailable_message="Restaurant live menu endpoint is not configured.",
-        timeout_message="Menu availability request timed out.",
-        service_unavailable_message="Menu availability service is unavailable.",
-        invalid_response_message="Invalid response from menu availability service.",
+        unavailable_message="The current menu and prices cannot be checked right now.",
+        timeout_message="I couldn't check the current menu in time.",
+        service_unavailable_message="I can't check the current menu right now.",
+        invalid_response_message="I couldn't read the current menu details properly.",
     )
 
 
@@ -702,10 +702,10 @@ async def fetch_product_availability(
         endpoint_url=endpoint_url,
         body={"product_name": product_name, "size": size, "color": color},
         metadata=metadata,
-        unavailable_message="Product availability endpoint is not configured.",
-        timeout_message="Product availability request timed out.",
-        service_unavailable_message="Product availability service is unavailable.",
-        invalid_response_message="Invalid response from product availability service.",
+        unavailable_message="Current product availability and prices cannot be checked right now.",
+        timeout_message="I couldn't check the current product availability in time.",
+        service_unavailable_message="I can't check current product availability right now.",
+        invalid_response_message="I couldn't read the current product details properly.",
     )
 
 

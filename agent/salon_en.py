@@ -52,11 +52,29 @@ def _tool_metadata(ctx: RunContext) -> dict:
         "conversation_id": conversation_id,
         "session_id": session_id,
         "end_user_id": str(session_userdata.get("end_user_id") or ""),
+        "enabled_tool_names": list(session_userdata.get("enabled_tool_names") or []),
         "turn_index": int(session_userdata.get("turn_index", 0)),
         "last_user_transcript": str(session_userdata.get("last_user_transcript") or ""),
         "last_assistant_message": str(session_userdata.get("last_assistant_message") or ""),
         "timeline_event_index": int(session_userdata.get("timeline_event_index", 0)),
     }
+
+
+def _is_tool_enabled(ctx: RunContext, tool_name: str) -> bool:
+    session_userdata = getattr(getattr(ctx, "session", None), "userdata", None)
+    if not isinstance(session_userdata, dict):
+        return True
+    enabled_tool_names = session_userdata.get("enabled_tool_names")
+    if not isinstance(enabled_tool_names, list):
+        return True
+    normalized_enabled = {
+        str(item or "").strip()
+        for item in enabled_tool_names
+        if str(item or "").strip()
+    }
+    if not normalized_enabled:
+        return False
+    return str(tool_name or "").strip() in normalized_enabled
 
 
 class SalonAgentEN(Agent):
@@ -148,6 +166,8 @@ class SalonAgentEN(Agent):
         case_reference: str | None = None,
     ) -> dict:
         """Create a human follow-up ticket for issues the agent cannot fully resolve. If no identifier is provided, use the current caller automatically."""
+        if not _is_tool_enabled(ctx, "create_ticket"):
+            return {"status": "failed", "message": "I can't create a support ticket from this agent right now."}
         result = await create_ticket_api(
             customer_identifier=customer_identifier,
             title=title,
@@ -176,6 +196,8 @@ class SalonAgentEN(Agent):
         customer_identifier: str | None = None,
     ) -> dict:
         """Create a hotel booking inside the platform for the current guest and business."""
+        if not _is_tool_enabled(ctx, "create_booking"):
+            return {"status": "failed", "message": "I can't create a booking from this agent right now."}
         result = await create_booking_api(
             customer_identifier=customer_identifier,
             guest_name=guest_name,
@@ -203,6 +225,8 @@ class SalonAgentEN(Agent):
         customer_identifier: str | None = None,
     ) -> dict:
         """Create a restaurant or fashion order inside the platform for the current customer and business."""
+        if not _is_tool_enabled(ctx, "create_order"):
+            return {"status": "failed", "message": "I can't create an order from this agent right now."}
         result = await create_order_api(
             customer_identifier=customer_identifier,
             customer_name=customer_name,
@@ -226,7 +250,9 @@ class SalonAgentEN(Agent):
         check_out_date: str | None = None,
         guest_count: int | None = None,
     ) -> dict:
-        """Fetch current room availability and prices from the hotel's live endpoint when it is configured."""
+        """Fetch current room availability and prices. Use this for broad questions like what rooms are available or how much they cost, even if the guest has not given dates yet."""
+        if not _is_tool_enabled(ctx, "fetch_room_availability"):
+            return {"status": "failed", "message": "I can't check current room availability from this agent right now."}
         result = await fetch_room_availability_api(
             endpoint_url=endpoint_url,
             room_type=room_type,
@@ -247,7 +273,9 @@ class SalonAgentEN(Agent):
         item_name: str | None = None,
         party_size: int | None = None,
     ) -> dict:
-        """Fetch current restaurant menu availability and prices from the live endpoint when it is configured."""
+        """Fetch the current menu and prices. Use this for broad questions like what is available or how much items cost, even if the customer has not named a specific item yet."""
+        if not _is_tool_enabled(ctx, "fetch_menu_availability"):
+            return {"status": "failed", "message": "I can't check the current menu or prices from this agent right now."}
         result = await fetch_menu_availability_api(
             endpoint_url=endpoint_url,
             item_name=item_name,
@@ -267,7 +295,9 @@ class SalonAgentEN(Agent):
         size: str | None = None,
         color: str | None = None,
     ) -> dict:
-        """Fetch current product availability and prices from the live endpoint when it is configured."""
+        """Fetch current product availability and prices. Use this for broad questions about what is available or how much items cost, even before the customer narrows down the request."""
+        if not _is_tool_enabled(ctx, "fetch_product_availability"):
+            return {"status": "failed", "message": "I can't check current product availability from this agent right now."}
         result = await fetch_product_availability_api(
             endpoint_url=endpoint_url,
             product_name=product_name,

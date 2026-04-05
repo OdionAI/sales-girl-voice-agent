@@ -46,11 +46,29 @@ def _tool_metadata(ctx: RunContext) -> dict:
         "conversation_id": conversation_id,
         "session_id": session_id,
         "end_user_id": str(session_userdata.get("end_user_id") or ""),
+        "enabled_tool_names": list(session_userdata.get("enabled_tool_names") or []),
         "turn_index": int(session_userdata.get("turn_index", 0)),
         "last_user_transcript": str(session_userdata.get("last_user_transcript") or ""),
         "last_assistant_message": str(session_userdata.get("last_assistant_message") or ""),
         "timeline_event_index": int(session_userdata.get("timeline_event_index", 0)),
     }
+
+
+def _is_tool_enabled(ctx: RunContext, tool_name: str) -> bool:
+    session_userdata = getattr(getattr(ctx, "session", None), "userdata", None)
+    if not isinstance(session_userdata, dict):
+        return True
+    enabled_tool_names = session_userdata.get("enabled_tool_names")
+    if not isinstance(enabled_tool_names, list):
+        return True
+    normalized_enabled = {
+        str(item or "").strip()
+        for item in enabled_tool_names
+        if str(item or "").strip()
+    }
+    if not normalized_enabled:
+        return False
+    return str(tool_name or "").strip() in normalized_enabled
 
 
 class SalonAgentFR(Agent):
@@ -142,6 +160,8 @@ class SalonAgentFR(Agent):
         case_reference: str | None = None,
     ) -> dict:
         """Creer un ticket unique pour les problemes qui necessitent un suivi humain."""
+        if not _is_tool_enabled(ctx, "create_ticket"):
+            return {"status": "failed", "message": "Je ne peux pas créer de ticket de suivi depuis cet agent pour le moment."}
         result = await create_ticket_api(
             customer_identifier=customer_identifier,
             title=title,
@@ -170,6 +190,8 @@ class SalonAgentFR(Agent):
         customer_identifier: str | None = None,
     ) -> dict:
         """Creer une reservation d'hotel dans la plateforme pour l'invite et le business courant."""
+        if not _is_tool_enabled(ctx, "create_booking"):
+            return {"status": "failed", "message": "Je ne peux pas créer de réservation depuis cet agent pour le moment."}
         result = await create_booking_api(
             customer_identifier=customer_identifier,
             guest_name=guest_name,
@@ -197,6 +219,8 @@ class SalonAgentFR(Agent):
         customer_identifier: str | None = None,
     ) -> dict:
         """Creer une commande restaurant ou mode dans la plateforme pour le client courant."""
+        if not _is_tool_enabled(ctx, "create_order"):
+            return {"status": "failed", "message": "Je ne peux pas créer de commande depuis cet agent pour le moment."}
         result = await create_order_api(
             customer_identifier=customer_identifier,
             customer_name=customer_name,
@@ -220,7 +244,9 @@ class SalonAgentFR(Agent):
         check_out_date: str | None = None,
         guest_count: int | None = None,
     ) -> dict:
-        """Recuperer la disponibilite et les prix actuels depuis l'endpoint hotel lorsqu'il est configure."""
+        """Recuperer la disponibilite et les prix actuels des chambres. Utiliser cet outil meme pour une question generale sur les chambres disponibles ou leurs prix, meme sans dates."""
+        if not _is_tool_enabled(ctx, "fetch_room_availability"):
+            return {"status": "failed", "message": "Je ne peux pas vérifier la disponibilité actuelle des chambres depuis cet agent pour le moment."}
         result = await fetch_room_availability_api(
             endpoint_url=endpoint_url,
             room_type=room_type,
@@ -241,7 +267,9 @@ class SalonAgentFR(Agent):
         item_name: str | None = None,
         party_size: int | None = None,
     ) -> dict:
-        """Recuperer les articles de menu disponibles et leurs prix depuis l'endpoint configure."""
+        """Recuperer le menu actuel et les prix. Utiliser cet outil meme pour une question generale sur ce qui est disponible ou les prix, meme sans article precis."""
+        if not _is_tool_enabled(ctx, "fetch_menu_availability"):
+            return {"status": "failed", "message": "Je ne peux pas vérifier le menu actuel ni les prix depuis cet agent pour le moment."}
         result = await fetch_menu_availability_api(
             endpoint_url=endpoint_url,
             item_name=item_name,
@@ -261,7 +289,9 @@ class SalonAgentFR(Agent):
         size: str | None = None,
         color: str | None = None,
     ) -> dict:
-        """Recuperer les produits disponibles et leurs prix depuis l'endpoint configure."""
+        """Recuperer la disponibilite actuelle des produits et les prix. Utiliser cet outil meme pour une question generale sur ce qui est disponible ou les prix."""
+        if not _is_tool_enabled(ctx, "fetch_product_availability"):
+            return {"status": "failed", "message": "Je ne peux pas vérifier la disponibilité actuelle des produits depuis cet agent pour le moment."}
         result = await fetch_product_availability_api(
             endpoint_url=endpoint_url,
             product_name=product_name,
