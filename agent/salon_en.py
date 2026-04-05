@@ -250,7 +250,7 @@ class SalonAgentEN(Agent):
         check_out_date: str | None = None,
         guest_count: int | None = None,
     ) -> dict:
-        """Fetch current room availability and prices from the hotel's live endpoint when it is configured."""
+        """Fetch current room availability and prices. Use this for broad questions like what rooms are available or how much they cost, even if the guest has not given dates yet."""
         if not _is_tool_enabled(ctx, "fetch_room_availability"):
             return {"status": "failed", "message": "I can't check current room availability from this agent right now."}
         result = await fetch_room_availability_api(
@@ -273,7 +273,7 @@ class SalonAgentEN(Agent):
         item_name: str | None = None,
         party_size: int | None = None,
     ) -> dict:
-        """Fetch current restaurant menu availability and prices from the live endpoint when it is configured."""
+        """Fetch the current menu and prices. Use this for broad questions like what is available or how much items cost, even if the customer has not named a specific item yet."""
         if not _is_tool_enabled(ctx, "fetch_menu_availability"):
             return {"status": "failed", "message": "I can't check the current menu or prices from this agent right now."}
         result = await fetch_menu_availability_api(
@@ -295,7 +295,7 @@ class SalonAgentEN(Agent):
         size: str | None = None,
         color: str | None = None,
     ) -> dict:
-        """Fetch current product availability and prices from the live endpoint when it is configured."""
+        """Fetch current product availability and prices. Use this for broad questions about what is available or how much items cost, even before the customer narrows down the request."""
         if not _is_tool_enabled(ctx, "fetch_product_availability"):
             return {"status": "failed", "message": "I can't check current product availability from this agent right now."}
         result = await fetch_product_availability_api(

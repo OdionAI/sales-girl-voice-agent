@@ -244,7 +244,7 @@ class SalonAgentFR(Agent):
         check_out_date: str | None = None,
         guest_count: int | None = None,
     ) -> dict:
-        """Recuperer la disponibilite et les prix actuels depuis l'endpoint hotel lorsqu'il est configure."""
+        """Recuperer la disponibilite et les prix actuels des chambres. Utiliser cet outil meme pour une question generale sur les chambres disponibles ou leurs prix, meme sans dates."""
         if not _is_tool_enabled(ctx, "fetch_room_availability"):
             return {"status": "failed", "message": "Je ne peux pas vérifier la disponibilité actuelle des chambres depuis cet agent pour le moment."}
         result = await fetch_room_availability_api(
@@ -267,7 +267,7 @@ class SalonAgentFR(Agent):
         item_name: str | None = None,
         party_size: int | None = None,
     ) -> dict:
-        """Recuperer les articles de menu disponibles et leurs prix depuis l'endpoint configure."""
+        """Recuperer le menu actuel et les prix. Utiliser cet outil meme pour une question generale sur ce qui est disponible ou les prix, meme sans article precis."""
         if not _is_tool_enabled(ctx, "fetch_menu_availability"):
             return {"status": "failed", "message": "Je ne peux pas vérifier le menu actuel ni les prix depuis cet agent pour le moment."}
         result = await fetch_menu_availability_api(
@@ -289,7 +289,7 @@ class SalonAgentFR(Agent):
         size: str | None = None,
         color: str | None = None,
     ) -> dict:
-        """Recuperer les produits disponibles et leurs prix depuis l'endpoint configure."""
+        """Recuperer la disponibilite actuelle des produits et les prix. Utiliser cet outil meme pour une question generale sur ce qui est disponible ou les prix."""
         if not _is_tool_enabled(ctx, "fetch_product_availability"):
             return {"status": "failed", "message": "Je ne peux pas vérifier la disponibilité actuelle des produits depuis cet agent pour le moment."}
         result = await fetch_product_availability_api(
