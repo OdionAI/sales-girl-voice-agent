@@ -1089,26 +1089,20 @@ def _active_tool_url(active_agent_config: dict[str, Any] | None, tool_name: str)
     return ""
 
 
-def _demo_live_endpoint_for_use_case(business_use_case: str) -> str:
-    base_url = str(os.getenv("DASHBOARD_PUBLIC_BASE_URL") or "").strip().rstrip("/")
-    if not base_url:
-        return ""
-    path_by_use_case = {
-        "hotel": "/api/demo/room-availability",
-        "restaurant": "/api/demo/menu-availability",
-        "fashion": "/api/demo/product-availability",
-    }
-    path = path_by_use_case.get(str(business_use_case or "").strip().lower(), "")
-    if not path:
-        return ""
-    return f"{base_url}{path}"
-
-
 def _hydrate_userdata_from_active_agent_config(
     userdata: dict[str, Any],
     active_agent_config: dict[str, Any] | None,
     business_use_case: str,
 ) -> None:
+    cfg = active_agent_config or {}
+    tools = cfg.get("tools")
+    enabled_tool_names = [
+        str(tool.get("name") or "").strip()
+        for tool in tools
+        if isinstance(tool, dict) and str(tool.get("name") or "").strip()
+    ] if isinstance(tools, list) else []
+    userdata["enabled_tool_names"] = enabled_tool_names
+
     expected_tool_by_use_case = {
         "hotel": "fetch_room_availability",
         "restaurant": "fetch_menu_availability",
@@ -1118,9 +1112,12 @@ def _hydrate_userdata_from_active_agent_config(
     if not tool_name:
         userdata["live_data_endpoint"] = ""
         return
-    userdata["live_data_endpoint"] = (
-        _active_tool_url(active_agent_config, tool_name)
-        or _demo_live_endpoint_for_use_case(business_use_case)
+    userdata["live_data_endpoint"] = _active_tool_url(active_agent_config, tool_name)
+    logger.info(
+        "Runtime tool context: use_case=%s enabled_tools=%s live_data_endpoint=%s",
+        business_use_case,
+        ",".join(enabled_tool_names) if enabled_tool_names else "-",
+        str(userdata.get("live_data_endpoint") or ""),
     )
 
 
@@ -1156,6 +1153,19 @@ def _detect_business_use_case(
         return "ekedc"
 
     cfg = active_agent_config or {}
+    tools = cfg.get("tools")
+    tool_names = {
+        str(tool.get("name") or "").strip().lower()
+        for tool in tools
+        if isinstance(tools, list) and isinstance(tool, dict)
+    }
+    if "fetch_room_availability" in tool_names or "create_booking" in tool_names:
+        return "hotel"
+    if "fetch_menu_availability" in tool_names:
+        return "restaurant"
+    if "fetch_product_availability" in tool_names:
+        return "fashion"
+
     text = " ".join(
         [
             str(cfg.get("name") or ""),
@@ -1192,10 +1202,7 @@ def _effective_base_prompt(
         "restaurant": "fetch_menu_availability",
         "fashion": "fetch_product_availability",
     }
-    live_endpoint_url = (
-        _active_tool_url(cfg, live_tool_by_use_case.get(business_use_case, ""))
-        or _demo_live_endpoint_for_use_case(business_use_case)
-    )
+    live_endpoint_url = _active_tool_url(cfg, live_tool_by_use_case.get(business_use_case, ""))
     live_data_connected = bool(str(live_endpoint_url or "").strip())
     if not configured_instructions:
         if business_use_case == "hotel":
