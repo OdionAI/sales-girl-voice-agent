@@ -903,7 +903,7 @@ async def _instructions_with_context(base_prompt: str, userdata: dict[str, Any])
             "Issue handling lock:\n"
             "- Use the available hotel tools for room availability, bookings, and guest tickets.\n"
             "- Do not claim a booking or ticket was completed unless the tool confirms it.\n"
-            "- If the live availability endpoint is missing, explain that live room data is not connected yet and offer human follow-up."
+            "- If you cannot check current room availability or prices, say you can't confirm that right now and offer human follow-up."
         )
     elif business_use_case == "restaurant":
         base_prompt = (
@@ -919,7 +919,7 @@ async def _instructions_with_context(base_prompt: str, userdata: dict[str, Any])
             "Issue handling lock:\n"
             "- Use the available restaurant tools for orders and customer tickets.\n"
             "- Do not claim an order or ticket was completed unless the tool confirms it.\n"
-            "- If live menu data is missing, explain that live availability is not connected yet and offer human follow-up.\n"
+            "- If you cannot check the current menu or prices, say you can't confirm that right now and offer human follow-up.\n"
         )
     elif business_use_case == "fashion":
         base_prompt = (
@@ -935,7 +935,7 @@ async def _instructions_with_context(base_prompt: str, userdata: dict[str, Any])
             "Issue handling lock:\n"
             "- Use the available fashion tools for orders and customer tickets.\n"
             "- Do not claim an order or ticket was completed unless the tool confirms it.\n"
-            "- If live product data is missing, explain that live availability is not connected yet and offer human follow-up.\n"
+            "- If you cannot check current product availability or prices, say you can't confirm that right now and offer human follow-up.\n"
         )
     elif business_use_case == "generic":
         base_prompt = (
@@ -1127,6 +1127,12 @@ def _strip_live_connectivity_lines(text: str) -> str:
         "live menu data is not connected",
         "live product data is not connected",
         "live operational data is not connected",
+        "live room availability and pricing are not connected yet",
+        "live menu availability and pricing are not connected yet",
+        "live product availability and pricing are not connected yet",
+        "since live room availability is not connected",
+        "since live menu availability is not connected",
+        "since live product availability is not connected",
         "do not invent current availability",
         "do not invent current menu availability",
         "do not invent current product availability",
@@ -1255,9 +1261,9 @@ def _effective_base_prompt(
 
     if business_use_case == "hotel":
         live_status_line = (
-            f"- Live room availability and pricing are connected at {live_endpoint_url}."
+            "- You can check current room availability and prices when the guest asks."
             if live_data_connected
-            else "- Live room availability and pricing are not connected yet."
+            else "- You cannot check current room availability or prices right now."
         )
         sanitized_instructions = (
             _strip_live_connectivity_lines(configured_instructions)
@@ -1266,14 +1272,14 @@ def _effective_base_prompt(
         )
         return (
             f"{sanitized_instructions.rstrip()}\n\n"
-            "Current live data status:\n"
+            "Current room lookup status:\n"
             f"{live_status_line}\n\n"
             "Hotel tool guardrails:\n"
             "- Use create_ticket for complaints, unresolved guest issues, or human follow-up.\n"
             "- Use create_booking only for confirmed room reservations after live availability and pricing have been checked.\n"
             "- If the guest asks you to create a ticket, or agrees to ticket follow-up, call create_ticket immediately before replying.\n"
             "- In the exact turn where you say a ticket was created, create_ticket must already have succeeded.\n"
-            "- If live room data is not connected, do not create or confirm a booking. Explain that live room data is unavailable and offer to create a ticket for follow-up instead.\n"
+            "- If you cannot check current room availability or prices, do not create or confirm a booking. Say you can't confirm that right now and offer to create a ticket for follow-up instead.\n"
             "- Infer ticket titles and descriptions yourself from the conversation; do not ask the guest to write them for you.\n"
             "- Only ask a follow-up question before creating a ticket if a concrete missing fact is essential.\n"
             "- Never say a ticket was created unless create_ticket returned success.\n"
@@ -1283,9 +1289,9 @@ def _effective_base_prompt(
 
     if business_use_case == "restaurant":
         live_status_line = (
-            f"- Live menu availability and pricing are connected at {live_endpoint_url}."
+            "- You can check current menu availability and prices when the customer asks."
             if live_data_connected
-            else "- Live menu availability and pricing are not connected yet."
+            else "- You cannot check the current menu or prices right now."
         )
         sanitized_instructions = (
             _strip_live_connectivity_lines(configured_instructions)
@@ -1294,14 +1300,14 @@ def _effective_base_prompt(
         )
         return (
             f"{sanitized_instructions.rstrip()}\n\n"
-            "Current live data status:\n"
+            "Current menu lookup status:\n"
             f"{live_status_line}\n\n"
             "Restaurant tool guardrails:\n"
             "- Use create_ticket for complaints, unresolved customer issues, or human follow-up.\n"
             "- Use create_order only for confirmed orders when live menu availability and pricing have been checked.\n"
             "- If the customer asks you to create a ticket, or agrees to ticket follow-up, call create_ticket immediately before replying.\n"
             "- In the exact turn where you say a ticket was created, create_ticket must already have succeeded.\n"
-            "- If live menu data is not connected, do not create or confirm an order. Explain that live menu data is unavailable and offer to create a ticket for follow-up instead.\n"
+            "- If you cannot check the current menu or prices, do not create or confirm an order. Say you can't confirm that right now and offer to create a ticket for follow-up instead.\n"
             "- Infer ticket titles and descriptions yourself from the conversation; do not ask the customer to write them for you.\n"
             "- Never say a ticket was created unless create_ticket returned success.\n"
             "- Never say an order was created unless create_order returned success.\n"
@@ -1310,9 +1316,9 @@ def _effective_base_prompt(
 
     if business_use_case == "fashion":
         live_status_line = (
-            f"- Live product availability and pricing are connected at {live_endpoint_url}."
+            "- You can check current product availability and prices when the customer asks."
             if live_data_connected
-            else "- Live product availability and pricing are not connected yet."
+            else "- You cannot check current product availability or prices right now."
         )
         sanitized_instructions = (
             _strip_live_connectivity_lines(configured_instructions)
@@ -1321,14 +1327,14 @@ def _effective_base_prompt(
         )
         return (
             f"{sanitized_instructions.rstrip()}\n\n"
-            "Current live data status:\n"
+            "Current product lookup status:\n"
             f"{live_status_line}\n\n"
             "Fashion tool guardrails:\n"
             "- Use create_ticket for complaints, unresolved customer issues, or human follow-up.\n"
             "- Use create_order only for confirmed product orders when live product availability and pricing have been checked.\n"
             "- If the customer asks you to create a ticket, or agrees to ticket follow-up, call create_ticket immediately before replying.\n"
             "- In the exact turn where you say a ticket was created, create_ticket must already have succeeded.\n"
-            "- If live product data is not connected, do not create or confirm an order. Explain that live product data is unavailable and offer to create a ticket for follow-up instead.\n"
+            "- If you cannot check current product availability or prices, do not create or confirm an order. Say you can't confirm that right now and offer to create a ticket for follow-up instead.\n"
             "- Infer ticket titles and descriptions yourself from the conversation; do not ask the customer to write them for you.\n"
             "- Never say a ticket was created unless create_ticket returned success.\n"
             "- Never say an order was created unless create_order returned success.\n"
