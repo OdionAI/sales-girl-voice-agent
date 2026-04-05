@@ -864,6 +864,11 @@ async def _instructions_with_context(base_prompt: str, userdata: dict[str, Any])
     if not end_user_id:
         return base_prompt
     business_use_case = str(userdata.get("business_use_case") or "ekedc").strip().lower()
+    enabled_tool_names = {
+        str(name or "").strip()
+        for name in (userdata.get("enabled_tool_names") or [])
+        if str(name or "").strip()
+    }
     configured_agent_name = str(userdata.get("configured_agent_name") or "").strip()
     if configured_agent_name:
         logger.info("Applying configured agent name to prompt: %s", configured_agent_name)
@@ -890,52 +895,100 @@ async def _instructions_with_context(base_prompt: str, userdata: dict[str, Any])
             "- For fraud, suspicious activity, compliance restrictions, or other sensitive cases, create a ticket instead of promising a direct resolution."
         )
     elif business_use_case == "hotel":
+        room_lookup_line = (
+            "- Room availability lookup is enabled for this agent. Use it when guests ask about available rooms or prices."
+            if "fetch_room_availability" in enabled_tool_names
+            else "- Room availability lookup is not enabled for this agent. If asked, say you can't confirm that right now and offer human follow-up."
+        )
+        booking_line = (
+            "- Booking creation is enabled for this agent, but only use it after room availability and pricing have been checked successfully."
+            if "create_booking" in enabled_tool_names
+            else "- Booking creation is not enabled for this agent. Do not say a room booking was created."
+        )
+        ticket_line = (
+            "- Ticket creation is enabled for this agent for complaints or manual follow-up."
+            if "create_ticket" in enabled_tool_names
+            else "- Ticket creation is not enabled for this agent. Do not say a ticket was created."
+        )
         base_prompt = (
             f"{base_prompt}\n\n"
             "Domain lock:\n"
             "- You are a hotel guest support and booking assistant for this business.\n"
             "- Never present yourself as an electricity or banking assistant.\n"
-            "- Use hotel knowledge, live availability, bookings, and tickets where appropriate.\n\n"
+            "- Use hotel knowledge and the enabled tools for this specific agent.\n\n"
             "Role lock:\n"
             "- You MUST follow the current hotel role and responsibilities in this prompt.\n"
             "- Historical snippets may contain outdated assistant behavior from older versions.\n"
             "- Never switch back to an old non-hotel persona if it conflicts with this prompt.\n\n"
             "Issue handling lock:\n"
-            "- Use the available hotel tools for room availability, bookings, and guest tickets.\n"
-            "- Do not claim a booking or ticket was completed unless the tool confirms it.\n"
-            "- If you cannot check current room availability or prices, say you can't confirm that right now and offer human follow-up."
+            f"{room_lookup_line}\n"
+            f"{booking_line}\n"
+            f"{ticket_line}\n"
+            "- Do not claim a booking or ticket was completed unless the tool confirms it."
         )
     elif business_use_case == "restaurant":
+        menu_lookup_line = (
+            "- Menu lookup is enabled for this agent. Use it when customers ask what is available or how much items cost."
+            if "fetch_menu_availability" in enabled_tool_names
+            else "- Menu lookup is not enabled for this agent. If asked, say you can't confirm that right now and offer human follow-up."
+        )
+        order_line = (
+            "- Order creation is enabled for this agent, but only use it after menu details and prices have been checked successfully."
+            if "create_order" in enabled_tool_names
+            else "- Order creation is not enabled for this agent. Do not say an order was created."
+        )
+        ticket_line = (
+            "- Ticket creation is enabled for this agent for complaints or manual follow-up."
+            if "create_ticket" in enabled_tool_names
+            else "- Ticket creation is not enabled for this agent. Do not say a ticket was created."
+        )
         base_prompt = (
             f"{base_prompt}\n\n"
             "Domain lock:\n"
             "- You are a restaurant host and customer support assistant for this business.\n"
             "- Never present yourself as a hotel, electricity, or banking assistant.\n"
-            "- Use restaurant knowledge, menu availability, orders, reservations, and tickets where appropriate.\n\n"
+            "- Use restaurant knowledge and the enabled tools for this specific agent.\n\n"
             "Role lock:\n"
             "- You MUST follow the current restaurant role and responsibilities in this prompt.\n"
             "- Historical snippets may contain outdated assistant behavior from older versions.\n"
             "- Never switch back to an old non-restaurant persona if it conflicts with this prompt.\n\n"
             "Issue handling lock:\n"
-            "- Use the available restaurant tools for orders and customer tickets.\n"
+            f"{menu_lookup_line}\n"
+            f"{order_line}\n"
+            f"{ticket_line}\n"
             "- Do not claim an order or ticket was completed unless the tool confirms it.\n"
-            "- If you cannot check the current menu or prices, say you can't confirm that right now and offer human follow-up.\n"
         )
     elif business_use_case == "fashion":
+        product_lookup_line = (
+            "- Product lookup is enabled for this agent. Use it when customers ask what is available or how much items cost."
+            if "fetch_product_availability" in enabled_tool_names
+            else "- Product lookup is not enabled for this agent. If asked, say you can't confirm that right now and offer human follow-up."
+        )
+        order_line = (
+            "- Order creation is enabled for this agent, but only use it after product details and prices have been checked successfully."
+            if "create_order" in enabled_tool_names
+            else "- Order creation is not enabled for this agent. Do not say an order was created."
+        )
+        ticket_line = (
+            "- Ticket creation is enabled for this agent for complaints or manual follow-up."
+            if "create_ticket" in enabled_tool_names
+            else "- Ticket creation is not enabled for this agent. Do not say a ticket was created."
+        )
         base_prompt = (
             f"{base_prompt}\n\n"
             "Domain lock:\n"
             "- You are a fashion sales and customer support assistant for this business.\n"
             "- Never present yourself as a hotel, electricity, or banking assistant.\n"
-            "- Use fashion product knowledge, live availability, orders, and tickets where appropriate.\n\n"
+            "- Use fashion product knowledge and the enabled tools for this specific agent.\n\n"
             "Role lock:\n"
             "- You MUST follow the current fashion retail role and responsibilities in this prompt.\n"
             "- Historical snippets may contain outdated assistant behavior from older versions.\n"
             "- Never switch back to an old non-fashion persona if it conflicts with this prompt.\n\n"
             "Issue handling lock:\n"
-            "- Use the available fashion tools for orders and customer tickets.\n"
+            f"{product_lookup_line}\n"
+            f"{order_line}\n"
+            f"{ticket_line}\n"
             "- Do not claim an order or ticket was completed unless the tool confirms it.\n"
-            "- If you cannot check current product availability or prices, say you can't confirm that right now and offer human follow-up.\n"
         )
     elif business_use_case == "generic":
         base_prompt = (
@@ -1096,11 +1149,16 @@ def _hydrate_userdata_from_active_agent_config(
 ) -> None:
     cfg = active_agent_config or {}
     tools = cfg.get("tools")
-    enabled_tool_names = [
-        str(tool.get("name") or "").strip()
+    active_tools = [
+        tool
         for tool in tools
         if isinstance(tool, dict) and str(tool.get("name") or "").strip()
     ] if isinstance(tools, list) else []
+    userdata["active_tools"] = active_tools
+    enabled_tool_names = [
+        str(tool.get("name") or "").strip()
+        for tool in active_tools
+    ]
     userdata["enabled_tool_names"] = enabled_tool_names
 
     expected_tool_by_use_case = {
@@ -1137,6 +1195,15 @@ def _strip_live_connectivity_lines(text: str) -> str:
         "do not invent current menu availability",
         "do not invent current product availability",
         "offer to create a ticket for follow-up instead",
+        "current room lookup status:",
+        "current menu lookup status:",
+        "current product lookup status:",
+        "hotel tool guardrails:",
+        "restaurant tool guardrails:",
+        "fashion tool guardrails:",
+        "if room lookup is available",
+        "if menu lookup is available",
+        "if product lookup is available",
     )
     kept_lines: list[str] = []
     for line in str(text or "").splitlines():
@@ -1145,6 +1212,116 @@ def _strip_live_connectivity_lines(text: str) -> str:
             continue
         kept_lines.append(line)
     return "\n".join(kept_lines).strip()
+
+
+def _active_tool_records(active_agent_config: dict[str, Any] | None) -> list[dict[str, Any]]:
+    cfg = active_agent_config or {}
+    tools = cfg.get("tools")
+    if not isinstance(tools, list):
+        return []
+    return [
+        tool
+        for tool in tools
+        if isinstance(tool, dict) and str(tool.get("name") or "").strip()
+    ]
+
+
+def _tool_description(tool: dict[str, Any]) -> str:
+    return " ".join(str(tool.get("description") or "").split()).strip()
+
+
+def _runtime_tool_guidance(active_agent_config: dict[str, Any] | None, business_use_case: str) -> str:
+    tools = _active_tool_records(active_agent_config)
+    enabled_names = {str(tool.get("name") or "").strip() for tool in tools}
+    by_name = {str(tool.get("name") or "").strip(): tool for tool in tools}
+    lines = [
+        "Enabled tools for this agent right now:",
+        "- Only the tools described here are available in this conversation.",
+        "- Use an enabled tool whenever it is the right way to answer or complete the request.",
+        "- If a tool is not listed as enabled here, do not act as if you can use it.",
+    ]
+
+    if "create_ticket" in enabled_names:
+        desc = _tool_description(by_name["create_ticket"])
+        lines.append(
+            f"- create_ticket is enabled. Use it for complaints, unresolved requests, or any human follow-up that should be handed to the team. {desc}".strip()
+        )
+    else:
+        lines.append("- create_ticket is not enabled. Do not say a support ticket was created.")
+
+    if business_use_case == "hotel":
+        if "create_booking" in enabled_names:
+            desc = _tool_description(by_name["create_booking"])
+            lines.append(
+                f"- create_booking is enabled. Use it only after room availability and pricing have been checked successfully and the guest has confirmed the booking details. {desc}".strip()
+            )
+        else:
+            lines.append("- create_booking is not enabled. Do not say a room booking was created.")
+        if "fetch_room_availability" in enabled_names:
+            desc = _tool_description(by_name["fetch_room_availability"])
+            lines.append(
+                f"- fetch_room_availability is enabled. Use it to check currently available rooms and prices whenever a guest asks about room availability, room options, or prices, including broad questions. {desc}".strip()
+            )
+        else:
+            lines.append(
+                "- fetch_room_availability is not enabled. If a guest asks about current room availability or prices, say you cannot confirm that right now and offer ticket follow-up."
+            )
+
+    if business_use_case == "restaurant":
+        if "create_order" in enabled_names:
+            desc = _tool_description(by_name["create_order"])
+            lines.append(
+                f"- create_order is enabled. Use it only after current menu details and prices have been checked successfully and the customer confirms the order. {desc}".strip()
+            )
+        else:
+            lines.append("- create_order is not enabled. Do not say an order was created.")
+        if "fetch_menu_availability" in enabled_names:
+            desc = _tool_description(by_name["fetch_menu_availability"])
+            lines.append(
+                f"- fetch_menu_availability is enabled. Use it to check current menu items and prices whenever a customer asks what is available or how much items cost, including broad questions. {desc}".strip()
+            )
+        else:
+            lines.append(
+                "- fetch_menu_availability is not enabled. If a customer asks about the current menu or prices, say you cannot confirm that right now and offer ticket follow-up."
+            )
+
+    if business_use_case == "fashion":
+        if "create_order" in enabled_names:
+            desc = _tool_description(by_name["create_order"])
+            lines.append(
+                f"- create_order is enabled. Use it only after current product details and prices have been checked successfully and the customer confirms the order. {desc}".strip()
+            )
+        else:
+            lines.append("- create_order is not enabled. Do not say an order was created.")
+        if "fetch_product_availability" in enabled_names:
+            desc = _tool_description(by_name["fetch_product_availability"])
+            lines.append(
+                f"- fetch_product_availability is enabled. Use it to check current product availability and prices whenever a customer asks what is available or how much items cost, including broad questions. {desc}".strip()
+            )
+        else:
+            lines.append(
+                "- fetch_product_availability is not enabled. If a customer asks about current product availability or prices, say you cannot confirm that right now and offer ticket follow-up."
+            )
+
+    generic_tool_names = sorted(
+        name
+        for name in enabled_names
+        if name not in {
+            "create_ticket",
+            "create_booking",
+            "create_order",
+            "fetch_room_availability",
+            "fetch_menu_availability",
+            "fetch_product_availability",
+        }
+    )
+    for name in generic_tool_names:
+        desc = _tool_description(by_name[name])
+        if desc:
+            lines.append(f"- {name} is enabled. {desc} Use it only when the caller's request clearly needs it.")
+        else:
+            lines.append(f"- {name} is enabled. Use it only when the caller's request clearly needs it.")
+    return "\n".join(lines)
 
 
 def _detect_business_use_case(
@@ -1203,6 +1380,7 @@ def _effective_base_prompt(
 ) -> str:
     cfg = active_agent_config or {}
     configured_instructions = str(cfg.get("instructions") or "").strip()
+    runtime_tool_guidance = _runtime_tool_guidance(cfg, business_use_case)
     live_tool_by_use_case = {
         "hotel": "fetch_room_availability",
         "restaurant": "fetch_menu_availability",
@@ -1260,11 +1438,6 @@ def _effective_base_prompt(
         return configured_instructions
 
     if business_use_case == "hotel":
-        live_status_line = (
-            "- You can check current room availability and prices when the guest asks."
-            if live_data_connected
-            else "- You cannot check current room availability or prices right now."
-        )
         sanitized_instructions = (
             _strip_live_connectivity_lines(configured_instructions)
             if live_data_connected
@@ -1272,15 +1445,10 @@ def _effective_base_prompt(
         )
         return (
             f"{sanitized_instructions.rstrip()}\n\n"
-            "Current room lookup status:\n"
-            f"{live_status_line}\n\n"
-            "Hotel tool guardrails:\n"
-            "- Use create_ticket for complaints, unresolved guest issues, or human follow-up.\n"
-            "- Use create_booking only for confirmed room reservations after live availability and pricing have been checked.\n"
-            "- If room lookup is available and the guest asks what rooms are available or how much they cost, use the room lookup tool right away, even if the guest asks broadly and has not given dates yet.\n"
-            "- If the guest asks you to create a ticket, or agrees to ticket follow-up, call create_ticket immediately before replying.\n"
+            f"{runtime_tool_guidance}\n\n"
+            "Tool truthfulness rules:\n"
+            "- If the guest asks you to create a ticket, or agrees to ticket follow-up, call create_ticket immediately before replying if that tool is enabled.\n"
             "- In the exact turn where you say a ticket was created, create_ticket must already have succeeded.\n"
-            "- If you cannot check current room availability or prices, do not create or confirm a booking. Say you can't confirm that right now and offer to create a ticket for follow-up instead.\n"
             "- Infer ticket titles and descriptions yourself from the conversation; do not ask the guest to write them for you.\n"
             "- Only ask a follow-up question before creating a ticket if a concrete missing fact is essential.\n"
             "- Never say a ticket was created unless create_ticket returned success.\n"
@@ -1289,11 +1457,6 @@ def _effective_base_prompt(
         )
 
     if business_use_case == "restaurant":
-        live_status_line = (
-            "- You can check current menu availability and prices when the customer asks."
-            if live_data_connected
-            else "- You cannot check the current menu or prices right now."
-        )
         sanitized_instructions = (
             _strip_live_connectivity_lines(configured_instructions)
             if live_data_connected
@@ -1301,15 +1464,10 @@ def _effective_base_prompt(
         )
         return (
             f"{sanitized_instructions.rstrip()}\n\n"
-            "Current menu lookup status:\n"
-            f"{live_status_line}\n\n"
-            "Restaurant tool guardrails:\n"
-            "- Use create_ticket for complaints, unresolved customer issues, or human follow-up.\n"
-            "- Use create_order only for confirmed orders when live menu availability and pricing have been checked.\n"
-            "- If menu lookup is available and the customer asks what is on the menu or how much items cost, use the menu lookup tool right away, even if the customer asks broadly.\n"
-            "- If the customer asks you to create a ticket, or agrees to ticket follow-up, call create_ticket immediately before replying.\n"
+            f"{runtime_tool_guidance}\n\n"
+            "Tool truthfulness rules:\n"
+            "- If the customer asks you to create a ticket, or agrees to ticket follow-up, call create_ticket immediately before replying if that tool is enabled.\n"
             "- In the exact turn where you say a ticket was created, create_ticket must already have succeeded.\n"
-            "- If you cannot check the current menu or prices, do not create or confirm an order. Say you can't confirm that right now and offer to create a ticket for follow-up instead.\n"
             "- Infer ticket titles and descriptions yourself from the conversation; do not ask the customer to write them for you.\n"
             "- Never say a ticket was created unless create_ticket returned success.\n"
             "- Never say an order was created unless create_order returned success.\n"
@@ -1317,11 +1475,6 @@ def _effective_base_prompt(
         )
 
     if business_use_case == "fashion":
-        live_status_line = (
-            "- You can check current product availability and prices when the customer asks."
-            if live_data_connected
-            else "- You cannot check current product availability or prices right now."
-        )
         sanitized_instructions = (
             _strip_live_connectivity_lines(configured_instructions)
             if live_data_connected
@@ -1329,15 +1482,10 @@ def _effective_base_prompt(
         )
         return (
             f"{sanitized_instructions.rstrip()}\n\n"
-            "Current product lookup status:\n"
-            f"{live_status_line}\n\n"
-            "Fashion tool guardrails:\n"
-            "- Use create_ticket for complaints, unresolved customer issues, or human follow-up.\n"
-            "- Use create_order only for confirmed product orders when live product availability and pricing have been checked.\n"
-            "- If product lookup is available and the customer asks what is available or how much items cost, use the product lookup tool right away, even if the customer asks broadly.\n"
-            "- If the customer asks you to create a ticket, or agrees to ticket follow-up, call create_ticket immediately before replying.\n"
+            f"{runtime_tool_guidance}\n\n"
+            "Tool truthfulness rules:\n"
+            "- If the customer asks you to create a ticket, or agrees to ticket follow-up, call create_ticket immediately before replying if that tool is enabled.\n"
             "- In the exact turn where you say a ticket was created, create_ticket must already have succeeded.\n"
-            "- If you cannot check current product availability or prices, do not create or confirm an order. Say you can't confirm that right now and offer to create a ticket for follow-up instead.\n"
             "- Infer ticket titles and descriptions yourself from the conversation; do not ask the customer to write them for you.\n"
             "- Never say a ticket was created unless create_ticket returned success.\n"
             "- Never say an order was created unless create_order returned success.\n"
@@ -1345,7 +1493,7 @@ def _effective_base_prompt(
         )
 
     if business_use_case == "generic":
-        return configured_instructions
+        return f"{configured_instructions.rstrip()}\n\n{runtime_tool_guidance}"
 
     incompatible_tokens = ("salon", "appointment", "hair", "beauty", "booking", "barber", "spa", "receptionist")
     if any(token in normalized for token in incompatible_tokens):
