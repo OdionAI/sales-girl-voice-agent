@@ -384,6 +384,7 @@ CONVERSATION_SERVICE_REQUIRED = (
     os.getenv("CONVERSATION_SERVICE_REQUIRED", "true").lower() == "true"
 )
 ENABLE_ODION_TTS_EN = os.getenv("ENABLE_ODION_TTS_EN", "false").lower() == "true"
+ENABLE_ODION_TTS_FR = os.getenv("ENABLE_ODION_TTS_FR", "false").lower() == "true"
 ODION_TTS_EXPERIMENT_OWNER_ID = str(
     os.getenv("ODION_TTS_EXPERIMENT_OWNER_ID") or ""
 ).strip()
@@ -1998,7 +1999,7 @@ def _build_session_for_language(
     if language == "fr":
         return AgentSession(
             stt=deepgram.STT(language="fr"),
-            tts=deepgram.TTS(model="aura-2-agathe-fr"),
+            tts=tts_engine or deepgram.TTS(model="aura-2-agathe-fr"),
             llm=google.LLM(model="gemini-2.0-flash"),
             userdata=userdata,
         )
@@ -2033,6 +2034,129 @@ def _should_use_odion_tts_for_language(config: dict[str, Any], language: str) ->
         return True
     language = str(language or "").strip().lower()
     return scope == language
+
+
+def _odion_experiment_language_hint(language: str) -> str:
+    lang = str(language or "").strip().lower()
+    if lang == "fr":
+        return "French"
+    return ODION_TTS_EXPERIMENT_LANGUAGE_HINT
+
+
+def _normalized_language_code(value: str) -> str:
+    lowered = str(value or "").strip().lower()
+    if lowered in {"fr", "french", "français", "francais"}:
+        return "fr"
+    return "en"
+
+
+def _build_tts_engine_for_language(
+    *,
+    language: str,
+    active_agent_config: dict[str, Any],
+    userdata: dict[str, Any],
+    business_id: str,
+) -> Any:
+    lang = str(language or "").strip().lower()
+    is_fr = lang == "fr"
+    fallback_tts: Any = (
+        deepgram.TTS(model="aura-2-agathe-fr")
+        if is_fr
+        else deepgram.TTS(model="aura-asteria-en")
+    )
+    odion_enabled = ENABLE_ODION_TTS_FR if is_fr else ENABLE_ODION_TTS_EN
+    fallback_label = "French" if is_fr else "English"
+
+    use_experiment_clone = (
+        bool(ODION_TTS_EXPERIMENT_OWNER_ID)
+        and bool(ODION_TTS_EXPERIMENT_VOICE_ID)
+        and _normalized_language_code(ODION_TTS_EXPERIMENT_LANGUAGE_HINT) == lang
+    )
+    tts_voice_id = (
+        ODION_TTS_EXPERIMENT_VOICE_ID
+        if use_experiment_clone
+        else str(active_agent_config.get("tts_voice_id") or "").strip()
+    )
+    tts_owner_id = (
+        ODION_TTS_EXPERIMENT_OWNER_ID
+        if use_experiment_clone
+        else str(active_agent_config.get("tts_owner_id") or "").strip()
+        or business_id
+    )
+    tts_language_hint = (
+        _odion_experiment_language_hint(lang)
+        if use_experiment_clone
+        else str(
+            active_agent_config.get("tts_language_hint")
+            or ("French" if is_fr else "English")
+        ).strip()
+        or ("French" if is_fr else "English")
+    )
+    use_configured_clone = use_experiment_clone or _should_use_odion_tts_for_language(
+        active_agent_config, lang
+    )
+    use_odion_default = not use_configured_clone
+
+    if not odion_enabled:
+        logger.info(
+            "ENABLE_ODION_TTS_%s=false; using Deepgram TTS for %s session.",
+            "FR" if is_fr else "EN",
+            fallback_label,
+        )
+        return fallback_tts
+
+    try:
+        if use_configured_clone:
+            tts_engine = OdionTTS(
+                owner_id=tts_owner_id,
+                voice_id=tts_voice_id,
+                language=tts_language_hint,
+                seed=ODION_TTS_CLONE_SEED,
+                mode="cloned_voice",
+            )
+            logger.info(
+                "Using Odion cloned TTS for %s session: agent_config_id=%s voice_id=%s owner_id=%s seed=%s",
+                fallback_label,
+                userdata.get("agent_config_id"),
+                tts_voice_id,
+                tts_owner_id,
+                ODION_TTS_CLONE_SEED,
+            )
+            return tts_engine
+        if use_odion_default:
+            tts_engine = OdionTTS(
+                owner_id=tts_owner_id or business_id,
+                voice_id=None,
+                language=tts_language_hint,
+                seed=None,
+                mode="default_voice",
+            )
+            logger.info(
+                "Using Odion default TTS for %s session: agent_config_id=%s owner_id=%s language_hint=%s",
+                fallback_label,
+                userdata.get("agent_config_id"),
+                tts_owner_id or business_id,
+                tts_language_hint,
+            )
+            return tts_engine
+    except Exception as exc:  # noqa: BLE001
+        if use_configured_clone and STRICT_ODION_CLONE_CONSISTENCY:
+            logger.error(
+                "Failed to initialize Odion cloned TTS with strict consistency enabled: language=%s agent_config_id=%s voice_id=%s owner_id=%s seed=%s error=%s",
+                lang,
+                userdata.get("agent_config_id"),
+                tts_voice_id,
+                tts_owner_id,
+                ODION_TTS_CLONE_SEED,
+                exc,
+            )
+            raise
+        logger.error(
+            "Failed to initialize Odion TTS for %s session, falling back to Deepgram: %s",
+            fallback_label,
+            exc,
+        )
+    return fallback_tts
 
 
 async def _wait_for_job_shutdown(ctx: JobContext) -> str:
@@ -2117,81 +2241,12 @@ async def entrypoint(ctx: JobContext):
 
         ctx.add_shutdown_callback(_cleanup_en)
 
-        tts_engine: Any = deepgram.TTS(model="aura-asteria-en")
-        use_experiment_clone = bool(ODION_TTS_EXPERIMENT_OWNER_ID) and bool(
-            ODION_TTS_EXPERIMENT_VOICE_ID
+        tts_engine = _build_tts_engine_for_language(
+            language="en",
+            active_agent_config=active_agent_config,
+            userdata=userdata,
+            business_id=business_id,
         )
-        tts_voice_id = (
-            ODION_TTS_EXPERIMENT_VOICE_ID
-            if use_experiment_clone
-            else str(active_agent_config.get("tts_voice_id") or "").strip()
-        )
-        tts_owner_id = (
-            ODION_TTS_EXPERIMENT_OWNER_ID
-            if use_experiment_clone
-            else str(active_agent_config.get("tts_owner_id") or "").strip()
-            or business_id
-        )
-        tts_language_hint = (
-            ODION_TTS_EXPERIMENT_LANGUAGE_HINT
-            if use_experiment_clone
-            else str(active_agent_config.get("tts_language_hint") or "Auto").strip()
-            or "Auto"
-        )
-        use_configured_clone = (
-            use_experiment_clone
-            or _should_use_odion_tts_for_language(active_agent_config, "en")
-        )
-        use_odion_default = not use_configured_clone
-        if ENABLE_ODION_TTS_EN:
-            try:
-                if use_configured_clone:
-                    tts_engine = OdionTTS(
-                        owner_id=tts_owner_id,
-                        voice_id=tts_voice_id,
-                        language=tts_language_hint,
-                        seed=ODION_TTS_CLONE_SEED,
-                        mode="cloned_voice",
-                    )
-                    logger.info(
-                        "Using Odion cloned TTS for English session: agent_config_id=%s voice_id=%s owner_id=%s seed=%s",
-                        userdata.get("agent_config_id"),
-                        tts_voice_id,
-                        tts_owner_id,
-                        ODION_TTS_CLONE_SEED,
-                    )
-                elif use_odion_default:
-                    # Default English voice path from Odion TTS when business has not cloned.
-                    tts_engine = OdionTTS(
-                        owner_id=tts_owner_id or business_id,
-                        voice_id=None,
-                        language=tts_language_hint,
-                        seed=None,
-                        mode="default_voice",
-                    )
-                    logger.info(
-                        "Using Odion default TTS for English session: agent_config_id=%s owner_id=%s",
-                        userdata.get("agent_config_id"),
-                        tts_owner_id or business_id,
-                    )
-            except Exception as exc:  # noqa: BLE001
-                if use_configured_clone and STRICT_ODION_CLONE_CONSISTENCY:
-                    logger.error(
-                        "Failed to initialize Odion cloned TTS with strict consistency enabled: agent_config_id=%s voice_id=%s owner_id=%s seed=%s error=%s",
-                        userdata.get("agent_config_id"),
-                        tts_voice_id,
-                        tts_owner_id,
-                        ODION_TTS_CLONE_SEED,
-                        exc,
-                    )
-                    raise
-                logger.error(
-                    "Failed to initialize Odion TTS, falling back to Deepgram: %s", exc
-                )
-        else:
-            logger.info(
-                "ENABLE_ODION_TTS_EN=false; using Deepgram TTS for English session."
-            )
 
         session = _build_session_for_language(
             language="en",
@@ -2367,10 +2422,17 @@ async def entrypoint(ctx: JobContext):
             )
 
         ctx.add_shutdown_callback(_cleanup_fr)
+        tts_engine = _build_tts_engine_for_language(
+            language="fr",
+            active_agent_config=active_agent_config,
+            userdata=userdata,
+            business_id=business_id,
+        )
         session = _build_session_for_language(
             language="fr",
             instructions=instructions,
             userdata=userdata,
+            tts_engine=tts_engine,
         )
         _wire_session_timeline(session, session.userdata)
         try:
