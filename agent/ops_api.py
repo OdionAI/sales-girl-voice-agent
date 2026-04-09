@@ -9,7 +9,9 @@ import httpx
 
 from .observability import observe, trace_tool, update_observation
 
-OPS_SERVICE_BASE_URL = os.getenv("OPS_SERVICE_BASE_URL", "http://sales-girl-demo-crm-service:8095").rstrip("/")
+OPS_SERVICE_BASE_URL = os.getenv(
+    "OPS_SERVICE_BASE_URL", "http://sales-girl-demo-crm-service:8095"
+).rstrip("/")
 HOTEL_OPS_SERVICE_BASE_URL = os.getenv("HOTEL_OPS_SERVICE_BASE_URL", "").rstrip("/")
 FIDELITY_OPS_SERVICE_BASE_URL = os.getenv(
     "FIDELITY_OPS_SERVICE_BASE_URL",
@@ -17,6 +19,14 @@ FIDELITY_OPS_SERVICE_BASE_URL = os.getenv(
 ).rstrip("/")
 OPS_SERVICE_TOKEN = os.getenv("OPS_SERVICE_TOKEN", "local-internal-service-token")
 DEFAULT_TIMEOUT_SECONDS = float(os.getenv("OPS_SERVICE_TIMEOUT_SECONDS", "8"))
+KNOWLEDGE_SERVICE_BASE_URL = os.getenv("KNOWLEDGE_SERVICE_BASE_URL", "").rstrip("/")
+KNOWLEDGE_SERVICE_TOKEN = os.getenv(
+    "KNOWLEDGE_SERVICE_TOKEN",
+    os.getenv("CONVERSATION_SERVICE_TOKEN", OPS_SERVICE_TOKEN),
+)
+KNOWLEDGE_SERVICE_TIMEOUT_SECONDS = float(
+    os.getenv("KNOWLEDGE_SERVICE_TIMEOUT_SECONDS", "8")
+)
 AGENT_CLIENT_ID = os.getenv("AGENT_CLIENT_ID", "sales-girl-internal")
 AGENT_NAME = os.getenv("AGENT_NAME", "sales-girl-agent-en")
 OPS_SHARED_OWNER_EMAIL = str(os.getenv("OPS_SHARED_OWNER_EMAIL") or "").strip().lower()
@@ -34,7 +44,7 @@ def _uses_internal_business_ops(metadata: dict[str, Any] | None) -> bool:
 
 def _ops_base_url(metadata: dict[str, Any] | None) -> str:
     use_case = _business_use_case(metadata)
-    if use_case in {"hotel", "restaurant", "fashion"}:
+    if use_case in {"hotel", "restaurant", "fashion", "custom", "generic"}:
         return HOTEL_OPS_SERVICE_BASE_URL
     if use_case == "fidelity" and FIDELITY_OPS_SERVICE_BASE_URL:
         return FIDELITY_OPS_SERVICE_BASE_URL
@@ -80,6 +90,17 @@ def _service_headers(metadata: dict[str, Any] | None) -> dict[str, str]:
     return headers
 
 
+def _knowledge_headers(metadata: dict[str, Any] | None) -> dict[str, str]:
+    md = metadata or {}
+    return {
+        "Content-Type": "application/json",
+        "X-Service-Token": KNOWLEDGE_SERVICE_TOKEN,
+        "X-Service-Name": AGENT_CLIENT_ID,
+        "X-Business-ID": str(md.get("business_id") or "").strip(),
+        "X-Agent-ID": str(md.get("agent_id") or AGENT_NAME),
+    }
+
+
 @observe(name="ops_api.request", as_type="span")
 async def _request_json(
     method: str,
@@ -96,7 +117,10 @@ async def _request_json(
     url = f"{base_url}{path}"
     headers = _service_headers(metadata)
     if not str(headers.get("X-Business-ID") or "").strip():
-        output = {"status": "failed", "message": "Missing business scope for ops request."}
+        output = {
+            "status": "failed",
+            "message": "Missing business scope for ops request.",
+        }
         update_observation(output=output)
         return output
     update_observation(
@@ -153,6 +177,7 @@ async def _request_json(
 
     if isinstance(payload, dict):
         logger.info("OPS response %s %s -> %s", method, path, payload)
+        payload["status"] = "success"
         update_observation(output=payload)
         return payload
     if isinstance(payload, list):
@@ -166,7 +191,9 @@ async def _request_json(
     return output
 
 
-def _trace(tool_name: str, metadata: dict[str, Any] | None, user_id: str | None = None) -> None:
+def _trace(
+    tool_name: str, metadata: dict[str, Any] | None, user_id: str | None = None
+) -> None:
     md = metadata or {}
     trace_tool(
         tool_name,
@@ -174,6 +201,106 @@ def _trace(tool_name: str, metadata: dict[str, Any] | None, user_id: str | None 
         user_id=user_id or str(md.get("end_user_id") or ""),
         session_id=str(md.get("conversation_id") or md.get("session_id") or ""),
     )
+
+
+@observe(name="tool.search_business_knowledge", as_type="tool")
+async def search_business_knowledge(
+    *,
+    query: str,
+    top_k: int = 4,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    caller_id = str((metadata or {}).get("end_user_id") or "")
+    _trace("search_business_knowledge", metadata, user_id=caller_id)
+    base_url = str(KNOWLEDGE_SERVICE_BASE_URL or "").strip()
+    if not base_url:
+        output = {
+            "status": "failed",
+            "message": "Business knowledge lookup is not configured.",
+        }
+        update_observation(output=output)
+        return output
+
+    headers = _knowledge_headers(metadata)
+    if not str(headers.get("X-Business-ID") or "").strip():
+        output = {
+            "status": "failed",
+            "message": "Missing business scope for knowledge lookup.",
+        }
+        update_observation(output=output)
+        return output
+
+    request_body = {
+        "query": str(query or "").strip(),
+        "top_k": int(max(1, min(int(top_k or 4), 6))),
+        "agent_id": str((metadata or {}).get("agent_id") or "").strip() or None,
+    }
+    update_observation(
+        input={
+            "method": "POST",
+            "path": "/v1/knowledge/search",
+            "json": request_body,
+            "headers": headers,
+        }
+    )
+    try:
+        async with httpx.AsyncClient(
+            timeout=KNOWLEDGE_SERVICE_TIMEOUT_SECONDS
+        ) as client:
+            response = await client.post(
+                f"{base_url}/v1/knowledge/search",
+                json=request_body,
+                headers=headers,
+            )
+    except httpx.TimeoutException:
+        output = {"status": "failed", "message": "Knowledge lookup timed out."}
+        update_observation(output=output)
+        return output
+    except httpx.HTTPError:
+        output = {"status": "failed", "message": "Knowledge lookup is unavailable."}
+        update_observation(output=output)
+        return output
+
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = {}
+
+    if response.status_code >= 400:
+        detail = payload.get("detail") if isinstance(payload, dict) else None
+        output = {
+            "status": "failed",
+            "message": str(detail or "Knowledge lookup failed."),
+        }
+        update_observation(output=output)
+        return output
+
+    matches = payload.get("matches") if isinstance(payload, dict) else None
+    if not isinstance(matches, list) or not matches:
+        output = {
+            "status": "success",
+            "matches": [],
+            "message": "No matching business knowledge was found.",
+        }
+        update_observation(output=output)
+        return output
+
+    normalized_matches: list[dict[str, Any]] = []
+    for match in matches[: request_body["top_k"]]:
+        if not isinstance(match, dict):
+            continue
+        normalized_matches.append(
+            {
+                "source_name": str(match.get("source_name") or "Knowledge"),
+                "source_type": str(match.get("source_type") or "text"),
+                "score": float(match.get("score") or 0.0),
+                "text": str(match.get("text") or "").strip()[:1500],
+            }
+        )
+
+    output = {"status": "success", "matches": normalized_matches}
+    update_observation(output=output)
+    return output
 
 
 @observe(name="tool.lookup_customer_account", as_type="tool")
@@ -184,7 +311,9 @@ async def lookup_customer_account(
 ) -> dict[str, Any]:
     caller_id = str((metadata or {}).get("end_user_id") or "")
     _trace("lookup_customer_account", metadata, user_id=caller_id)
-    resolved_customer_identifier = _resolve_customer_identifier(customer_identifier, metadata)
+    resolved_customer_identifier = _resolve_customer_identifier(
+        customer_identifier, metadata
+    )
     return await _request_json(
         "POST",
         "/v1/tools/customer-account/lookup",
@@ -201,7 +330,9 @@ async def get_tariff_profile(
 ) -> dict[str, Any]:
     caller_id = str((metadata or {}).get("end_user_id") or "")
     _trace("get_tariff_profile", metadata, user_id=caller_id)
-    resolved_customer_identifier = _resolve_customer_identifier(customer_identifier, metadata)
+    resolved_customer_identifier = _resolve_customer_identifier(
+        customer_identifier, metadata
+    )
     return await _request_json(
         "POST",
         "/v1/tools/tariff-profile",
@@ -218,7 +349,9 @@ async def get_payment_summary(
 ) -> dict[str, Any]:
     caller_id = str((metadata or {}).get("end_user_id") or "")
     _trace("get_payment_summary", metadata, user_id=caller_id)
-    resolved_customer_identifier = _resolve_customer_identifier(customer_identifier, metadata)
+    resolved_customer_identifier = _resolve_customer_identifier(
+        customer_identifier, metadata
+    )
     return await _request_json(
         "POST",
         "/v1/tools/payments/summary",
@@ -235,7 +368,9 @@ async def get_vending_history(
 ) -> dict[str, Any]:
     caller_id = str((metadata or {}).get("end_user_id") or "")
     _trace("get_vending_history", metadata, user_id=caller_id)
-    resolved_customer_identifier = _resolve_customer_identifier(customer_identifier, metadata)
+    resolved_customer_identifier = _resolve_customer_identifier(
+        customer_identifier, metadata
+    )
     return await _request_json(
         "POST",
         "/v1/tools/vending/history",
@@ -252,7 +387,9 @@ async def get_account_overview(
 ) -> dict[str, Any]:
     caller_id = str((metadata or {}).get("end_user_id") or "")
     _trace("get_account_overview", metadata, user_id=caller_id)
-    resolved_customer_identifier = _resolve_customer_identifier(customer_identifier, metadata)
+    resolved_customer_identifier = _resolve_customer_identifier(
+        customer_identifier, metadata
+    )
     return await _request_json(
         "POST",
         "/v1/tools/account/overview",
@@ -270,7 +407,9 @@ async def get_recent_transactions(
 ) -> dict[str, Any]:
     caller_id = str((metadata or {}).get("end_user_id") or "")
     _trace("get_recent_transactions", metadata, user_id=caller_id)
-    resolved_customer_identifier = _resolve_customer_identifier(customer_identifier, metadata)
+    resolved_customer_identifier = _resolve_customer_identifier(
+        customer_identifier, metadata
+    )
     return await _request_json(
         "POST",
         "/v1/tools/transactions/recent",
@@ -292,7 +431,9 @@ async def check_transaction_status(
 ) -> dict[str, Any]:
     caller_id = str((metadata or {}).get("end_user_id") or "")
     _trace("check_transaction_status", metadata, user_id=caller_id)
-    resolved_customer_identifier = _resolve_customer_identifier(customer_identifier, metadata)
+    resolved_customer_identifier = _resolve_customer_identifier(
+        customer_identifier, metadata
+    )
     return await _request_json(
         "POST",
         "/v1/tools/transactions/status",
@@ -315,7 +456,9 @@ async def block_card(
 ) -> dict[str, Any]:
     caller_id = str((metadata or {}).get("end_user_id") or "")
     _trace("block_card", metadata, user_id=caller_id)
-    resolved_customer_identifier = _resolve_customer_identifier(customer_identifier, metadata)
+    resolved_customer_identifier = _resolve_customer_identifier(
+        customer_identifier, metadata
+    )
     return await _request_json(
         "POST",
         "/v1/tools/cards/block",
@@ -338,7 +481,9 @@ async def unblock_card(
 ) -> dict[str, Any]:
     caller_id = str((metadata or {}).get("end_user_id") or "")
     _trace("unblock_card", metadata, user_id=caller_id)
-    resolved_customer_identifier = _resolve_customer_identifier(customer_identifier, metadata)
+    resolved_customer_identifier = _resolve_customer_identifier(
+        customer_identifier, metadata
+    )
     return await _request_json(
         "POST",
         "/v1/tools/cards/unblock",
@@ -361,7 +506,9 @@ async def reverse_failed_transaction(
 ) -> dict[str, Any]:
     caller_id = str((metadata or {}).get("end_user_id") or "")
     _trace("reverse_failed_transaction", metadata, user_id=caller_id)
-    resolved_customer_identifier = _resolve_customer_identifier(customer_identifier, metadata)
+    resolved_customer_identifier = _resolve_customer_identifier(
+        customer_identifier, metadata
+    )
     return await _request_json(
         "POST",
         "/v1/tools/transactions/reverse",
@@ -389,11 +536,17 @@ async def create_ticket(
     caller_id = str((metadata or {}).get("end_user_id") or "")
     _trace("create_ticket", metadata, user_id=caller_id)
     if _uses_internal_business_ops(metadata):
-        conversation_id = str((metadata or {}).get("conversation_id") or "").strip() or None
+        conversation_id = (
+            str((metadata or {}).get("conversation_id") or "").strip() or None
+        )
         agent_id = str((metadata or {}).get("agent_id") or "").strip() or None
         body: dict[str, Any] = {
-            "customer_name": str((metadata or {}).get("end_user_name") or "").strip() or None,
-            "customer_contact": str((metadata or {}).get("caller_phone_e164") or "").strip() or None,
+            "customer_name": str((metadata or {}).get("end_user_name") or "").strip()
+            or None,
+            "customer_contact": str(
+                (metadata or {}).get("caller_phone_e164") or ""
+            ).strip()
+            or None,
             "title": title,
             "description": description,
             "priority": priority,
@@ -401,9 +554,13 @@ async def create_ticket(
             "conversation_id": conversation_id,
             "agent_id": agent_id,
         }
-        return await _request_json("POST", "/v1/tickets", json_body=body, metadata=metadata)
+        return await _request_json(
+            "POST", "/v1/tickets", json_body=body, metadata=metadata
+        )
 
-    resolved_customer_identifier = _resolve_customer_identifier(customer_identifier, metadata)
+    resolved_customer_identifier = _resolve_customer_identifier(
+        customer_identifier, metadata
+    )
     body: dict[str, Any] = {
         "customer_identifier": resolved_customer_identifier,
         "title": title,
@@ -415,7 +572,9 @@ async def create_ticket(
     }
     if case_reference:
         body["case_reference"] = case_reference
-    return await _request_json("POST", "/v1/tools/tickets/create", json_body=body, metadata=metadata)
+    return await _request_json(
+        "POST", "/v1/tools/tickets/create", json_body=body, metadata=metadata
+    )
 
 
 @observe(name="tool.create_booking", as_type="tool")
@@ -434,24 +593,37 @@ async def create_booking(
     caller_id = str((metadata or {}).get("end_user_id") or "")
     _trace("create_booking", metadata, user_id=caller_id)
     if _business_use_case(metadata) == "hotel":
-        conversation_id = str((metadata or {}).get("conversation_id") or "").strip() or None
+        conversation_id = (
+            str((metadata or {}).get("conversation_id") or "").strip() or None
+        )
         agent_id = str((metadata or {}).get("agent_id") or "").strip() or None
         body: dict[str, Any] = {
-            "customer_name": guest_name or str((metadata or {}).get("end_user_name") or "").strip() or None,
-            "customer_contact": str((metadata or {}).get("caller_phone_e164") or "").strip() or None,
+            "customer_name": guest_name
+            or str((metadata or {}).get("end_user_name") or "").strip()
+            or None,
+            "customer_contact": str(
+                (metadata or {}).get("caller_phone_e164") or ""
+            ).strip()
+            or None,
             "room_type": room_type,
             "stay_start": check_in_date,
             "stay_end": check_out_date,
             "guest_count": guest_count,
-            "price_snapshot": price_snapshot if isinstance(price_snapshot, dict) else None,
+            "price_snapshot": price_snapshot
+            if isinstance(price_snapshot, dict)
+            else None,
             "status": "pending",
             "notes": special_requests,
             "conversation_id": conversation_id,
             "agent_id": agent_id,
         }
-        return await _request_json("POST", "/v1/bookings", json_body=body, metadata=metadata)
+        return await _request_json(
+            "POST", "/v1/bookings", json_body=body, metadata=metadata
+        )
 
-    resolved_customer_identifier = _resolve_customer_identifier(customer_identifier, metadata)
+    resolved_customer_identifier = _resolve_customer_identifier(
+        customer_identifier, metadata
+    )
     body: dict[str, Any] = {
         "customer_identifier": resolved_customer_identifier,
         "guest_name": guest_name,
@@ -463,7 +635,9 @@ async def create_booking(
         "price_snapshot": price_snapshot,
         "conversation_id": str((metadata or {}).get("conversation_id") or ""),
     }
-    return await _request_json("POST", "/v1/tools/bookings/create", json_body=body, metadata=metadata)
+    return await _request_json(
+        "POST", "/v1/tools/bookings/create", json_body=body, metadata=metadata
+    )
 
 
 @observe(name="tool.create_order", as_type="tool")
@@ -480,22 +654,36 @@ async def create_order(
     caller_id = str((metadata or {}).get("end_user_id") or "")
     _trace("create_order", metadata, user_id=caller_id)
     if _business_use_case(metadata) in {"restaurant", "fashion"}:
-        conversation_id = str((metadata or {}).get("conversation_id") or "").strip() or None
+        conversation_id = (
+            str((metadata or {}).get("conversation_id") or "").strip() or None
+        )
         agent_id = str((metadata or {}).get("agent_id") or "").strip() or None
         body: dict[str, Any] = {
-            "customer_name": customer_name or str((metadata or {}).get("end_user_name") or "").strip() or None,
-            "customer_contact": str((metadata or {}).get("caller_phone_e164") or "").strip() or str((metadata or {}).get("end_user_id") or "").strip() or None,
+            "customer_name": customer_name
+            or str((metadata or {}).get("end_user_name") or "").strip()
+            or None,
+            "customer_contact": str(
+                (metadata or {}).get("caller_phone_e164") or ""
+            ).strip()
+            or str((metadata or {}).get("end_user_id") or "").strip()
+            or None,
             "item_name": item_name,
             "quantity": quantity,
-            "price_snapshot": price_snapshot if isinstance(price_snapshot, dict) else None,
+            "price_snapshot": price_snapshot
+            if isinstance(price_snapshot, dict)
+            else None,
             "status": "pending",
             "notes": notes,
             "conversation_id": conversation_id,
             "agent_id": agent_id,
         }
-        return await _request_json("POST", "/v1/orders", json_body=body, metadata=metadata)
+        return await _request_json(
+            "POST", "/v1/orders", json_body=body, metadata=metadata
+        )
 
-    resolved_customer_identifier = _resolve_customer_identifier(customer_identifier, metadata)
+    resolved_customer_identifier = _resolve_customer_identifier(
+        customer_identifier, metadata
+    )
     body = {
         "customer_identifier": resolved_customer_identifier,
         "item_name": item_name,
@@ -505,7 +693,9 @@ async def create_order(
         "price_snapshot": price_snapshot,
         "conversation_id": str((metadata or {}).get("conversation_id") or ""),
     }
-    return await _request_json("POST", "/v1/tools/orders/create", json_body=body, metadata=metadata)
+    return await _request_json(
+        "POST", "/v1/tools/orders/create", json_body=body, metadata=metadata
+    )
 
 
 @observe(name="tool.fetch_room_availability", as_type="tool")
@@ -524,7 +714,10 @@ async def fetch_room_availability(
         endpoint_url or (metadata or {}).get("live_data_endpoint")
     )
     if not resolved_endpoint:
-        output = {"status": "failed", "message": "Current room availability cannot be checked right now."}
+        output = {
+            "status": "failed",
+            "message": "Current room availability cannot be checked right now.",
+        }
         update_observation(output=output)
         return output
 
@@ -555,11 +748,17 @@ async def fetch_room_availability(
         async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT_SECONDS) as client:
             response = await client.post(resolved_endpoint, json=body, headers=headers)
     except httpx.TimeoutException:
-        output = {"status": "failed", "message": "I couldn't check the current room availability in time."}
+        output = {
+            "status": "failed",
+            "message": "I couldn't check the current room availability in time.",
+        }
         update_observation(output=output)
         return output
     except httpx.HTTPError:
-        output = {"status": "failed", "message": "I can't check the current room availability right now."}
+        output = {
+            "status": "failed",
+            "message": "I can't check the current room availability right now.",
+        }
         update_observation(output=output)
         return output
 
@@ -572,7 +771,11 @@ async def fetch_room_availability(
         detail = "Request failed."
         if isinstance(payload, dict):
             detail = str(payload.get("detail") or payload.get("message") or detail)
-        output = {"status": "failed", "message": detail, "http_status": response.status_code}
+        output = {
+            "status": "failed",
+            "message": detail,
+            "http_status": response.status_code,
+        }
         update_observation(output=output)
         return output
 
@@ -585,7 +788,10 @@ async def fetch_room_availability(
         update_observation(output=output)
         return output
 
-    output = {"status": "failed", "message": "Invalid response from room availability service."}
+    output = {
+        "status": "failed",
+        "message": "Invalid response from room availability service.",
+    }
     update_observation(output=output)
     return output
 
@@ -629,7 +835,9 @@ async def _fetch_live_catalog(
     )
     try:
         async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT_SECONDS) as client:
-            response = await client.post(resolved_endpoint, json=body or {}, headers=headers)
+            response = await client.post(
+                resolved_endpoint, json=body or {}, headers=headers
+            )
     except httpx.TimeoutException:
         output = {"status": "failed", "message": timeout_message}
         update_observation(output=output)
@@ -648,7 +856,11 @@ async def _fetch_live_catalog(
         detail = "Request failed."
         if isinstance(payload, dict):
             detail = str(payload.get("detail") or payload.get("message") or detail)
-        output = {"status": "failed", "message": detail, "http_status": response.status_code}
+        output = {
+            "status": "failed",
+            "message": detail,
+            "http_status": response.status_code,
+        }
         update_observation(output=output)
         return output
 
@@ -721,7 +933,9 @@ async def create_complaint_ticket(
 ) -> dict[str, Any]:
     caller_id = str((metadata or {}).get("end_user_id") or "")
     _trace("create_complaint_ticket", metadata, user_id=caller_id)
-    resolved_customer_identifier = _resolve_customer_identifier(customer_identifier, metadata)
+    resolved_customer_identifier = _resolve_customer_identifier(
+        customer_identifier, metadata
+    )
     body: dict[str, Any] = {
         "customer_identifier": resolved_customer_identifier,
         "title": title,
@@ -749,7 +963,9 @@ async def report_outage(
 ) -> dict[str, Any]:
     caller_id = str((metadata or {}).get("end_user_id") or "")
     _trace("report_outage", metadata, user_id=caller_id)
-    resolved_customer_identifier = _resolve_customer_identifier(customer_identifier, metadata)
+    resolved_customer_identifier = _resolve_customer_identifier(
+        customer_identifier, metadata
+    )
     body: dict[str, Any] = {
         "customer_identifier": resolved_customer_identifier,
         "summary": summary,
@@ -774,7 +990,9 @@ async def create_meter_request(
 ) -> dict[str, Any]:
     caller_id = str((metadata or {}).get("end_user_id") or "")
     _trace("create_meter_request", metadata, user_id=caller_id)
-    resolved_customer_identifier = _resolve_customer_identifier(customer_identifier, metadata)
+    resolved_customer_identifier = _resolve_customer_identifier(
+        customer_identifier, metadata
+    )
     body: dict[str, Any] = {
         "customer_identifier": resolved_customer_identifier,
         "summary": summary,
@@ -799,7 +1017,9 @@ async def apply_billing_adjustment(
 ) -> dict[str, Any]:
     caller_id = str((metadata or {}).get("end_user_id") or "")
     _trace("apply_billing_adjustment", metadata, user_id=caller_id)
-    resolved_customer_identifier = _resolve_customer_identifier(customer_identifier, metadata)
+    resolved_customer_identifier = _resolve_customer_identifier(
+        customer_identifier, metadata
+    )
     return await _request_json(
         "POST",
         "/v1/tools/billing/apply-adjustment",
@@ -822,7 +1042,9 @@ async def refresh_meter_token_state(
 ) -> dict[str, Any]:
     caller_id = str((metadata or {}).get("end_user_id") or "")
     _trace("refresh_meter_token_state", metadata, user_id=caller_id)
-    resolved_customer_identifier = _resolve_customer_identifier(customer_identifier, metadata)
+    resolved_customer_identifier = _resolve_customer_identifier(
+        customer_identifier, metadata
+    )
     return await _request_json(
         "POST",
         "/v1/tools/metering/refresh-token-state",
@@ -846,7 +1068,9 @@ async def update_customer_record(
 ) -> dict[str, Any]:
     caller_id = str((metadata or {}).get("end_user_id") or "")
     _trace("update_customer_record", metadata, user_id=caller_id)
-    resolved_customer_identifier = _resolve_customer_identifier(customer_identifier, metadata)
+    resolved_customer_identifier = _resolve_customer_identifier(
+        customer_identifier, metadata
+    )
     return await _request_json(
         "POST",
         "/v1/tools/customers/update-record",
@@ -873,7 +1097,9 @@ async def create_payment_plan(
 ) -> dict[str, Any]:
     caller_id = str((metadata or {}).get("end_user_id") or "")
     _trace("create_payment_plan", metadata, user_id=caller_id)
-    resolved_customer_identifier = _resolve_customer_identifier(customer_identifier, metadata)
+    resolved_customer_identifier = _resolve_customer_identifier(
+        customer_identifier, metadata
+    )
     return await _request_json(
         "POST",
         "/v1/tools/payments/create-plan",
@@ -901,7 +1127,9 @@ async def escalate_issue(
 ) -> dict[str, Any]:
     caller_id = str((metadata or {}).get("end_user_id") or "")
     _trace("escalate_issue", metadata, user_id=caller_id)
-    resolved_customer_identifier = _resolve_customer_identifier(customer_identifier, metadata)
+    resolved_customer_identifier = _resolve_customer_identifier(
+        customer_identifier, metadata
+    )
     body: dict[str, Any] = {
         "customer_identifier": resolved_customer_identifier,
         "title": title,
@@ -917,3 +1145,46 @@ async def escalate_issue(
         json_body=body,
         metadata=metadata,
     )
+
+
+@observe(name="tool.send_email", as_type="tool")
+async def send_email(
+    *,
+    to_email: str,
+    subject: str,
+    body_text: str,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    caller_id = str((metadata or {}).get("end_user_id") or "")
+    _trace("send_email", metadata, user_id=caller_id)
+
+    body: dict[str, Any] = {
+        "to_email": to_email,
+        "subject": subject,
+        "body": body_text,
+    }
+
+    if _uses_internal_business_ops(metadata):
+        result = await _request_json(
+            "POST", "/v1/tools/send-email", json_body=body, metadata=metadata
+        )
+    else:
+        result = await _request_json(
+            "POST", "/v1/tools/send-email", json_body=body, metadata=metadata
+        )
+
+    if result.get("status") == "failed":
+        return result
+
+    if bool(result.get("mocked")) or not bool(result.get("sent")):
+        output = {
+            "status": "failed",
+            "message": str(result.get("message") or "Email delivery is not configured right now."),
+            "to": result.get("to") or to_email,
+            "subject": result.get("subject") or subject,
+            "mocked": bool(result.get("mocked")),
+        }
+        update_observation(output=output)
+        return output
+
+    return result
