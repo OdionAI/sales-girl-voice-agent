@@ -74,7 +74,12 @@ def _normalize_http_url(value: str | None) -> str:
 
 def _service_headers(metadata: dict[str, Any] | None) -> dict[str, str]:
     md = metadata or {}
-    business_scope = OPS_SHARED_OWNER_EMAIL or str(md.get("business_id") or "").strip()
+    use_internal_business_ops = _uses_internal_business_ops(md)
+    business_scope = (
+        str(md.get("business_id") or "").strip()
+        if use_internal_business_ops
+        else (OPS_SHARED_OWNER_EMAIL or str(md.get("business_id") or "").strip())
+    )
     headers = {
         "X-Service-Token": OPS_SERVICE_TOKEN,
         "X-Service-Name": AGENT_CLIENT_ID,
@@ -85,7 +90,7 @@ def _service_headers(metadata: dict[str, Any] | None) -> dict[str, str]:
         "X-Session-ID": str(md.get("session_id") or ""),
         "X-End-User-ID": str(md.get("end_user_id") or ""),
     }
-    if OPS_SHARED_OWNER_EMAIL:
+    if OPS_SHARED_OWNER_EMAIL and not use_internal_business_ops:
         headers["X-Workspace-Owner-Email"] = OPS_SHARED_OWNER_EMAIL
     return headers
 
