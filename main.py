@@ -2036,13 +2036,6 @@ def _should_use_odion_tts_for_language(config: dict[str, Any], language: str) ->
     return scope == language
 
 
-def _odion_experiment_language_hint(language: str) -> str:
-    lang = str(language or "").strip().lower()
-    if lang == "fr":
-        return "French"
-    return ODION_TTS_EXPERIMENT_LANGUAGE_HINT
-
-
 def _normalized_language_code(value: str) -> str:
     lowered = str(value or "").strip().lower()
     if lowered in {"fr", "french", "français", "francais"}:
@@ -2070,7 +2063,6 @@ def _build_tts_engine_for_language(
     use_experiment_clone = (
         bool(ODION_TTS_EXPERIMENT_OWNER_ID)
         and bool(ODION_TTS_EXPERIMENT_VOICE_ID)
-        and _normalized_language_code(ODION_TTS_EXPERIMENT_LANGUAGE_HINT) == lang
     )
     tts_voice_id = (
         ODION_TTS_EXPERIMENT_VOICE_ID
@@ -2084,7 +2076,7 @@ def _build_tts_engine_for_language(
         or business_id
     )
     tts_language_hint = (
-        _odion_experiment_language_hint(lang)
+        ("French" if is_fr else "English")
         if use_experiment_clone
         else str(
             active_agent_config.get("tts_language_hint")
