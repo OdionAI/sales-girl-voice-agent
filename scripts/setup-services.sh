@@ -61,6 +61,7 @@ User=${VM_USER}
 WorkingDirectory=${APP_PATH}
 EnvironmentFile=${APP_PATH}/.env
 Environment="AGENT_NAME=sales-girl-agent-en"
+Environment="AGENT_PORT=8081"
 Environment="PATH=${APP_PATH}/.venv/bin"
 ExecStart=${APP_PATH}/.venv/bin/python main.py start
 Restart=always
@@ -84,6 +85,7 @@ User=${VM_USER}
 WorkingDirectory=${APP_PATH}
 EnvironmentFile=${APP_PATH}/.env
 Environment="AGENT_NAME=sales-girl-agent-fr"
+Environment="AGENT_PORT=8082"
 Environment="PATH=${APP_PATH}/.venv/bin"
 ExecStart=${APP_PATH}/.venv/bin/python main.py start
 Restart=always

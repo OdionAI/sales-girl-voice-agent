@@ -62,6 +62,12 @@ logger = logging.getLogger(__name__)
 # AgentServer allows only one rtc_session per process. To support both English and
 # French, run two worker processes with EN/FR-prefixed names.
 AGENT_NAME = os.environ.get("AGENT_NAME", "sales-girl-agent-en")
+AGENT_PORT = int(
+    os.environ.get(
+        "AGENT_PORT",
+        "8082" if str(AGENT_NAME or "").strip().lower().startswith("sales-girl-agent-fr") else "8081",
+    )
+)
 DEFAULT_BUSINESS_USE_CASE = (
     str(os.environ.get("DEFAULT_BUSINESS_USE_CASE", "generic") or "generic")
     .strip()
@@ -130,6 +136,7 @@ if not (_is_en_agent_name(AGENT_NAME) or _is_fr_agent_name(AGENT_NAME)):
 server = AgentServer(
     num_idle_processes=1,
     initialize_process_timeout=60,
+    port=AGENT_PORT,
 )
 init_store()
 
