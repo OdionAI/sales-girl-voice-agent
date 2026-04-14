@@ -65,7 +65,9 @@ AGENT_NAME = os.environ.get("AGENT_NAME", "sales-girl-agent-en")
 AGENT_PORT = int(
     os.environ.get(
         "AGENT_PORT",
-        "8082" if str(AGENT_NAME or "").strip().lower().startswith("sales-girl-agent-fr") else "8081",
+        "8082"
+        if str(AGENT_NAME or "").strip().lower().startswith("sales-girl-agent-fr")
+        else "8081",
     )
 )
 DEFAULT_BUSINESS_USE_CASE = (
@@ -383,20 +385,20 @@ REQUIRE_VERIFIED_PHONE = os.getenv("REQUIRE_VERIFIED_PHONE", "true").lower() == 
 CONVERSATION_SERVICE_REQUIRED = (
     os.getenv("CONVERSATION_SERVICE_REQUIRED", "true").lower() == "true"
 )
-ENABLE_ODION_TTS_EN = os.getenv("ENABLE_ODION_TTS_EN", "false").lower() == "true"
+ENABLE_ODION_TTS_EN = os.getenv("ENABLE_ODION_TTS_EN", "true").lower() == "true"
 ENABLE_ODION_TTS_FR = os.getenv("ENABLE_ODION_TTS_FR", "false").lower() == "true"
 ODION_TTS_EXPERIMENT_OWNER_ID = str(
-    os.getenv("ODION_TTS_EXPERIMENT_OWNER_ID") or ""
+    os.getenv("ODION_TTS_EXPERIMENT_OWNER_ID") or "mavinomichael@gmail.com"
 ).strip()
 ODION_TTS_EXPERIMENT_VOICE_ID = str(
-    os.getenv("ODION_TTS_EXPERIMENT_VOICE_ID") or ""
+    os.getenv("ODION_TTS_EXPERIMENT_VOICE_ID") or "d270a5cec6914373b9deed1d1c3cbade"
 ).strip()
 ODION_TTS_EXPERIMENT_LANGUAGE_HINT = (
     str(os.getenv("ODION_TTS_EXPERIMENT_LANGUAGE_HINT") or "English").strip()
     or "English"
 )
 try:
-    _odion_seed_raw = str(os.getenv("ODION_TTS_EXPERIMENT_SEED") or "").strip()
+    _odion_seed_raw = str(os.getenv("ODION_TTS_EXPERIMENT_SEED") or "0").strip()
     ODION_TTS_EXPERIMENT_SEED = int(_odion_seed_raw) if _odion_seed_raw else None
     if ODION_TTS_EXPERIMENT_SEED is not None and ODION_TTS_EXPERIMENT_SEED < 0:
         ODION_TTS_EXPERIMENT_SEED = None
@@ -2094,9 +2096,8 @@ def _build_tts_engine_for_language(
     odion_enabled = ENABLE_ODION_TTS_FR if is_fr else ENABLE_ODION_TTS_EN
     fallback_label = "French" if is_fr else "English"
 
-    use_experiment_clone = (
-        bool(ODION_TTS_EXPERIMENT_OWNER_ID)
-        and bool(ODION_TTS_EXPERIMENT_VOICE_ID)
+    use_experiment_clone = bool(ODION_TTS_EXPERIMENT_OWNER_ID) and bool(
+        ODION_TTS_EXPERIMENT_VOICE_ID
     )
     tts_voice_id = (
         ODION_TTS_EXPERIMENT_VOICE_ID
@@ -2106,8 +2107,7 @@ def _build_tts_engine_for_language(
     tts_owner_id = (
         ODION_TTS_EXPERIMENT_OWNER_ID
         if use_experiment_clone
-        else str(active_agent_config.get("tts_owner_id") or "").strip()
-        or business_id
+        else str(active_agent_config.get("tts_owner_id") or "").strip() or business_id
     )
     tts_language_hint = (
         ("French" if is_fr else "English")
