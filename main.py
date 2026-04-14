@@ -1495,6 +1495,23 @@ def _detect_business_use_case(
         for tool in tools
         if isinstance(tools, list) and isinstance(tool, dict)
     }
+    ekedc_tool_names = {
+        "resolve_customer",
+        "customer_account_lookup",
+        "tariff_profile",
+        "payments_summary",
+        "vending_history",
+        "update_customer_record",
+        "create_payment_plan",
+        "create_complaint",
+        "create_outage_report",
+        "create_meter_request",
+        "create_escalation_ticket",
+        "check_case_status",
+        "refresh_meter_token_state",
+    }
+    if tool_names & ekedc_tool_names:
+        return "ekedc"
     if "fetch_room_availability" in tool_names or "create_booking" in tool_names:
         return "hotel"
     if "fetch_menu_availability" in tool_names:
@@ -1510,6 +1527,21 @@ def _detect_business_use_case(
             str(userdata.get("configured_agent_name") or ""),
         ]
     ).lower()
+    if any(
+        token in text
+        for token in (
+            "ekedc",
+            "ekedc demo",
+            "electricity customer support",
+            "electricity support",
+            "tariff band",
+            "meter request",
+            "token vending",
+            "power outage",
+            "low voltage",
+        )
+    ):
+        return "ekedc"
     if any(
         token in text
         for token in (
@@ -1793,6 +1825,8 @@ async def _build_preloaded_ops_context(userdata: dict[str, Any]) -> str:
             )
 
         account = overview.get("account") if isinstance(overview, dict) else {}
+        if not isinstance(account, dict):
+            account = {}
         cards = overview.get("cards") if isinstance(overview, dict) else []
         transactions = (
             transactions_payload.get("transactions")

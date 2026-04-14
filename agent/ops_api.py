@@ -9,8 +9,10 @@ import httpx
 
 from .observability import observe, trace_tool, update_observation
 
+# Default aligns with platform port convention in AGENTS.md:
+# demo CRM on 8096 (knowledge-service runs on 8095)
 OPS_SERVICE_BASE_URL = os.getenv(
-    "OPS_SERVICE_BASE_URL", "http://sales-girl-demo-crm-service:8095"
+    "OPS_SERVICE_BASE_URL", "http://sales-girl-demo-crm-service:8096"
 ).rstrip("/")
 HOTEL_OPS_SERVICE_BASE_URL = os.getenv("HOTEL_OPS_SERVICE_BASE_URL", "").rstrip("/")
 FIDELITY_OPS_SERVICE_BASE_URL = os.getenv(
