@@ -2013,14 +2013,12 @@ def _kickoff_prompt_for_language(language: str, business_use_case: str) -> str:
     lang = str(language or "").strip().lower()
     if lang == "fr":
         return (
-            "Commencez la conversation maintenant. Saluez l'appelant en français. Présentez-vous brièvement par votre nom et dites une phrase générale comme : 'Je suis là pour vous aider avec toutes vos questions. Comment puis-je vous aider aujourd'hui ?'. "
-            "N'utilisez pas de salutations hyper-spécifiques. "
+            "Commencez la conversation maintenant. Saluez l'appelant en français. Présentez-vous brièvement par votre nom et proposez votre aide de manière naturelle, en fonction de votre rôle spécifique. "
             "Ne demandez pas d'abord l'email ou d'autres informations d'identification. "
             "N'énumérez pas immédiatement tout le profil de l'appelant ; saluez d'abord puis attendez sa demande."
         )
     return (
-        "Start the conversation now. Greet the caller first in English. Introduce yourself briefly by name and say a general greeting like: 'I am here to help you with any questions or issues you have. What can I help you with today?'. "
-        "Do not use hyper-specific greetings. "
+        "Start the conversation now. Greet the caller first in English. Introduce yourself briefly by name and offer assistance naturally based on your specific role and instructions. "
         "Do not ask for email or other identifiers as your first move. Do not dump the caller profile immediately; greet first and wait for the caller's request."
     )
 
