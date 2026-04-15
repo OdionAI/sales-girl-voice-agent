@@ -1497,6 +1497,17 @@ def _detect_business_use_case(
         for tool in tools
         if isinstance(tools, list) and isinstance(tool, dict)
     }
+    fidelity_tool_names = {
+        "account_overview",
+        "recent_transactions",
+        "transaction_status",
+        "block_card",
+        "unblock_card",
+        "reverse_failed_transaction",
+    }
+    if tool_names & fidelity_tool_names:
+        return "fidelity"
+
     ekedc_tool_names = {
         "resolve_customer",
         "customer_account_lookup",
