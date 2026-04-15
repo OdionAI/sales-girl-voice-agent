@@ -258,14 +258,19 @@ class SalonAgent(Agent):
     async def create_order(
         self,
         ctx: RunContext,
-        item_name: str,
+        item_name: str = "",
         quantity: int = 1,
+        items: list[dict] | None = None,
         customer_name: str | None = None,
         notes: str | None = None,
         price_snapshot: dict | str | None = None,
         customer_identifier: str | None = None,
     ) -> dict:
-        """Create a restaurant or fashion order inside the platform for the current customer and business."""
+        """Create a restaurant or fashion order inside the platform for the current customer and business.
+
+        If the customer orders multiple different items (e.g. Rice and Chicken), you MUST use the `items` array.
+        Format for items: [{"item_name": "Fried Rice", "quantity": 1}, {"item_name": "Chicken", "quantity": 2}]
+        """
         if not _is_tool_enabled(ctx, "create_order"):
             return {
                 "status": "failed",
@@ -276,13 +281,17 @@ class SalonAgent(Agent):
             customer_name=customer_name,
             item_name=item_name,
             quantity=quantity,
+            items=items,
             notes=notes,
             price_snapshot=price_snapshot,
             metadata=_tool_metadata(ctx),
         )
         if result.get("status") != "failed":
             logger.info(
-                "[TOOL] create_order item_name=%s quantity=%s", item_name, quantity
+                "[TOOL] create_order item_name=%s quantity=%s items=%s",
+                item_name,
+                quantity,
+                items,
             )
         return result
 

@@ -651,8 +651,9 @@ async def create_booking(
 async def create_order(
     *,
     customer_identifier: str | None = None,
-    item_name: str,
+    item_name: str = "",
     quantity: int = 1,
+    items: list[dict[str, Any]] | None = None,
     customer_name: str | None = None,
     notes: str | None = None,
     price_snapshot: dict[str, Any] | str | None = None,
@@ -660,49 +661,92 @@ async def create_order(
 ) -> dict[str, Any]:
     caller_id = str((metadata or {}).get("end_user_id") or "")
     _trace("create_order", metadata, user_id=caller_id)
+
+    order_items = items if items else [{"item_name": item_name, "quantity": quantity}]
+
     if _business_use_case(metadata) in {"restaurant", "fashion"}:
         conversation_id = (
             str((metadata or {}).get("conversation_id") or "").strip() or None
         )
         agent_id = str((metadata or {}).get("agent_id") or "").strip() or None
-        body: dict[str, Any] = {
-            "customer_name": customer_name
-            or str((metadata or {}).get("end_user_name") or "").strip()
-            or None,
-            "customer_contact": str(
-                (metadata or {}).get("caller_phone_e164") or ""
-            ).strip()
-            or str((metadata or {}).get("end_user_id") or "").strip()
-            or None,
-            "item_name": item_name,
-            "quantity": quantity,
-            "price_snapshot": price_snapshot
-            if isinstance(price_snapshot, dict)
-            else None,
-            "status": "pending",
-            "notes": notes,
-            "conversation_id": conversation_id,
-            "agent_id": agent_id,
-        }
-        return await _request_json(
-            "POST", "/v1/orders", json_body=body, metadata=metadata
-        )
+
+        results = []
+        for order_item in order_items:
+            current_item_name = str(order_item.get("item_name") or item_name).strip()
+            current_quantity = int(order_item.get("quantity") or quantity or 1)
+
+            if not current_item_name:
+                continue
+
+            body: dict[str, Any] = {
+                "customer_name": customer_name
+                or str((metadata or {}).get("end_user_name") or "").strip()
+                or None,
+                "customer_contact": str(
+                    (metadata or {}).get("caller_phone_e164") or ""
+                ).strip()
+                or str((metadata or {}).get("end_user_id") or "").strip()
+                or None,
+                "item_name": current_item_name,
+                "quantity": current_quantity,
+                "price_snapshot": price_snapshot
+                if isinstance(price_snapshot, dict)
+                else None,
+                "status": "pending",
+                "notes": notes,
+                "conversation_id": conversation_id,
+                "agent_id": agent_id,
+            }
+            res = await _request_json(
+                "POST", "/v1/orders", json_body=body, metadata=metadata
+            )
+            results.append(res)
+
+        if not results:
+            return {"status": "failed", "message": "No valid items to order."}
+
+        # Check if any failed
+        failed = [r for r in results if r.get("status") == "failed"]
+        if failed:
+            return failed[0]  # return the first error
+
+        return results[0]  # Return the first success result to satisfy the schema
 
     resolved_customer_identifier = _resolve_customer_identifier(
         customer_identifier, metadata
     )
-    body = {
-        "customer_identifier": resolved_customer_identifier,
-        "item_name": item_name,
-        "quantity": quantity,
-        "customer_name": customer_name,
-        "notes": notes,
-        "price_snapshot": price_snapshot,
-        "conversation_id": str((metadata or {}).get("conversation_id") or ""),
-    }
-    return await _request_json(
-        "POST", "/v1/tools/orders/create", json_body=body, metadata=metadata
-    )
+
+    results = []
+    for order_item in order_items:
+        current_item_name = str(order_item.get("item_name") or item_name).strip()
+        current_quantity = int(order_item.get("quantity") or quantity or 1)
+
+        if not current_item_name:
+            continue
+
+        body = {
+            "customer_identifier": resolved_customer_identifier,
+            "item_name": current_item_name,
+            "quantity": current_quantity,
+            "customer_name": customer_name,
+            "notes": notes,
+            "price_snapshot": price_snapshot,
+            "conversation_id": str((metadata or {}).get("conversation_id") or ""),
+        }
+        res = await _request_json(
+            "POST", "/v1/tools/orders/create", json_body=body, metadata=metadata
+        )
+        results.append(res)
+
+    if not results:
+        return {"status": "failed", "message": "No valid items to order."}
+
+    # Check if any failed
+    failed = [r for r in results if r.get("status") == "failed"]
+    if failed:
+        return failed[0]  # return the first error
+
+    return results[0]  # Return the first success result
 
 
 @observe(name="tool.fetch_room_availability", as_type="tool")
@@ -1186,7 +1230,9 @@ async def send_email(
     if bool(result.get("mocked")) or not bool(result.get("sent")):
         output = {
             "status": "failed",
-            "message": str(result.get("message") or "Email delivery is not configured right now."),
+            "message": str(
+                result.get("message") or "Email delivery is not configured right now."
+            ),
             "to": result.get("to") or to_email,
             "subject": result.get("subject") or subject,
             "mocked": bool(result.get("mocked")),
