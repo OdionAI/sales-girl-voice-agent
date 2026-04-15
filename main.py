@@ -506,7 +506,7 @@ def _decode_identity_email(identity: str) -> str:
     return _normalize_end_user_id(decoded)
 
 
-def _participant_identity_from_ctx(ctx: JobContext) -> tuple[str, str, str, str, str, str]:
+def _participant_identity_from_ctx(ctx: JobContext) -> tuple[str, str, str, str, str, str, str]:
     room = getattr(ctx, "room", None)
     room_name = _room_name_from_ctx(ctx)
     fallback_business_id = _normalize_business_id(os.getenv("CONVERSATION_BUSINESS_ID", ""))
@@ -523,17 +523,18 @@ def _participant_identity_from_ctx(ctx: JobContext) -> tuple[str, str, str, str,
             room_config_agent_id,
             room_configured_name,
             room_end_user_name,
+            "",
         )
 
     # First preference: encoded phone in room name (always available at session bootstrap)
     phone_from_room = _phone_from_room_name(room_name)
     if phone_from_room:
-        return phone_from_room, "voice", fallback_business_id, "", "", ""
+        return phone_from_room, "voice", fallback_business_id, "", "", "", ""
 
     # Fallback: read remote participant metadata / identity
     participants = getattr(room, "remote_participants", None)
     if not participants:
-        return "", "voice", fallback_business_id, "", "", ""
+        return "", "voice", fallback_business_id, "", "", "", ""
 
     values = participants.values() if hasattr(participants, "values") else participants
     for participant in values:
@@ -549,6 +550,7 @@ def _participant_identity_from_ctx(ctx: JobContext) -> tuple[str, str, str, str,
                 metadata_config_agent_id = str(payload.get("config_agent_id") or "").strip()
                 metadata_configured_agent_name = str(payload.get("configured_agent_name") or "").strip()
                 metadata_end_user_name = str(payload.get("end_user_name") or "").strip()
+                metadata_tts_endpoint = str(payload.get("tts_endpoint") or "").strip()
                 email_candidate = str(payload.get("end_user_email") or "").strip()
                 if email_candidate:
                     normalized_email = _normalize_end_user_id(email_candidate)
@@ -560,6 +562,7 @@ def _participant_identity_from_ctx(ctx: JobContext) -> tuple[str, str, str, str,
                             metadata_config_agent_id,
                             metadata_configured_agent_name,
                             metadata_end_user_name,
+                            metadata_tts_endpoint,
                         )
                 candidate = str(payload.get("end_user_phone") or payload.get("end_user_id") or "")
                 normalized = _normalize_end_user_id(candidate)
@@ -600,7 +603,7 @@ def _participant_identity_from_ctx(ctx: JobContext) -> tuple[str, str, str, str,
                     metadata_end_user_name,
                 )
 
-    return "", "voice", fallback_business_id, "", "", ""
+    return "", "voice", fallback_business_id, "", "", "", ""
 
 
 async def _init_session_userdata(ctx: JobContext, language: str) -> dict[str, Any]:
@@ -613,13 +616,14 @@ async def _init_session_userdata(ctx: JobContext, language: str) -> dict[str, An
             await asyncio.wait_for(ctx.wait_for_participant(), timeout=12)
             end_user_id, identity_type, business_id, config_agent_id, configured_agent_name, end_user_name = _participant_identity_from_ctx(ctx)
             logger.info(
-                "Retried participant identity after join: end_user_id=%s type=%s business_id=%s config_agent_id=%s configured_name=%s end_user_name=%s",
+                "Retried participant identity after join: end_user_id=%s type=%s business_id=%s config_agent_id=%s configured_name=%s end_user_name=%s tts_endpoint=%s",
                 end_user_id,
                 identity_type,
                 business_id,
                 config_agent_id,
                 configured_agent_name,
                 end_user_name,
+                tts_endpoint,
             )
         except RuntimeError as exc:
             # Some jobs can reach here before room connection is established.
@@ -649,6 +653,7 @@ async def _init_session_userdata(ctx: JobContext, language: str) -> dict[str, An
         "agent_config_id": effective_config_agent_id,
         "configured_agent_name": configured_agent_name,
         "end_user_name": end_user_name,
+        "tts_endpoint": tts_endpoint,
         "business_id": business_id,
         "conversation_id": conversation_id,
         "session_id": stable_session_id,
