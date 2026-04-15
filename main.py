@@ -7,8 +7,11 @@ import base64
 import hashlib
 from typing import Any
 import uuid
-
 from dotenv import load_dotenv
+
+# Load env immediately so API clients can read the correct base URLs
+load_dotenv()
+
 from livekit.agents import AgentServer, AgentSession, JobContext, cli, room_io
 from livekit.plugins import deepgram, google
 
@@ -44,8 +47,7 @@ from agent.livekit_recording import (
     is_recording_enabled,
     start_room_recording,
 )
-from agent.salon_en import SalonAgentEN
-from agent.salon_fr import SalonAgentFR
+from agent.salon_agent import SalonAgent
 from prompts.en import SYSTEM_PROMPT_EN
 from prompts.fr import SYSTEM_PROMPT_FR
 
@@ -56,18 +58,32 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Load environment variables from a .env file in the project root (if present)
-load_dotenv()
 
 # AgentServer allows only one rtc_session per process. To support both English and
 # French, run two worker processes with EN/FR-prefixed names.
 AGENT_NAME = os.environ.get("AGENT_NAME", "sales-girl-agent-en")
-DEFAULT_BUSINESS_USE_CASE = str(os.environ.get("DEFAULT_BUSINESS_USE_CASE", "generic") or "generic").strip().lower()
+AGENT_PORT = int(
+    os.environ.get(
+        "AGENT_PORT",
+        "8082"
+        if str(AGENT_NAME or "").strip().lower().startswith("sales-girl-agent-fr")
+        else "8081",
+    )
+)
+DEFAULT_BUSINESS_USE_CASE = (
+    str(os.environ.get("DEFAULT_BUSINESS_USE_CASE", "generic") or "generic")
+    .strip()
+    .lower()
+)
 FIDELITY_BUSINESS_IDS = {
-    item.strip() for item in str(os.environ.get("FIDELITY_BUSINESS_IDS") or "").split(",") if item.strip()
+    item.strip()
+    for item in str(os.environ.get("FIDELITY_BUSINESS_IDS") or "").split(",")
+    if item.strip()
 }
 EKEDC_BUSINESS_IDS = {
-    item.strip() for item in str(os.environ.get("EKEDC_BUSINESS_IDS") or "").split(",") if item.strip()
+    item.strip()
+    for item in str(os.environ.get("EKEDC_BUSINESS_IDS") or "").split(",")
+    if item.strip()
 }
 FIDELITY_STATIC_PROMPT_EN = (
     "You are Fidelity Bank's AI customer care assistant. Help callers with account inquiries, "
@@ -122,6 +138,7 @@ if not (_is_en_agent_name(AGENT_NAME) or _is_fr_agent_name(AGENT_NAME)):
 server = AgentServer(
     num_idle_processes=1,
     initialize_process_timeout=60,
+    port=AGENT_PORT,
 )
 init_store()
 
@@ -130,7 +147,7 @@ def _short_text(value: Any, limit: int = 320) -> str:
     text = str(value or "").strip()
     if len(text) <= limit:
         return text
-    return f"{text[:limit - 1]}…"
+    return f"{text[: limit - 1]}…"
 
 
 def _summarize_tool_output(value: Any) -> str:
@@ -234,14 +251,20 @@ async def _finalize_session_cleanup(
         try:
             await _drain_background_tasks(userdata)
         except Exception as exc:  # noqa: BLE001
-            logger.exception("Failed to drain background tasks during session cleanup: %s", exc)
+            logger.exception(
+                "Failed to drain background tasks during session cleanup: %s", exc
+            )
 
         recording_status = None
         recording_url = None
         recording_duration_seconds = None
         recording_detail = None
 
-        if conversation_service_enabled(business_id) and session_tracker_id and is_recording_enabled():
+        if (
+            conversation_service_enabled(business_id)
+            and session_tracker_id
+            and is_recording_enabled()
+        ):
             try:
                 logger.info(
                     "Finalizing room recording: session_id=%s egress_id=%s expected_url=%s",
@@ -250,8 +273,12 @@ async def _finalize_session_cleanup(
                     str(userdata.get("recording_expected_url") or ""),
                 )
                 recording_finalized = await finalize_room_recording(
-                    egress_id=str(userdata.get("recording_egress_id") or "").strip() or None,
-                    expected_url=str(userdata.get("recording_expected_url") or "").strip() or None,
+                    egress_id=str(userdata.get("recording_egress_id") or "").strip()
+                    or None,
+                    expected_url=str(
+                        userdata.get("recording_expected_url") or ""
+                    ).strip()
+                    or None,
                     duration_seconds=duration,
                 )
                 recording_status = recording_finalized.status
@@ -281,15 +308,23 @@ async def _finalize_session_cleanup(
                         persisted.get("http_status"),
                     )
             except Exception as exc:  # noqa: BLE001
-                logger.exception("Failed during recording finalization: session_id=%s error=%s", session_tracker_id, exc)
+                logger.exception(
+                    "Failed during recording finalization: session_id=%s error=%s",
+                    session_tracker_id,
+                    exc,
+                )
                 recording_status = recording_status or "failed"
                 recording_detail = recording_detail or str(exc)
 
             _persist_session_event_async(
                 userdata,
-                event_type="recording_ready" if recording_status == "available" else "recording_status",
+                event_type="recording_ready"
+                if recording_status == "available"
+                else "recording_status",
                 role="system",
-                title="Recording available" if recording_status == "available" else "Recording status updated",
+                title="Recording available"
+                if recording_status == "available"
+                else "Recording status updated",
                 body=(
                     f"Audio recording saved to {recording_url}."
                     if recording_status == "available"
@@ -320,7 +355,9 @@ async def _finalize_session_cleanup(
         try:
             await _drain_background_tasks(userdata)
         except Exception as exc:  # noqa: BLE001
-            logger.exception("Failed to flush final background tasks during session cleanup: %s", exc)
+            logger.exception(
+                "Failed to flush final background tasks during session cleanup: %s", exc
+            )
 
         if conversation_service_enabled(business_id) and session_tracker_id:
             try:
@@ -337,21 +374,42 @@ async def _finalize_session_cleanup(
                         ended.get("http_status"),
                     )
             except Exception as exc:  # noqa: BLE001
-                logger.exception("Failed to persist session end: session_id=%s error=%s", session_tracker_id, exc)
+                logger.exception(
+                    "Failed to persist session end: session_id=%s error=%s",
+                    session_tracker_id,
+                    exc,
+                )
+
 
 REQUIRE_VERIFIED_PHONE = os.getenv("REQUIRE_VERIFIED_PHONE", "true").lower() == "true"
-CONVERSATION_SERVICE_REQUIRED = os.getenv("CONVERSATION_SERVICE_REQUIRED", "true").lower() == "true"
-ENABLE_ODION_TTS_EN = os.getenv("ENABLE_ODION_TTS_EN", "false").lower() == "true"
-ODION_TTS_EXPERIMENT_OWNER_ID = str(os.getenv("ODION_TTS_EXPERIMENT_OWNER_ID") or "").strip()
-ODION_TTS_EXPERIMENT_VOICE_ID = str(os.getenv("ODION_TTS_EXPERIMENT_VOICE_ID") or "").strip()
-ODION_TTS_EXPERIMENT_LANGUAGE_HINT = str(os.getenv("ODION_TTS_EXPERIMENT_LANGUAGE_HINT") or "English").strip() or "English"
+CONVERSATION_SERVICE_REQUIRED = (
+    os.getenv("CONVERSATION_SERVICE_REQUIRED", "true").lower() == "true"
+)
+ENABLE_ODION_TTS_EN = os.getenv("ENABLE_ODION_TTS_EN", "true").lower() == "true"
+ENABLE_ODION_TTS_FR = os.getenv("ENABLE_ODION_TTS_FR", "false").lower() == "true"
+ODION_TTS_EXPERIMENT_OWNER_ID = str(
+    os.getenv("ODION_TTS_EXPERIMENT_OWNER_ID") or "mavinomichael@gmail.com"
+).strip()
+ODION_TTS_EXPERIMENT_VOICE_ID = str(
+    os.getenv("ODION_TTS_EXPERIMENT_VOICE_ID") or "d270a5cec6914373b9deed1d1c3cbade"
+).strip()
+ODION_TTS_EXPERIMENT_LANGUAGE_HINT = (
+    str(os.getenv("ODION_TTS_EXPERIMENT_LANGUAGE_HINT") or "English").strip()
+    or "English"
+)
 try:
-    _odion_seed_raw = str(os.getenv("ODION_TTS_EXPERIMENT_SEED") or "").strip()
+    _odion_seed_raw = str(os.getenv("ODION_TTS_EXPERIMENT_SEED") or "0").strip()
     ODION_TTS_EXPERIMENT_SEED = int(_odion_seed_raw) if _odion_seed_raw else None
     if ODION_TTS_EXPERIMENT_SEED is not None and ODION_TTS_EXPERIMENT_SEED < 0:
         ODION_TTS_EXPERIMENT_SEED = None
 except ValueError:
     ODION_TTS_EXPERIMENT_SEED = None
+ODION_TTS_CLONE_SEED = (
+    ODION_TTS_EXPERIMENT_SEED if ODION_TTS_EXPERIMENT_SEED is not None else 0
+)
+STRICT_ODION_CLONE_CONSISTENCY = (
+    os.getenv("STRICT_ODION_CLONE_CONSISTENCY", "true").lower() == "true"
+)
 
 
 def _normalize_business_id(value: str | None) -> str:
@@ -425,7 +483,11 @@ def _decode_room_token(token: str) -> str:
                 return ""
         return ""
     try:
-        return base64.urlsafe_b64decode(raw + "=" * ((4 - len(raw) % 4) % 4)).decode("utf-8").strip()
+        return (
+            base64.urlsafe_b64decode(raw + "=" * ((4 - len(raw) % 4) % 4))
+            .decode("utf-8")
+            .strip()
+        )
     except Exception:
         return ""
 
@@ -476,7 +538,9 @@ def _room_name_from_ctx(ctx: JobContext) -> str:
     # During entrypoint bootstrap, ctx.room may not be connected yet.
     # ctx.job.room.name is available from assignment metadata.
     try:
-        job_room_name = str(getattr(getattr(getattr(ctx, "job", None), "room", None), "name", "") or "").strip()
+        job_room_name = str(
+            getattr(getattr(getattr(ctx, "job", None), "room", None), "name", "") or ""
+        ).strip()
         if job_room_name:
             return job_room_name
     except Exception:
@@ -500,19 +564,31 @@ def _decode_identity_email(identity: str) -> str:
         return ""
     encoded = str(identity)[len(prefix) :]
     try:
-        decoded = base64.urlsafe_b64decode(encoded + "=" * ((4 - len(encoded) % 4) % 4)).decode("utf-8")
+        decoded = base64.urlsafe_b64decode(
+            encoded + "=" * ((4 - len(encoded) % 4) % 4)
+        ).decode("utf-8")
     except Exception:
         return ""
     return _normalize_end_user_id(decoded)
 
 
-def _participant_identity_from_ctx(ctx: JobContext) -> tuple[str, str, str, str, str, str, str]:
+# Extracts participant identity and TTS endpoint from context\ndef _participant_identity_from_ctx(
+    ctx: JobContext,
+) -> tuple[str, str, str, str, str, str, str]:
     room = getattr(ctx, "room", None)
     room_name = _room_name_from_ctx(ctx)
-    fallback_business_id = _normalize_business_id(os.getenv("CONVERSATION_BUSINESS_ID", ""))
+    fallback_business_id = _normalize_business_id(
+        os.getenv("CONVERSATION_BUSINESS_ID", "")
+    )
 
     # First preference for web: encoded identity/context in room name (available at bootstrap).
-    email_from_room, room_business_id, room_config_agent_id, room_configured_name, room_end_user_name = _web_room_context_from_name(room_name)
+    (
+        email_from_room,
+        room_business_id,
+        room_config_agent_id,
+        room_configured_name,
+        room_end_user_name,
+    ) = _web_room_context_from_name(room_name)
     if not email_from_room:
         email_from_room = _email_from_room_name(room_name)
     if email_from_room:
@@ -547,8 +623,12 @@ def _participant_identity_from_ctx(ctx: JobContext) -> tuple[str, str, str, str,
             try:
                 payload = json.loads(metadata_raw)
                 metadata_business_id = str(payload.get("business_id") or "").strip()
-                metadata_config_agent_id = str(payload.get("config_agent_id") or "").strip()
-                metadata_configured_agent_name = str(payload.get("configured_agent_name") or "").strip()
+                metadata_config_agent_id = str(
+                    payload.get("config_agent_id") or ""
+                ).strip()
+                metadata_configured_agent_name = str(
+                    payload.get("configured_agent_name") or ""
+                ).strip()
                 metadata_end_user_name = str(payload.get("end_user_name") or "").strip()
                 metadata_tts_endpoint = str(payload.get("tts_endpoint") or "").strip()
                 email_candidate = str(payload.get("end_user_email") or "").strip()
@@ -558,20 +638,26 @@ def _participant_identity_from_ctx(ctx: JobContext) -> tuple[str, str, str, str,
                         return (
                             normalized_email,
                             "web",
-                            _normalize_business_id(metadata_business_id) or fallback_business_id,
+                            _normalize_business_id(metadata_business_id)
+                            or fallback_business_id,
                             metadata_config_agent_id,
                             metadata_configured_agent_name,
                             metadata_end_user_name,
                             metadata_tts_endpoint,
                         )
-                candidate = str(payload.get("end_user_phone") or payload.get("end_user_id") or "")
+                candidate = str(
+                    payload.get("end_user_phone") or payload.get("end_user_id") or ""
+                )
                 normalized = _normalize_end_user_id(candidate)
                 if normalized:
-                    channel = str(payload.get("identity_type") or "voice").strip().lower()
+                    channel = (
+                        str(payload.get("identity_type") or "voice").strip().lower()
+                    )
                     return (
                         normalized,
                         ("web" if channel == "web" else "voice"),
-                        _normalize_business_id(metadata_business_id) or fallback_business_id,
+                        _normalize_business_id(metadata_business_id)
+                        or fallback_business_id,
                         metadata_config_agent_id,
                         metadata_configured_agent_name,
                         metadata_end_user_name,
@@ -609,12 +695,26 @@ def _participant_identity_from_ctx(ctx: JobContext) -> tuple[str, str, str, str,
 async def _init_session_userdata(ctx: JobContext, language: str) -> dict[str, Any]:
     room_name = _room_name_from_ctx(ctx)
     stable_session_id = _stable_id(room_name, prefix="sid", max_len=120)
-    end_user_id, identity_type, business_id, config_agent_id, configured_agent_name, end_user_name = _participant_identity_from_ctx(ctx)
+    (
+        end_user_id,
+        identity_type,
+        business_id,
+        config_agent_id,
+        configured_agent_name,
+        end_user_name,
+    ) = _participant_identity_from_ctx(ctx)
     if REQUIRE_VERIFIED_PHONE and not end_user_id:
         try:
             # In web flows, participant metadata/identity can arrive slightly after job start.
             await asyncio.wait_for(ctx.wait_for_participant(), timeout=12)
-            end_user_id, identity_type, business_id, config_agent_id, configured_agent_name, end_user_name = _participant_identity_from_ctx(ctx)
+            (
+                end_user_id,
+                identity_type,
+                business_id,
+                config_agent_id,
+                configured_agent_name,
+                end_user_name,
+            ) = _participant_identity_from_ctx(ctx)
             logger.info(
                 "Retried participant identity after join: end_user_id=%s type=%s business_id=%s config_agent_id=%s configured_name=%s end_user_name=%s tts_endpoint=%s",
                 end_user_id,
@@ -629,11 +729,17 @@ async def _init_session_userdata(ctx: JobContext, language: str) -> dict[str, An
             # Some jobs can reach here before room connection is established.
             logger.warning("Could not wait for participant yet: %s", exc)
         except asyncio.TimeoutError:
-            logger.warning("Timed out waiting for participant before identity extraction.")
+            logger.warning(
+                "Timed out waiting for participant before identity extraction."
+            )
     if REQUIRE_VERIFIED_PHONE and not end_user_id:
-        raise RuntimeError("Verified end-user identifier is required to start a session.")
+        raise RuntimeError(
+            "Verified end-user identifier is required to start a session."
+        )
     effective_config_agent_id = str(config_agent_id or AGENT_NAME)
-    conversation_id = f"{effective_config_agent_id}:{end_user_id}" if end_user_id else room_name
+    conversation_id = (
+        f"{effective_config_agent_id}:{end_user_id}" if end_user_id else room_name
+    )
 
     logger.info(
         "Session init: runtime_agent=%s config_agent=%s configured_name=%s business_id=%s room=%s end_user_id=%s type=%s conversation_id=%s",
@@ -670,7 +776,9 @@ async def _init_session_userdata(ctx: JobContext, language: str) -> dict[str, An
 
 def _wire_session_timeline(session: AgentSession, userdata: dict[str, Any]) -> None:
     def _next_event_idx() -> int:
-        userdata["timeline_event_index"] = int(userdata.get("timeline_event_index", 0)) + 1
+        userdata["timeline_event_index"] = (
+            int(userdata.get("timeline_event_index", 0)) + 1
+        )
         return int(userdata["timeline_event_index"])
 
     @session.on("user_input_transcribed")
@@ -740,6 +848,7 @@ def _wire_session_timeline(session: AgentSession, userdata: dict[str, Any]) -> N
         if role_l in {"user", "assistant"}:
             business_id = str(userdata.get("business_id") or "")
             if conversation_service_enabled(business_id):
+
                 async def _persist_remote() -> None:
                     idempotency = _stable_id(
                         f"{userdata.get('session_id')}-{event_idx}-{role_l}",
@@ -752,7 +861,10 @@ def _wire_session_timeline(session: AgentSession, userdata: dict[str, Any]) -> N
                         content=content,
                         session_id=str(userdata.get("session_id") or ""),
                         idempotency_key=idempotency,
-                        metadata={"agent_id": userdata.get("agent_id"), "language": userdata.get("language")},
+                        metadata={
+                            "agent_id": userdata.get("agent_id"),
+                            "language": userdata.get("language"),
+                        },
                         business_id=business_id,
                     )
                     if str(persisted.get("status") or "") == "failed":
@@ -827,7 +939,9 @@ def _wire_session_timeline(session: AgentSession, userdata: dict[str, Any]) -> N
             )
 
 
-def _instructions_with_resume_context(base_prompt: str, userdata: dict[str, Any]) -> str:
+def _instructions_with_resume_context(
+    base_prompt: str, userdata: dict[str, Any]
+) -> str:
     phone = str(userdata.get("end_user_id") or "")
     agent_id = str(userdata.get("agent_id") or AGENT_NAME)
     if not phone:
@@ -868,7 +982,9 @@ async def _instructions_with_context(base_prompt: str, userdata: dict[str, Any])
     end_user_id = str(userdata.get("end_user_id") or "")
     if not end_user_id:
         return base_prompt
-    business_use_case = str(userdata.get("business_use_case") or "ekedc").strip().lower()
+    business_use_case = (
+        str(userdata.get("business_use_case") or "ekedc").strip().lower()
+    )
     enabled_tool_names = {
         str(name or "").strip()
         for name in (userdata.get("enabled_tool_names") or [])
@@ -876,7 +992,9 @@ async def _instructions_with_context(base_prompt: str, userdata: dict[str, Any])
     }
     configured_agent_name = str(userdata.get("configured_agent_name") or "").strip()
     if configured_agent_name:
-        logger.info("Applying configured agent name to prompt: %s", configured_agent_name)
+        logger.info(
+            "Applying configured agent name to prompt: %s", configured_agent_name
+        )
         base_prompt = (
             f"{base_prompt}\n\n"
             f"Agent profile detail: your name is '{configured_agent_name}'.\n"
@@ -1032,9 +1150,13 @@ async def _instructions_with_context(base_prompt: str, userdata: dict[str, Any])
             "- If the caller asks for a ticket, or agrees to ticket follow-up, call create_ticket immediately before replying.\n"
             "- In the exact turn where you say a ticket was created, create_ticket must already have succeeded."
         )
-    channel = "web" if str(userdata.get("identity_type") or "").lower() == "web" else "voice"
+    channel = (
+        "web" if str(userdata.get("identity_type") or "").lower() == "web" else "voice"
+    )
     business_id = _normalize_business_id(str(userdata.get("business_id") or ""))
-    config_agent_id = str(userdata.get("agent_config_id") or userdata.get("agent_id") or AGENT_NAME)
+    config_agent_id = str(
+        userdata.get("agent_config_id") or userdata.get("agent_id") or AGENT_NAME
+    )
 
     if conversation_service_enabled(business_id):
         resolved = await resolve_conversation_remote(
@@ -1056,8 +1178,14 @@ async def _instructions_with_context(base_prompt: str, userdata: dict[str, Any])
         conv_id = str(resolved.get("conversation_id") or "")
         if conv_id:
             userdata["conversation_id"] = conv_id
-            context_payload = await fetch_context_remote(conv_id, limit=30, business_id=business_id)
-            msgs = context_payload.get("messages") if isinstance(context_payload, dict) else None
+            context_payload = await fetch_context_remote(
+                conv_id, limit=30, business_id=business_id
+            )
+            msgs = (
+                context_payload.get("messages")
+                if isinstance(context_payload, dict)
+                else None
+            )
             if isinstance(msgs, list) and msgs:
                 lines: list[str] = []
                 for m in msgs[-30:]:
@@ -1108,12 +1236,16 @@ def _validate_runtime_requirements() -> None:
         )
 
 
-async def _fetch_active_agent_runtime_config(userdata: dict[str, Any]) -> dict[str, Any]:
+async def _fetch_active_agent_runtime_config(
+    userdata: dict[str, Any],
+) -> dict[str, Any]:
     business_id = _normalize_business_id(str(userdata.get("business_id") or ""))
     config_agent_id = str(userdata.get("agent_config_id") or "").strip()
     if not business_id or not config_agent_id:
         return {}
-    payload = await get_agent_active_config(agent_id=config_agent_id, business_id=business_id)
+    payload = await get_agent_active_config(
+        agent_id=config_agent_id, business_id=business_id
+    )
     if str(payload.get("status") or "") == "failed":
         logger.error(
             "Agent config fetch failed: business_id=%s agent_id=%s detail=%s http_status=%s",
@@ -1154,16 +1286,17 @@ def _hydrate_userdata_from_active_agent_config(
 ) -> None:
     cfg = active_agent_config or {}
     tools = cfg.get("tools")
-    active_tools = [
-        tool
-        for tool in tools
-        if isinstance(tool, dict) and str(tool.get("name") or "").strip()
-    ] if isinstance(tools, list) else []
+    active_tools = (
+        [
+            tool
+            for tool in tools
+            if isinstance(tool, dict) and str(tool.get("name") or "").strip()
+        ]
+        if isinstance(tools, list)
+        else []
+    )
     userdata["active_tools"] = active_tools
-    enabled_tool_names = [
-        str(tool.get("name") or "").strip()
-        for tool in active_tools
-    ]
+    enabled_tool_names = [str(tool.get("name") or "").strip() for tool in active_tools]
     userdata["enabled_tool_names"] = enabled_tool_names
 
     expected_tool_by_use_case = {
@@ -1171,7 +1304,9 @@ def _hydrate_userdata_from_active_agent_config(
         "restaurant": "fetch_menu_availability",
         "fashion": "fetch_product_availability",
     }
-    tool_name = expected_tool_by_use_case.get(str(business_use_case or "").strip().lower())
+    tool_name = expected_tool_by_use_case.get(
+        str(business_use_case or "").strip().lower()
+    )
     if not tool_name:
         userdata["live_data_endpoint"] = ""
         return
@@ -1219,7 +1354,9 @@ def _strip_live_connectivity_lines(text: str) -> str:
     return "\n".join(kept_lines).strip()
 
 
-def _active_tool_records(active_agent_config: dict[str, Any] | None) -> list[dict[str, Any]]:
+def _active_tool_records(
+    active_agent_config: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
     cfg = active_agent_config or {}
     tools = cfg.get("tools")
     if not isinstance(tools, list):
@@ -1235,7 +1372,9 @@ def _tool_description(tool: dict[str, Any]) -> str:
     return " ".join(str(tool.get("description") or "").split()).strip()
 
 
-def _runtime_tool_guidance(active_agent_config: dict[str, Any] | None, business_use_case: str) -> str:
+def _runtime_tool_guidance(
+    active_agent_config: dict[str, Any] | None, business_use_case: str
+) -> str:
     tools = _active_tool_records(active_agent_config)
     enabled_names = {str(tool.get("name") or "").strip() for tool in tools}
     by_name = {str(tool.get("name") or "").strip(): tool for tool in tools}
@@ -1245,6 +1384,9 @@ def _runtime_tool_guidance(active_agent_config: dict[str, Any] | None, business_
         "- Use an enabled tool whenever it is the right way to answer or complete the request.",
         "- If a tool is not listed as enabled here, do not act as if you can use it.",
     ]
+    lines.append(
+        "- search_business_knowledge is enabled. Use it to look up saved business facts, policies, amenities, FAQs, and other documented information before saying you cannot answer."
+    )
 
     if "create_ticket" in enabled_names:
         desc = _tool_description(by_name["create_ticket"])
@@ -1252,7 +1394,9 @@ def _runtime_tool_guidance(active_agent_config: dict[str, Any] | None, business_
             f"- create_ticket is enabled. Use it for complaints, unresolved requests, or any human follow-up that should be handed to the team. {desc}".strip()
         )
     else:
-        lines.append("- create_ticket is not enabled. Do not say a support ticket was created.")
+        lines.append(
+            "- create_ticket is not enabled. Do not say a support ticket was created."
+        )
 
     if business_use_case == "hotel":
         if "create_booking" in enabled_names:
@@ -1261,7 +1405,9 @@ def _runtime_tool_guidance(active_agent_config: dict[str, Any] | None, business_
                 f"- create_booking is enabled. Use it only after room availability and pricing have been checked successfully and the guest has confirmed the booking details. {desc}".strip()
             )
         else:
-            lines.append("- create_booking is not enabled. Do not say a room booking was created.")
+            lines.append(
+                "- create_booking is not enabled. Do not say a room booking was created."
+            )
         if "fetch_room_availability" in enabled_names:
             desc = _tool_description(by_name["fetch_room_availability"])
             lines.append(
@@ -1279,7 +1425,9 @@ def _runtime_tool_guidance(active_agent_config: dict[str, Any] | None, business_
                 f"- create_order is enabled. Use it only after current menu details and prices have been checked successfully and the customer confirms the order. {desc}".strip()
             )
         else:
-            lines.append("- create_order is not enabled. Do not say an order was created.")
+            lines.append(
+                "- create_order is not enabled. Do not say an order was created."
+            )
         if "fetch_menu_availability" in enabled_names:
             desc = _tool_description(by_name["fetch_menu_availability"])
             lines.append(
@@ -1297,7 +1445,9 @@ def _runtime_tool_guidance(active_agent_config: dict[str, Any] | None, business_
                 f"- create_order is enabled. Use it only after current product details and prices have been checked successfully and the customer confirms the order. {desc}".strip()
             )
         else:
-            lines.append("- create_order is not enabled. Do not say an order was created.")
+            lines.append(
+                "- create_order is not enabled. Do not say an order was created."
+            )
         if "fetch_product_availability" in enabled_names:
             desc = _tool_description(by_name["fetch_product_availability"])
             lines.append(
@@ -1311,7 +1461,8 @@ def _runtime_tool_guidance(active_agent_config: dict[str, Any] | None, business_
     generic_tool_names = sorted(
         name
         for name in enabled_names
-        if name not in {
+        if name
+        not in {
             "create_ticket",
             "create_booking",
             "create_order",
@@ -1323,9 +1474,13 @@ def _runtime_tool_guidance(active_agent_config: dict[str, Any] | None, business_
     for name in generic_tool_names:
         desc = _tool_description(by_name[name])
         if desc:
-            lines.append(f"- {name} is enabled. {desc} Use it only when the caller's request clearly needs it.")
+            lines.append(
+                f"- {name} is enabled. {desc} Use it only when the caller's request clearly needs it."
+            )
         else:
-            lines.append(f"- {name} is enabled. Use it only when the caller's request clearly needs it.")
+            lines.append(
+                f"- {name} is enabled. Use it only when the caller's request clearly needs it."
+            )
     return "\n".join(lines)
 
 
@@ -1347,6 +1502,34 @@ def _detect_business_use_case(
         for tool in tools
         if isinstance(tools, list) and isinstance(tool, dict)
     }
+    fidelity_tool_names = {
+        "account_overview",
+        "recent_transactions",
+        "transaction_status",
+        "block_card",
+        "unblock_card",
+        "reverse_failed_transaction",
+    }
+    if tool_names & fidelity_tool_names:
+        return "fidelity"
+
+    ekedc_tool_names = {
+        "resolve_customer",
+        "customer_account_lookup",
+        "tariff_profile",
+        "payments_summary",
+        "vending_history",
+        "update_customer_record",
+        "create_payment_plan",
+        "create_complaint",
+        "create_outage_report",
+        "create_meter_request",
+        "create_escalation_ticket",
+        "check_case_status",
+        "refresh_meter_token_state",
+    }
+    if tool_names & ekedc_tool_names:
+        return "ekedc"
     if "fetch_room_availability" in tool_names or "create_booking" in tool_names:
         return "hotel"
     if "fetch_menu_availability" in tool_names:
@@ -1362,18 +1545,96 @@ def _detect_business_use_case(
             str(userdata.get("configured_agent_name") or ""),
         ]
     ).lower()
-    if any(token in text for token in ("fidelity", "fidelity bank", "block card", "recent transactions", "failed transaction", "account balance")):
+    if any(
+        token in text
+        for token in (
+            "ekedc",
+            "ekedc demo",
+            "electricity customer support",
+            "electricity support",
+            "tariff band",
+            "meter request",
+            "token vending",
+            "power outage",
+            "low voltage",
+        )
+    ):
+        return "ekedc"
+    if any(
+        token in text
+        for token in (
+            "fidelity",
+            "fidelity bank",
+            "block card",
+            "recent transactions",
+            "failed transaction",
+            "account balance",
+        )
+    ):
         return "fidelity"
-    if any(token in text for token in ("restaurant", "menu", "order tool", "create_order", "dining", "host stand", "reservation request", "pickup", "delivery")):
+    if any(
+        token in text
+        for token in (
+            "restaurant",
+            "menu",
+            "order tool",
+            "create_order",
+            "dining",
+            "host stand",
+            "reservation request",
+            "pickup",
+            "delivery",
+        )
+    ):
         return "restaurant"
-    if any(token in text for token in ("fashion", "size", "sizes", "style", "styles", "product availability", "catalog", "boutique", "apparel")):
+    if any(
+        token in text
+        for token in (
+            "fashion",
+            "size",
+            "sizes",
+            "style",
+            "styles",
+            "product availability",
+            "catalog",
+            "boutique",
+            "apparel",
+        )
+    ):
         return "fashion"
-    if any(token in text for token in ("hotel", "guest support", "room availability", "check-in", "check out", "accommodation", "concierge", "room reservation")):
+    if any(
+        token in text
+        for token in (
+            "hotel",
+            "guest support",
+            "room availability",
+            "check-in",
+            "check out",
+            "accommodation",
+            "concierge",
+            "room reservation",
+        )
+    ):
         return "hotel"
-    if any(token in text for token in ("ekedc", "electricity", "tariff", "meter", "outage", "token vending")):
+    if any(
+        token in text
+        for token in (
+            "ekedc",
+            "electricity",
+            "tariff",
+            "meter",
+            "outage",
+            "token vending",
+        )
+    ):
         return "ekedc"
 
-    return DEFAULT_BUSINESS_USE_CASE if DEFAULT_BUSINESS_USE_CASE in {"ekedc", "fidelity", "hotel", "restaurant", "fashion", "generic"} else "generic"
+    return (
+        DEFAULT_BUSINESS_USE_CASE
+        if DEFAULT_BUSINESS_USE_CASE
+        in {"ekedc", "fidelity", "hotel", "restaurant", "fashion", "generic"}
+        else "generic"
+    )
 
 
 def _effective_base_prompt(
@@ -1391,7 +1652,9 @@ def _effective_base_prompt(
         "restaurant": "fetch_menu_availability",
         "fashion": "fetch_product_availability",
     }
-    live_endpoint_url = _active_tool_url(cfg, live_tool_by_use_case.get(business_use_case, ""))
+    live_endpoint_url = _active_tool_url(
+        cfg, live_tool_by_use_case.get(business_use_case, "")
+    )
     live_data_connected = bool(str(live_endpoint_url or "").strip())
     if not configured_instructions:
         if business_use_case == "hotel":
@@ -1421,7 +1684,9 @@ def _effective_base_prompt(
         "you are a helpful ai voice assistant for this business.",
     }
     if normalized in default_like:
-        logger.info("Ignoring default-like dashboard instructions; keeping static domain prompt.")
+        logger.info(
+            "Ignoring default-like dashboard instructions; keeping static domain prompt."
+        )
         if business_use_case == "fidelity":
             return FIDELITY_STATIC_PROMPT_EN
         if business_use_case == "hotel":
@@ -1500,9 +1765,20 @@ def _effective_base_prompt(
     if business_use_case == "generic":
         return f"{configured_instructions.rstrip()}\n\n{runtime_tool_guidance}"
 
-    incompatible_tokens = ("salon", "appointment", "hair", "beauty", "booking", "barber", "spa", "receptionist")
+    incompatible_tokens = (
+        "salon",
+        "appointment",
+        "hair",
+        "beauty",
+        "booking",
+        "barber",
+        "spa",
+        "receptionist",
+    )
     if any(token in normalized for token in incompatible_tokens):
-        logger.warning("Ignoring incompatible dashboard instructions containing stale non-EKEDC persona terms.")
+        logger.warning(
+            "Ignoring incompatible dashboard instructions containing stale non-EKEDC persona terms."
+        )
         return static_prompt
 
     return (
@@ -1515,7 +1791,9 @@ def _effective_base_prompt(
 def _ops_tool_metadata_from_userdata(userdata: dict[str, Any]) -> dict[str, Any]:
     return {
         "client_id": os.getenv("AGENT_CLIENT_ID", "sales-girl-internal"),
-        "agent_id": str(userdata.get("agent_config_id") or userdata.get("agent_id") or AGENT_NAME),
+        "agent_id": str(
+            userdata.get("agent_config_id") or userdata.get("agent_id") or AGENT_NAME
+        ),
         "business_id": str(userdata.get("business_id") or ""),
         "business_use_case": str(userdata.get("business_use_case") or ""),
         "conversation_id": str(userdata.get("conversation_id") or ""),
@@ -1545,7 +1823,11 @@ async def _build_preloaded_ops_context(userdata: dict[str, Any]) -> str:
             if isinstance(resolved_overview, dict):
                 overview = resolved_overview
         except Exception as exc:  # noqa: BLE001
-            logger.warning("Ops preload Fidelity account overview failed for %s: %s", caller_id, exc)
+            logger.warning(
+                "Ops preload Fidelity account overview failed for %s: %s",
+                caller_id,
+                exc,
+            )
 
         try:
             resolved_transactions = await ops_get_recent_transactions(
@@ -1556,13 +1838,25 @@ async def _build_preloaded_ops_context(userdata: dict[str, Any]) -> str:
             if isinstance(resolved_transactions, dict):
                 transactions_payload = resolved_transactions
         except Exception as exc:  # noqa: BLE001
-            logger.warning("Ops preload Fidelity transactions failed for %s: %s", caller_id, exc)
+            logger.warning(
+                "Ops preload Fidelity transactions failed for %s: %s", caller_id, exc
+            )
 
         account = overview.get("account") if isinstance(overview, dict) else {}
+        if not isinstance(account, dict):
+            account = {}
         cards = overview.get("cards") if isinstance(overview, dict) else []
-        transactions = transactions_payload.get("transactions") if isinstance(transactions_payload, dict) else None
+        transactions = (
+            transactions_payload.get("transactions")
+            if isinstance(transactions_payload, dict)
+            else None
+        )
         if not isinstance(transactions, list) or not transactions:
-            transactions = overview.get("recent_transactions") if isinstance(overview, dict) else []
+            transactions = (
+                overview.get("recent_transactions")
+                if isinstance(overview, dict)
+                else []
+            )
 
         card_lines = []
         for item in cards[:2] if isinstance(cards, list) else []:
@@ -1577,7 +1871,9 @@ async def _build_preloaded_ops_context(userdata: dict[str, Any]) -> str:
                     f"- {item.get('transaction_date') or item.get('date')}: {item.get('narration') or item.get('title') or 'Transaction'} amount={item.get('amount_naira') or item.get('amount')} status={item.get('transaction_status') or item.get('status')}"
                 )
 
-        customer_name = str(overview.get("customer_name") or overview.get("name") or "").strip()
+        customer_name = str(
+            overview.get("customer_name") or overview.get("name") or ""
+        ).strip()
         logger.info(
             "Preloaded Fidelity caller context: email=%s cards=%s transactions=%s",
             caller_id,
@@ -1649,21 +1945,41 @@ async def _build_preloaded_ops_context(userdata: dict[str, Any]) -> str:
     except Exception as exc:  # noqa: BLE001
         logger.warning("Ops preload vending lookup failed for %s: %s", caller_id, exc)
 
-    customer_name = str(customer.get("name") or "").strip() if isinstance(customer, dict) else ""
-    customer_email = str(customer.get("email") or "").strip() if isinstance(customer, dict) else ""
-    customer_phone = str(customer.get("phone") or "").strip() if isinstance(customer, dict) else ""
-    account_number = str(customer.get("account_number") or tariff.get("account_number") or "").strip()
-    tariff_band = str(tariff.get("tariff_band") or customer.get("tariff_band") or "").strip()
-    meter_type = str(tariff.get("meter_type") or customer.get("meter_type") or "").strip()
-    business_unit = str(tariff.get("business_unit") or customer.get("business_unit") or "").strip()
-    service_address = str(tariff.get("service_address") or customer.get("service_address") or "").strip()
-    feeder_name = str(tariff.get("feeder_name") or customer.get("feeder_name") or "").strip()
+    customer_name = (
+        str(customer.get("name") or "").strip() if isinstance(customer, dict) else ""
+    )
+    customer_email = (
+        str(customer.get("email") or "").strip() if isinstance(customer, dict) else ""
+    )
+    customer_phone = (
+        str(customer.get("phone") or "").strip() if isinstance(customer, dict) else ""
+    )
+    account_number = str(
+        customer.get("account_number") or tariff.get("account_number") or ""
+    ).strip()
+    tariff_band = str(
+        tariff.get("tariff_band") or customer.get("tariff_band") or ""
+    ).strip()
+    meter_type = str(
+        tariff.get("meter_type") or customer.get("meter_type") or ""
+    ).strip()
+    business_unit = str(
+        tariff.get("business_unit") or customer.get("business_unit") or ""
+    ).strip()
+    service_address = str(
+        tariff.get("service_address") or customer.get("service_address") or ""
+    ).strip()
+    feeder_name = str(
+        tariff.get("feeder_name") or customer.get("feeder_name") or ""
+    ).strip()
     payment_items = payments.get("payments") if isinstance(payments, dict) else []
     vend_items = vending.get("vend_history") if isinstance(vending, dict) else []
     payment_lines = []
     for item in payment_items[:3] if isinstance(payment_items, list) else []:
         if isinstance(item, dict):
-            payment_lines.append(f"- {item.get('date')}: amount={item.get('amount')} status={item.get('status')}")
+            payment_lines.append(
+                f"- {item.get('date')}: amount={item.get('amount')} status={item.get('status')}"
+            )
     vend_lines = []
     for item in vend_items[:3] if isinstance(vend_items, list) else []:
         if isinstance(item, dict):
@@ -1701,7 +2017,9 @@ async def _build_preloaded_ops_context(userdata: dict[str, Any]) -> str:
     )
 
 
-def _instructions_with_preloaded_ops_context(base_prompt: str, preloaded_context: str) -> str:
+def _instructions_with_preloaded_ops_context(
+    base_prompt: str, preloaded_context: str
+) -> str:
     if not preloaded_context:
         return base_prompt
     return f"{base_prompt}\n\n{preloaded_context}\n"
@@ -1710,58 +2028,14 @@ def _instructions_with_preloaded_ops_context(base_prompt: str, preloaded_context
 def _kickoff_prompt_for_language(language: str, business_use_case: str) -> str:
     lang = str(language or "").strip().lower()
     if lang == "fr":
-        if business_use_case == "hotel":
-            return (
-                "Commencez la conversation maintenant. Saluez d'abord l'appelant en français, présentez-vous "
-                "brièvement et proposez votre aide concernant sa demande d'hotel en utilisant le contexte déjà disponible. "
-                "Ne demandez pas d'abord l'email ou le numéro de compte. "
-                "N'énumérez pas immédiatement tout le profil de l'appelant ; saluez d'abord puis attendez sa demande."
-            )
         return (
-            "Commencez la conversation maintenant. Saluez d'abord l'appelant en français, présentez-vous "
-            "brièvement et proposez votre aide concernant sa demande auprès de l'entreprise en utilisant le contexte déjà disponible. "
+            "Commencez la conversation maintenant. Saluez l'appelant en français. Présentez-vous brièvement par votre nom et proposez votre aide de manière naturelle, en fonction de votre rôle spécifique. "
             "Ne demandez pas d'abord l'email ou d'autres informations d'identification. "
             "N'énumérez pas immédiatement tout le profil de l'appelant ; saluez d'abord puis attendez sa demande."
         )
-    if business_use_case == "fidelity":
-        return (
-            "Start the conversation now. Greet the caller first, introduce yourself briefly, and proactively "
-            "offer help with their Fidelity Bank account requests using the context you already have. Do not ask "
-            "for their email as your first move. Do not dump the caller profile immediately; greet first and "
-            "wait for the caller's request."
-        )
-    if business_use_case == "hotel":
-        return (
-            "Start the conversation now. Greet the guest first, introduce yourself briefly, and proactively "
-            "offer help with hotel questions, room availability, and booking requests using the context you already have. "
-            "Do not ask for their email as your first move. Do not dump the guest profile immediately; greet first and "
-            "wait for the guest's request."
-        )
-    if business_use_case == "restaurant":
-        return (
-            "Start the conversation now. Greet the customer first, introduce yourself briefly, and proactively "
-            "offer help with menu questions, reservations, and order requests using the context you already have. "
-            "Do not ask for their email as your first move. Do not dump the customer profile immediately; greet first and "
-            "wait for the customer's request."
-        )
-    if business_use_case == "fashion":
-        return (
-            "Start the conversation now. Greet the customer first, introduce yourself briefly, and proactively "
-            "offer help with product questions, sizes, availability, and order requests using the context you already have. "
-            "Do not ask for their email as your first move. Do not dump the customer profile immediately; greet first and "
-            "wait for the customer's request."
-        )
-    if business_use_case == "generic":
-        return (
-            "Start the conversation now. Greet the caller first, introduce yourself briefly, and proactively "
-            "offer help with the business request they have using the context you already have. Do not ask for email "
-            "or other identifiers as your first move. Greet first and wait for the caller's request."
-        )
     return (
-        "Start the conversation now. Greet the caller first, introduce yourself briefly, and proactively "
-        "offer help with the business request they have using the context you already have. Do not ask for email "
-        "or other identifiers as your first move. Do not dump the caller profile immediately; greet first and "
-        "wait for the caller's request."
+        "Start the conversation now. Greet the caller first in English. Introduce yourself briefly by name and offer assistance naturally based on your specific role and instructions. "
+        "Do not ask for email or other identifiers as your first move. Do not dump the caller profile immediately; greet first and wait for the caller's request."
     )
 
 
@@ -1775,7 +2049,7 @@ def _build_session_for_language(
     if language == "fr":
         return AgentSession(
             stt=deepgram.STT(language="fr"),
-            tts=deepgram.TTS(model="aura-2-agathe-fr"),
+            tts=tts_engine or deepgram.TTS(model="aura-2-agathe-fr"),
             llm=google.LLM(model="gemini-2.0-flash"),
             userdata=userdata,
         )
@@ -1788,7 +2062,9 @@ def _build_session_for_language(
     )
 
 
-def _trigger_first_turn(session: AgentSession, *, language: str, business_use_case: str) -> None:
+def _trigger_first_turn(
+    session: AgentSession, *, language: str, business_use_case: str
+) -> None:
     try:
         session.generate_reply(
             instructions=_kickoff_prompt_for_language(language, business_use_case),
@@ -1808,6 +2084,119 @@ def _should_use_odion_tts_for_language(config: dict[str, Any], language: str) ->
         return True
     language = str(language or "").strip().lower()
     return scope == language
+
+
+def _normalized_language_code(value: str) -> str:
+    lowered = str(value or "").strip().lower()
+    if lowered in {"fr", "french", "français", "francais"}:
+        return "fr"
+    return "en"
+
+
+def _build_tts_engine_for_language(
+    *,
+    language: str,
+    active_agent_config: dict[str, Any],
+    userdata: dict[str, Any],
+    business_id: str,
+) -> Any:
+    lang = str(language or "").strip().lower()
+    is_fr = lang == "fr"
+    fallback_tts: Any = (
+        deepgram.TTS(model="aura-2-agathe-fr")
+        if is_fr
+        else deepgram.TTS(model="aura-asteria-en")
+    )
+    odion_enabled = ENABLE_ODION_TTS_FR if is_fr else ENABLE_ODION_TTS_EN
+    fallback_label = "French" if is_fr else "English"
+
+    use_experiment_clone = bool(ODION_TTS_EXPERIMENT_OWNER_ID) and bool(
+        ODION_TTS_EXPERIMENT_VOICE_ID
+    )
+    tts_voice_id = (
+        ODION_TTS_EXPERIMENT_VOICE_ID
+        if use_experiment_clone
+        else str(active_agent_config.get("tts_voice_id") or "").strip()
+    )
+    tts_owner_id = (
+        ODION_TTS_EXPERIMENT_OWNER_ID
+        if use_experiment_clone
+        else str(active_agent_config.get("tts_owner_id") or "").strip() or business_id
+    )
+    tts_language_hint = (
+        ("French" if is_fr else "English")
+        if use_experiment_clone
+        else str(
+            active_agent_config.get("tts_language_hint")
+            or ("French" if is_fr else "English")
+        ).strip()
+        or ("French" if is_fr else "English")
+    )
+    use_configured_clone = use_experiment_clone or _should_use_odion_tts_for_language(
+        active_agent_config, lang
+    )
+    use_odion_default = not use_configured_clone
+
+    if not odion_enabled:
+        logger.info(
+            "ENABLE_ODION_TTS_%s=false; using Deepgram TTS for %s session.",
+            "FR" if is_fr else "EN",
+            fallback_label,
+        )
+        return fallback_tts
+
+    try:
+        if use_configured_clone:
+            tts_engine = OdionTTS(
+                owner_id=tts_owner_id,
+                voice_id=tts_voice_id,
+                language=tts_language_hint,
+                seed=ODION_TTS_CLONE_SEED,
+                mode="cloned_voice",
+            )
+            logger.info(
+                "Using Odion cloned TTS for %s session: agent_config_id=%s voice_id=%s owner_id=%s seed=%s",
+                fallback_label,
+                userdata.get("agent_config_id"),
+                tts_voice_id,
+                tts_owner_id,
+                ODION_TTS_CLONE_SEED,
+            )
+            return tts_engine
+        if use_odion_default:
+            tts_engine = OdionTTS(
+                owner_id=tts_owner_id or business_id,
+                voice_id=None,
+                language=tts_language_hint,
+                seed=None,
+                mode="default_voice",
+            )
+            logger.info(
+                "Using Odion default TTS for %s session: agent_config_id=%s owner_id=%s language_hint=%s",
+                fallback_label,
+                userdata.get("agent_config_id"),
+                tts_owner_id or business_id,
+                tts_language_hint,
+            )
+            return tts_engine
+    except Exception as exc:  # noqa: BLE001
+        if use_configured_clone and STRICT_ODION_CLONE_CONSISTENCY:
+            logger.error(
+                "Failed to initialize Odion cloned TTS with strict consistency enabled: language=%s agent_config_id=%s voice_id=%s owner_id=%s seed=%s error=%s",
+                lang,
+                userdata.get("agent_config_id"),
+                tts_voice_id,
+                tts_owner_id,
+                ODION_TTS_CLONE_SEED,
+                exc,
+            )
+            raise
+        logger.error(
+            "Failed to initialize Odion TTS for %s session, falling back to Deepgram: %s",
+            fallback_label,
+            exc,
+        )
+    return fallback_tts
 
 
 async def _wait_for_job_shutdown(ctx: JobContext) -> str:
@@ -1835,7 +2224,9 @@ async def entrypoint(ctx: JobContext):
             userdata=userdata,
         )
         userdata["business_use_case"] = business_use_case
-        _hydrate_userdata_from_active_agent_config(userdata, active_agent_config, business_use_case)
+        _hydrate_userdata_from_active_agent_config(
+            userdata, active_agent_config, business_use_case
+        )
         config_name = str(active_agent_config.get("name") or "").strip()
         if config_name:
             userdata["configured_agent_name"] = config_name
@@ -1848,18 +2239,32 @@ async def entrypoint(ctx: JobContext):
         prompt_preview = " ".join(str(base_prompt).split())[:220]
         logger.info(
             "Prompt source: %s preview=%s",
-            "active-config" if str(active_agent_config.get("instructions") or "").strip() else "static-default",
+            "active-config"
+            if str(active_agent_config.get("instructions") or "").strip()
+            else "static-default",
             prompt_preview,
         )
         if "salon" in str(base_prompt).lower():
-            logger.warning("Active prompt contains 'salon' text for this session. Forcing safe fallback prompt.")
-            base_prompt = FIDELITY_STATIC_PROMPT_EN if business_use_case == "fidelity" else SYSTEM_PROMPT_EN
+            logger.warning(
+                "Active prompt contains 'salon' text for this session. Forcing safe fallback prompt."
+            )
+            base_prompt = (
+                FIDELITY_STATIC_PROMPT_EN
+                if business_use_case == "fidelity"
+                else SYSTEM_PROMPT_EN
+            )
         preloaded_context = await _build_preloaded_ops_context(userdata)
-        instructions = _instructions_with_preloaded_ops_context(base_prompt, preloaded_context)
+        instructions = _instructions_with_preloaded_ops_context(
+            base_prompt, preloaded_context
+        )
         instructions = await _instructions_with_context(instructions, userdata)
         started_at = conv_api_utcnow()
         business_id = str(userdata.get("business_id") or "")
-        call_channel = "web" if str(userdata.get("identity_type") or "").lower() == "web" else "voice"
+        call_channel = (
+            "web"
+            if str(userdata.get("identity_type") or "").lower() == "web"
+            else "voice"
+        )
 
         async def _cleanup_en(reason: str = "") -> None:
             await asyncio.shield(
@@ -1876,58 +2281,12 @@ async def entrypoint(ctx: JobContext):
 
         ctx.add_shutdown_callback(_cleanup_en)
 
-        tts_engine: Any = deepgram.TTS(model="aura-asteria-en")
-        use_experiment_clone = bool(ODION_TTS_EXPERIMENT_OWNER_ID) and bool(ODION_TTS_EXPERIMENT_VOICE_ID)
-        tts_voice_id = (
-            ODION_TTS_EXPERIMENT_VOICE_ID
-            if use_experiment_clone
-            else str(active_agent_config.get("tts_voice_id") or "").strip()
+        tts_engine = _build_tts_engine_for_language(
+            language="en",
+            active_agent_config=active_agent_config,
+            userdata=userdata,
+            business_id=business_id,
         )
-        tts_owner_id = (
-            ODION_TTS_EXPERIMENT_OWNER_ID
-            if use_experiment_clone
-            else str(active_agent_config.get("tts_owner_id") or "").strip() or business_id
-        )
-        tts_language_hint = (
-            ODION_TTS_EXPERIMENT_LANGUAGE_HINT
-            if use_experiment_clone
-            else str(active_agent_config.get("tts_language_hint") or "Auto").strip() or "Auto"
-        )
-        use_configured_clone = use_experiment_clone or _should_use_odion_tts_for_language(active_agent_config, "en")
-        use_odion_default = not use_configured_clone
-        if ENABLE_ODION_TTS_EN:
-            try:
-                if use_configured_clone:
-                    tts_engine = OdionTTS(
-                        owner_id=tts_owner_id,
-                        voice_id=tts_voice_id,
-                        language=tts_language_hint,
-                        seed=ODION_TTS_EXPERIMENT_SEED if use_experiment_clone else None,
-                    )
-                    logger.info(
-                        "Using Odion cloned TTS for English session: agent_config_id=%s voice_id=%s owner_id=%s seed=%s",
-                        userdata.get("agent_config_id"),
-                        tts_voice_id,
-                        tts_owner_id,
-                        ODION_TTS_EXPERIMENT_SEED if use_experiment_clone else None,
-                    )
-                elif use_odion_default:
-                    # Default English voice path from Odion TTS when business has not cloned.
-                    tts_engine = OdionTTS(
-                        owner_id=tts_owner_id or business_id,
-                        voice_id=None,
-                        language=tts_language_hint,
-                        seed=None,
-                    )
-                    logger.info(
-                        "Using Odion default TTS for English session: agent_config_id=%s owner_id=%s",
-                        userdata.get("agent_config_id"),
-                        tts_owner_id or business_id,
-                    )
-            except Exception as exc:  # noqa: BLE001
-                logger.error("Failed to initialize Odion TTS, falling back to Deepgram: %s", exc)
-        else:
-            logger.info("ENABLE_ODION_TTS_EN=false; using Deepgram TTS for English session.")
 
         session = _build_session_for_language(
             language="en",
@@ -1937,7 +2296,9 @@ async def entrypoint(ctx: JobContext):
         )
         _wire_session_timeline(session, session.userdata)
         try:
-            if conversation_service_enabled(business_id) and userdata.get("conversation_id"):
+            if conversation_service_enabled(business_id) and userdata.get(
+                "conversation_id"
+            ):
                 started = await start_session_remote(
                     conversation_id=str(userdata.get("conversation_id")),
                     client_session_id=str(userdata.get("session_id") or ""),
@@ -1969,24 +2330,33 @@ async def entrypoint(ctx: JobContext):
                     recording_started = await start_room_recording(
                         room_name=str(ctx.room.name or ""),
                         business_id=business_id,
-                        session_id=session_tracker_id or str(userdata.get("session_id") or ""),
+                        session_id=session_tracker_id
+                        or str(userdata.get("session_id") or ""),
                         started_at=started_at,
                     )
                     userdata["recording_egress_id"] = recording_started.egress_id
                     userdata["recording_expected_url"] = recording_started.expected_url
                     userdata["recording_filepath"] = recording_started.filepath
-                    initial_recording_status = "recording" if recording_started.egress_id else "failed"
+                    initial_recording_status = (
+                        "recording" if recording_started.egress_id else "failed"
+                    )
                     await update_session_recording_remote(
                         session_id=session_tracker_id,
                         recording_status=initial_recording_status,
-                        recording_url=recording_started.expected_url if initial_recording_status == "recording" else None,
+                        recording_url=recording_started.expected_url
+                        if initial_recording_status == "recording"
+                        else None,
                         business_id=business_id,
                     )
                     _persist_session_event_async(
                         userdata,
-                        event_type="recording_started" if recording_started.egress_id else "recording_failed",
+                        event_type="recording_started"
+                        if recording_started.egress_id
+                        else "recording_failed",
                         role="system",
-                        title="Recording started" if recording_started.egress_id else "Recording failed",
+                        title="Recording started"
+                        if recording_started.egress_id
+                        else "Recording failed",
                         body=(
                             f"Audio recording started for room {ctx.room.name}."
                             if recording_started.egress_id
@@ -2001,15 +2371,23 @@ async def entrypoint(ctx: JobContext):
                         },
                     )
                 else:
-                    logger.info("Recording not enabled for this session: language=en business_id=%s", business_id)
+                    logger.info(
+                        "Recording not enabled for this session: language=en business_id=%s",
+                        business_id,
+                    )
             await session.start(
-                agent=SalonAgentEN(instructions=instructions),
+                agent=SalonAgent(instructions=instructions),
                 room=ctx.room,
                 room_options=room_io.RoomOptions(delete_room_on_close=True),
             )
-            _trigger_first_turn(session, language="en", business_use_case=business_use_case)
+            _trigger_first_turn(
+                session, language="en", business_use_case=business_use_case
+            )
             shutdown_reason = await _wait_for_job_shutdown(ctx)
-            logger.info("Session shutdown received (en): reason=%s", shutdown_reason or "unknown")
+            logger.info(
+                "Session shutdown received (en): reason=%s",
+                shutdown_reason or "unknown",
+            )
         finally:
             await asyncio.shield(
                 _finalize_session_cleanup(
@@ -2019,7 +2397,9 @@ async def entrypoint(ctx: JobContext):
                     started_at=started_at,
                     call_channel=call_channel,
                     language="en",
-                    shutdown_reason=shutdown_reason if "shutdown_reason" in locals() else None,
+                    shutdown_reason=shutdown_reason
+                    if "shutdown_reason" in locals()
+                    else None,
                 )
             )
     else:
@@ -2030,7 +2410,9 @@ async def entrypoint(ctx: JobContext):
             userdata=userdata,
         )
         userdata["business_use_case"] = business_use_case
-        _hydrate_userdata_from_active_agent_config(userdata, active_agent_config, business_use_case)
+        _hydrate_userdata_from_active_agent_config(
+            userdata, active_agent_config, business_use_case
+        )
         config_name = str(active_agent_config.get("name") or "").strip()
         if config_name:
             userdata["configured_agent_name"] = config_name
@@ -2043,18 +2425,28 @@ async def entrypoint(ctx: JobContext):
         prompt_preview = " ".join(str(base_prompt).split())[:220]
         logger.info(
             "Prompt source: %s preview=%s",
-            "active-config" if str(active_agent_config.get("instructions") or "").strip() else "static-default",
+            "active-config"
+            if str(active_agent_config.get("instructions") or "").strip()
+            else "static-default",
             prompt_preview,
         )
         if "salon" in str(base_prompt).lower():
-            logger.warning("Active prompt contains 'salon' text for this session. Forcing French static consular prompt.")
+            logger.warning(
+                "Active prompt contains 'salon' text for this session. Forcing French static consular prompt."
+            )
             base_prompt = SYSTEM_PROMPT_FR
         preloaded_context = await _build_preloaded_ops_context(userdata)
-        instructions = _instructions_with_preloaded_ops_context(base_prompt, preloaded_context)
+        instructions = _instructions_with_preloaded_ops_context(
+            base_prompt, preloaded_context
+        )
         instructions = await _instructions_with_context(instructions, userdata)
         started_at = conv_api_utcnow()
         business_id = str(userdata.get("business_id") or "")
-        call_channel = "web" if str(userdata.get("identity_type") or "").lower() == "web" else "voice"
+        call_channel = (
+            "web"
+            if str(userdata.get("identity_type") or "").lower() == "web"
+            else "voice"
+        )
 
         async def _cleanup_fr(reason: str = "") -> None:
             await asyncio.shield(
@@ -2070,14 +2462,23 @@ async def entrypoint(ctx: JobContext):
             )
 
         ctx.add_shutdown_callback(_cleanup_fr)
+        tts_engine = _build_tts_engine_for_language(
+            language="fr",
+            active_agent_config=active_agent_config,
+            userdata=userdata,
+            business_id=business_id,
+        )
         session = _build_session_for_language(
             language="fr",
             instructions=instructions,
             userdata=userdata,
+            tts_engine=tts_engine,
         )
         _wire_session_timeline(session, session.userdata)
         try:
-            if conversation_service_enabled(business_id) and userdata.get("conversation_id"):
+            if conversation_service_enabled(business_id) and userdata.get(
+                "conversation_id"
+            ):
                 started = await start_session_remote(
                     conversation_id=str(userdata.get("conversation_id")),
                     client_session_id=str(userdata.get("session_id") or ""),
@@ -2109,24 +2510,33 @@ async def entrypoint(ctx: JobContext):
                     recording_started = await start_room_recording(
                         room_name=str(ctx.room.name or ""),
                         business_id=business_id,
-                        session_id=session_tracker_id or str(userdata.get("session_id") or ""),
+                        session_id=session_tracker_id
+                        or str(userdata.get("session_id") or ""),
                         started_at=started_at,
                     )
                     userdata["recording_egress_id"] = recording_started.egress_id
                     userdata["recording_expected_url"] = recording_started.expected_url
                     userdata["recording_filepath"] = recording_started.filepath
-                    initial_recording_status = "recording" if recording_started.egress_id else "failed"
+                    initial_recording_status = (
+                        "recording" if recording_started.egress_id else "failed"
+                    )
                     await update_session_recording_remote(
                         session_id=session_tracker_id,
                         recording_status=initial_recording_status,
-                        recording_url=recording_started.expected_url if initial_recording_status == "recording" else None,
+                        recording_url=recording_started.expected_url
+                        if initial_recording_status == "recording"
+                        else None,
                         business_id=business_id,
                     )
                     _persist_session_event_async(
                         userdata,
-                        event_type="recording_started" if recording_started.egress_id else "recording_failed",
+                        event_type="recording_started"
+                        if recording_started.egress_id
+                        else "recording_failed",
                         role="system",
-                        title="Recording started" if recording_started.egress_id else "Recording failed",
+                        title="Recording started"
+                        if recording_started.egress_id
+                        else "Recording failed",
                         body=(
                             f"Audio recording started for room {ctx.room.name}."
                             if recording_started.egress_id
@@ -2141,15 +2551,23 @@ async def entrypoint(ctx: JobContext):
                         },
                     )
                 else:
-                    logger.info("Recording not enabled for this session: language=fr business_id=%s", business_id)
+                    logger.info(
+                        "Recording not enabled for this session: language=fr business_id=%s",
+                        business_id,
+                    )
             await session.start(
-                agent=SalonAgentFR(instructions=instructions),
+                agent=SalonAgent(instructions=instructions),
                 room=ctx.room,
                 room_options=room_io.RoomOptions(delete_room_on_close=True),
             )
-            _trigger_first_turn(session, language="fr", business_use_case=business_use_case)
+            _trigger_first_turn(
+                session, language="fr", business_use_case=business_use_case
+            )
             shutdown_reason = await _wait_for_job_shutdown(ctx)
-            logger.info("Session shutdown received (fr): reason=%s", shutdown_reason or "unknown")
+            logger.info(
+                "Session shutdown received (fr): reason=%s",
+                shutdown_reason or "unknown",
+            )
         finally:
             await asyncio.shield(
                 _finalize_session_cleanup(
@@ -2159,7 +2577,9 @@ async def entrypoint(ctx: JobContext):
                     started_at=started_at,
                     call_channel=call_channel,
                     language="fr",
-                    shutdown_reason=shutdown_reason if "shutdown_reason" in locals() else None,
+                    shutdown_reason=shutdown_reason
+                    if "shutdown_reason" in locals()
+                    else None,
                 )
             )
 

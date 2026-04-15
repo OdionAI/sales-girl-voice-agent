@@ -1,4 +1,3 @@
-from .salon_en import SalonAgentEN
-from .salon_fr import SalonAgentFR
+from .salon_agent import SalonAgent
 
-__all__ = ["SalonAgentEN", "SalonAgentFR"]
+__all__ = ["SalonAgent"]

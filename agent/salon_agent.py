@@ -26,6 +26,8 @@ from .ops_api import (
     report_outage as report_outage_api,
     refresh_meter_token_state as refresh_meter_token_state_api,
     reverse_failed_transaction as reverse_failed_transaction_api,
+    search_business_knowledge as search_business_knowledge_api,
+    send_email as send_email_api,
     unblock_card as unblock_card_api,
     update_customer_record as update_customer_record_api,
 )
@@ -45,7 +47,11 @@ def _tool_metadata(ctx: RunContext) -> dict:
     session_id = str(session_userdata.get("session_id") or conversation_id)
     return {
         "client_id": AGENT_CLIENT_ID,
-        "agent_id": str(session_userdata.get("agent_config_id") or session_userdata.get("agent_id") or AGENT_NAME),
+        "agent_id": str(
+            session_userdata.get("agent_config_id")
+            or session_userdata.get("agent_id")
+            or AGENT_NAME
+        ),
         "business_id": str(session_userdata.get("business_id") or ""),
         "business_use_case": str(session_userdata.get("business_use_case") or ""),
         "live_data_endpoint": str(session_userdata.get("live_data_endpoint") or ""),
@@ -55,7 +61,9 @@ def _tool_metadata(ctx: RunContext) -> dict:
         "enabled_tool_names": list(session_userdata.get("enabled_tool_names") or []),
         "turn_index": int(session_userdata.get("turn_index", 0)),
         "last_user_transcript": str(session_userdata.get("last_user_transcript") or ""),
-        "last_assistant_message": str(session_userdata.get("last_assistant_message") or ""),
+        "last_assistant_message": str(
+            session_userdata.get("last_assistant_message") or ""
+        ),
         "timeline_event_index": int(session_userdata.get("timeline_event_index", 0)),
     }
 
@@ -77,10 +85,27 @@ def _is_tool_enabled(ctx: RunContext, tool_name: str) -> bool:
     return str(tool_name or "").strip() in normalized_enabled
 
 
-class SalonAgentEN(Agent):
+class SalonAgent(Agent):
     """
     Shared English customer support agent for business-specific use cases.
     """
+
+    @function_tool()
+    async def search_business_knowledge(
+        self,
+        ctx: RunContext,
+        query: str,
+        top_k: int = 4,
+    ) -> dict:
+        """Search the saved business knowledge base for policies, services, amenities, FAQs, and other documented facts before saying you do not know an answer."""
+        result = await search_business_knowledge_api(
+            query=query,
+            top_k=top_k,
+            metadata=_tool_metadata(ctx),
+        )
+        if result.get("status") != "failed":
+            logger.info("[TOOL] search_business_knowledge query=%s", query[:120])
+        return result
 
     @function_tool()
     async def lookup_customer_account(
@@ -150,7 +175,11 @@ class SalonAgentEN(Agent):
             metadata=_tool_metadata(ctx),
         )
         if result.get("status") != "failed":
-            logger.info("[TOOL] create_complaint_ticket title=%s case_reference=%s", title, case_reference)
+            logger.info(
+                "[TOOL] create_complaint_ticket title=%s case_reference=%s",
+                title,
+                case_reference,
+            )
         return result
 
     @function_tool()
@@ -165,9 +194,12 @@ class SalonAgentEN(Agent):
         requires_human: bool = True,
         case_reference: str | None = None,
     ) -> dict:
-        """Create a human follow-up ticket for issues the agent cannot fully resolve. If no identifier is provided, use the current caller automatically."""
+        """Create a human follow-up ticket for issues the agent cannot fully resolve. If no identifier is provided, use the current caller automatically. (Créer un ticket de suivi humain pour les problèmes que l'agent ne peut pas résoudre entièrement)."""
         if not _is_tool_enabled(ctx, "create_ticket"):
-            return {"status": "failed", "message": "I can't create a support ticket from this agent right now."}
+            return {
+                "status": "failed",
+                "message": "I can't create a support ticket from this agent right now.",
+            }
         result = await create_ticket_api(
             customer_identifier=customer_identifier,
             title=title,
@@ -179,7 +211,9 @@ class SalonAgentEN(Agent):
             metadata=_tool_metadata(ctx),
         )
         if result.get("status") != "failed":
-            logger.info("[TOOL] create_ticket title=%s issue_type=%s", title, issue_type)
+            logger.info(
+                "[TOOL] create_ticket title=%s issue_type=%s", title, issue_type
+            )
         return result
 
     @function_tool()
@@ -197,7 +231,10 @@ class SalonAgentEN(Agent):
     ) -> dict:
         """Create a hotel booking inside the platform for the current guest and business."""
         if not _is_tool_enabled(ctx, "create_booking"):
-            return {"status": "failed", "message": "I can't create a booking from this agent right now."}
+            return {
+                "status": "failed",
+                "message": "I can't create a booking from this agent right now.",
+            }
         result = await create_booking_api(
             customer_identifier=customer_identifier,
             guest_name=guest_name,
@@ -210,7 +247,11 @@ class SalonAgentEN(Agent):
             metadata=_tool_metadata(ctx),
         )
         if result.get("status") != "failed":
-            logger.info("[TOOL] create_booking room_type=%s check_in=%s", room_type, check_in_date)
+            logger.info(
+                "[TOOL] create_booking room_type=%s check_in=%s",
+                room_type,
+                check_in_date,
+            )
         return result
 
     @function_tool()
@@ -226,7 +267,10 @@ class SalonAgentEN(Agent):
     ) -> dict:
         """Create a restaurant or fashion order inside the platform for the current customer and business."""
         if not _is_tool_enabled(ctx, "create_order"):
-            return {"status": "failed", "message": "I can't create an order from this agent right now."}
+            return {
+                "status": "failed",
+                "message": "I can't create an order from this agent right now.",
+            }
         result = await create_order_api(
             customer_identifier=customer_identifier,
             customer_name=customer_name,
@@ -237,7 +281,9 @@ class SalonAgentEN(Agent):
             metadata=_tool_metadata(ctx),
         )
         if result.get("status") != "failed":
-            logger.info("[TOOL] create_order item_name=%s quantity=%s", item_name, quantity)
+            logger.info(
+                "[TOOL] create_order item_name=%s quantity=%s", item_name, quantity
+            )
         return result
 
     @function_tool()
@@ -252,7 +298,10 @@ class SalonAgentEN(Agent):
     ) -> dict:
         """Fetch current room availability and prices. Use this for broad questions like what rooms are available or how much they cost, even if the guest has not given dates yet."""
         if not _is_tool_enabled(ctx, "fetch_room_availability"):
-            return {"status": "failed", "message": "I can't check current room availability from this agent right now."}
+            return {
+                "status": "failed",
+                "message": "I can't check current room availability from this agent right now.",
+            }
         result = await fetch_room_availability_api(
             endpoint_url=endpoint_url,
             room_type=room_type,
@@ -275,7 +324,10 @@ class SalonAgentEN(Agent):
     ) -> dict:
         """Fetch the current menu and prices. Use this for broad questions like what is available or how much items cost, even if the customer has not named a specific item yet."""
         if not _is_tool_enabled(ctx, "fetch_menu_availability"):
-            return {"status": "failed", "message": "I can't check the current menu or prices from this agent right now."}
+            return {
+                "status": "failed",
+                "message": "I can't check the current menu or prices from this agent right now.",
+            }
         result = await fetch_menu_availability_api(
             endpoint_url=endpoint_url,
             item_name=item_name,
@@ -297,7 +349,10 @@ class SalonAgentEN(Agent):
     ) -> dict:
         """Fetch current product availability and prices. Use this for broad questions about what is available or how much items cost, even before the customer narrows down the request."""
         if not _is_tool_enabled(ctx, "fetch_product_availability"):
-            return {"status": "failed", "message": "I can't check current product availability from this agent right now."}
+            return {
+                "status": "failed",
+                "message": "I can't check current product availability from this agent right now.",
+            }
         result = await fetch_product_availability_api(
             endpoint_url=endpoint_url,
             product_name=product_name,
@@ -306,7 +361,9 @@ class SalonAgentEN(Agent):
             metadata=_tool_metadata(ctx),
         )
         if result.get("status") != "failed":
-            logger.info("[TOOL] fetch_product_availability product_name=%s", product_name)
+            logger.info(
+                "[TOOL] fetch_product_availability product_name=%s", product_name
+            )
         return result
 
     @function_tool()
@@ -447,7 +504,11 @@ class SalonAgentEN(Agent):
             metadata=_tool_metadata(ctx),
         )
         if result.get("status") != "failed":
-            logger.info("[TOOL] escalate_issue title=%s case_reference=%s", title, case_reference)
+            logger.info(
+                "[TOOL] escalate_issue title=%s case_reference=%s",
+                title,
+                case_reference,
+            )
         return result
 
     @function_tool()
@@ -523,6 +584,30 @@ class SalonAgentEN(Agent):
             reason=reason,
             metadata=_tool_metadata(ctx),
         )
+
+    @function_tool()
+    async def send_email(
+        self,
+        ctx: RunContext,
+        to_email: str,
+        subject: str,
+        body_text: str,
+    ) -> dict:
+        """Send an email to the caller. Use this tool when you need to send links, documents, or written instructions. (Envoyer un email à l'appelant. Utilisez cet outil lorsque vous devez envoyer des liens, des documents ou des instructions écrites)."""
+        if not _is_tool_enabled(ctx, "send_email"):
+            return {
+                "status": "failed",
+                "message": "I can't send an email from this agent right now.",
+            }
+        result = await send_email_api(
+            to_email=to_email,
+            subject=subject,
+            body_text=body_text,
+            metadata=_tool_metadata(ctx),
+        )
+        if result.get("status") != "failed":
+            logger.info("[TOOL] send_email to=%s subject=%s", to_email, subject)
+        return result
 
     @function_tool()
     async def reverse_failed_transaction(

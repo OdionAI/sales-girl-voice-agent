@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import uuid
 from dataclasses import dataclass, replace
@@ -8,6 +9,8 @@ from dataclasses import dataclass, replace
 import aiohttp
 from livekit.agents import APIConnectOptions, tts
 from livekit.agents._exceptions import APIConnectionError, APIStatusError, APITimeoutError
+
+logger = logging.getLogger("salesgirl.odion_tts")
 
 
 @dataclass
@@ -17,6 +20,7 @@ class _TTSOptions:
     voice_id: str | None
     language: str
     seed: int | None
+    mode: str
 
 
 class OdionTTS(tts.TTS):
@@ -27,6 +31,7 @@ class OdionTTS(tts.TTS):
         voice_id: str,
         language: str = "Auto",
         seed: int | None = None,
+        mode: str = "default_voice",
         base_url: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
@@ -36,11 +41,12 @@ class OdionTTS(tts.TTS):
             num_channels=1,
         )
         self._opts = _TTSOptions(
-            base_url=(base_url or os.getenv("ODION_TTS_BASE_URL", "https://tts.odion.ai")).rstrip("/"),
+            base_url=(base_url or os.getenv("ODION_TTS_BASE_URL", "https://eu-tts.odion.ai")).rstrip("/"),
             owner_id=str(owner_id or "").strip(),
             voice_id=(str(voice_id or "").strip() or None),
             language=str(language or "Auto").strip() or "Auto",
             seed=seed if isinstance(seed, int) and seed >= 0 else None,
+            mode=str(mode or "default_voice").strip() or "default_voice",
         )
         if not self._opts.owner_id:
             raise ValueError("owner_id is required for OdionTTS")
@@ -86,6 +92,15 @@ class ChunkedStream(tts.ChunkedStream):
             payload["voice_id"] = self._opts.voice_id
         if self._opts.seed is not None:
             payload["seed"] = self._opts.seed
+        logger.info(
+            "TTS request -> base_url=%s endpoint=/api/v1/tts/stream owner_id=%s voice_id=%s seed=%s language=%s mode=%s",
+            self._opts.base_url,
+            self._opts.owner_id,
+            self._opts.voice_id,
+            self._opts.seed,
+            self._opts.language,
+            self._opts.mode,
+        )
         try:
             async with self._tts._ensure_session().post(
                 f"{self._opts.base_url}/api/v1/tts/stream",

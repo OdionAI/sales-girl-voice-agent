@@ -182,7 +182,12 @@ async def finalize_room_recording(
     duration_seconds: int,
 ) -> RecordingFinalizeResult:
     if not egress_id:
-        return RecordingFinalizeResult(status="unavailable", recording_url=expected_url, duration_seconds=duration_seconds, detail="missing_egress_id")
+        return RecordingFinalizeResult(
+            status="unavailable",
+            recording_url=None,
+            duration_seconds=duration_seconds,
+            detail="missing_egress_id",
+        )
 
     lkapi = _api_client()
     try:
@@ -221,7 +226,7 @@ async def finalize_room_recording(
 
         return RecordingFinalizeResult(
             status="processing",
-            recording_url=expected_url,
+            recording_url=None,
             duration_seconds=duration_seconds,
             detail="egress_completion_timeout",
         )
@@ -229,7 +234,7 @@ async def finalize_room_recording(
         logger.error("Failed to finalize room recording %s: %s", egress_id, exc)
         return RecordingFinalizeResult(
             status="failed",
-            recording_url=expected_url,
+            recording_url=None,
             duration_seconds=duration_seconds,
             detail=str(exc),
         )
