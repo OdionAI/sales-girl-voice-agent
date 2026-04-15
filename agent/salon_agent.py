@@ -269,7 +269,9 @@ class SalonAgent(Agent):
         """Create a restaurant or fashion order inside the platform for the current customer and business.
 
         If the customer orders multiple different items (e.g. Rice and Chicken), you MUST use the `items` array.
-        Format for items: [{"item_name": "Fried Rice", "quantity": 1}, {"item_name": "Chicken", "quantity": 2}]
+        Format for items: [{"item_name": "Fried Rice", "quantity": 1, "price_snapshot": {"amount": 2500, "currency": "NGN"}}]
+
+        For single items, you must provide `price_snapshot` in the format: {"amount": 2500, "currency": "NGN"}
         """
         # Ensure tool is currently enabled for this specific agent context
         if not _is_tool_enabled(ctx, "create_order"):

@@ -674,6 +674,7 @@ async def create_order(
         for order_item in order_items:
             current_item_name = str(order_item.get("item_name") or item_name).strip()
             current_quantity = int(order_item.get("quantity") or quantity or 1)
+            current_price = order_item.get("price_snapshot") or price_snapshot
 
             if not current_item_name:
                 continue
@@ -689,8 +690,8 @@ async def create_order(
                 or None,
                 "item_name": current_item_name,
                 "quantity": current_quantity,
-                "price_snapshot": price_snapshot
-                if isinstance(price_snapshot, dict)
+                "price_snapshot": current_price
+                if isinstance(current_price, dict)
                 else None,
                 "status": "pending",
                 "notes": notes,
@@ -720,6 +721,7 @@ async def create_order(
     for order_item in order_items:
         current_item_name = str(order_item.get("item_name") or item_name).strip()
         current_quantity = int(order_item.get("quantity") or quantity or 1)
+        current_price = order_item.get("price_snapshot") or price_snapshot
 
         if not current_item_name:
             continue
@@ -730,7 +732,7 @@ async def create_order(
             "quantity": current_quantity,
             "customer_name": customer_name,
             "notes": notes,
-            "price_snapshot": price_snapshot,
+            "price_snapshot": current_price,
             "conversation_id": str((metadata or {}).get("conversation_id") or ""),
         }
         res = await _request_json(
