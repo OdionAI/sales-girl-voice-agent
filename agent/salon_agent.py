@@ -271,6 +271,7 @@ class SalonAgent(Agent):
         If the customer orders multiple different items (e.g. Rice and Chicken), you MUST use the `items` array.
         Format for items: [{"item_name": "Fried Rice", "quantity": 1}, {"item_name": "Chicken", "quantity": 2}]
         """
+        # Ensure tool is currently enabled for this specific agent context
         if not _is_tool_enabled(ctx, "create_order"):
             return {
                 "status": "failed",
