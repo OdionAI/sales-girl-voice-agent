@@ -703,6 +703,7 @@ async def _init_session_userdata(ctx: JobContext, language: str) -> dict[str, An
         config_agent_id,
         configured_agent_name,
         end_user_name,
+        tts_endpoint,
     ) = _participant_identity_from_ctx(ctx)
     if REQUIRE_VERIFIED_PHONE and not end_user_id:
         try:
@@ -715,6 +716,7 @@ async def _init_session_userdata(ctx: JobContext, language: str) -> dict[str, An
                 config_agent_id,
                 configured_agent_name,
                 end_user_name,
+                tts_endpoint,
             ) = _participant_identity_from_ctx(ctx)
             logger.info(
                 "Retried participant identity after join: end_user_id=%s type=%s business_id=%s config_agent_id=%s configured_name=%s end_user_name=%s tts_endpoint=%s",
