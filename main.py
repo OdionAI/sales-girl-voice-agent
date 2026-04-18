@@ -31,7 +31,7 @@ from agent.conversation_service_api import (
     update_session_recording as update_session_recording_remote,
     utcnow as conv_api_utcnow,
 )
-from agent.agent_config_api import get_active_config as get_agent_active_config
+from agent.agent_config_api import get_runtime_config as get_agent_runtime_config
 from agent.ops_api import (
     get_account_overview as ops_get_account_overview,
     get_payment_summary as ops_get_payment_summary,
@@ -1239,19 +1239,19 @@ def _validate_runtime_requirements() -> None:
         )
 
 
-async def _fetch_active_agent_runtime_config(
+async def _fetch_agent_runtime_config(
     userdata: dict[str, Any],
 ) -> dict[str, Any]:
     business_id = _normalize_business_id(str(userdata.get("business_id") or ""))
     config_agent_id = str(userdata.get("agent_config_id") or "").strip()
     if not business_id or not config_agent_id:
         return {}
-    payload = await get_agent_active_config(
+    payload = await get_agent_runtime_config(
         agent_id=config_agent_id, business_id=business_id
     )
     if str(payload.get("status") or "") == "failed":
         logger.error(
-            "Agent config fetch failed: business_id=%s agent_id=%s detail=%s http_status=%s",
+            "Agent runtime config fetch failed: business_id=%s agent_id=%s detail=%s http_status=%s",
             business_id,
             config_agent_id,
             payload.get("detail"),
@@ -2221,7 +2221,7 @@ async def entrypoint(ctx: JobContext):
     """
     if _is_en_agent_name(AGENT_NAME):
         userdata = await _init_session_userdata(ctx, language="en")
-        active_agent_config = await _fetch_active_agent_runtime_config(userdata)
+        active_agent_config = await _fetch_agent_runtime_config(userdata)
         business_use_case = _detect_business_use_case(
             active_agent_config=active_agent_config,
             userdata=userdata,
@@ -2407,7 +2407,7 @@ async def entrypoint(ctx: JobContext):
             )
     else:
         userdata = await _init_session_userdata(ctx, language="fr")
-        active_agent_config = await _fetch_active_agent_runtime_config(userdata)
+        active_agent_config = await _fetch_agent_runtime_config(userdata)
         business_use_case = _detect_business_use_case(
             active_agent_config=active_agent_config,
             userdata=userdata,
