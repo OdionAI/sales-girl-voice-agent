@@ -117,10 +117,12 @@ else
   systemctl disable sales-girl-agent-fr 2>/dev/null || true
 fi
 
-# Start services
-systemctl start sales-girl-backend sales-girl-agent-en
+# Restart services so they rebind to the freshly cloned checkout.
+# A plain "start" is a no-op when the units are already running, which can
+# leave the workers attached to a deleted working directory during redeploys.
+systemctl restart sales-girl-backend sales-girl-agent-en
 if [ "${ENABLE_FRENCH_AGENT}" = "true" ]; then
-  systemctl start sales-girl-agent-fr
+  systemctl restart sales-girl-agent-fr
 else
   systemctl stop sales-girl-agent-fr 2>/dev/null || true
 fi
