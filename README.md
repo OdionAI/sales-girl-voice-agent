@@ -34,6 +34,8 @@ This worker talks to:
 Current stable contract:
 
 - stable cascade runtime is the production-safe path
+- public URL sessions must load the requested agent config even when that
+  agent is not the widget-active agent
 - category-aware tools are supported for hotel, restaurant, fashion, and
   generic/custom agents
 - Odion cloned TTS can be used for English sessions when configured
