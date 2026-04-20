@@ -387,6 +387,15 @@ CONVERSATION_SERVICE_REQUIRED = (
 )
 ENABLE_ODION_TTS_EN = os.getenv("ENABLE_ODION_TTS_EN", "true").lower() == "true"
 ENABLE_ODION_TTS_FR = os.getenv("ENABLE_ODION_TTS_FR", "false").lower() == "true"
+GOOGLE_LLM_MODEL_DEFAULT = str(
+    os.getenv("GOOGLE_LLM_MODEL_DEFAULT") or "gemini-2.0-flash-lite-001"
+).strip() or "gemini-2.0-flash-lite-001"
+GOOGLE_LLM_MODEL_EN = str(
+    os.getenv("GOOGLE_LLM_MODEL_EN") or GOOGLE_LLM_MODEL_DEFAULT
+).strip() or GOOGLE_LLM_MODEL_DEFAULT
+GOOGLE_LLM_MODEL_FR = str(
+    os.getenv("GOOGLE_LLM_MODEL_FR") or GOOGLE_LLM_MODEL_DEFAULT
+).strip() or GOOGLE_LLM_MODEL_DEFAULT
 ODION_TTS_EXPERIMENT_OWNER_ID = str(
     os.getenv("ODION_TTS_EXPERIMENT_OWNER_ID") or "mavinomichael@gmail.com"
 ).strip()
@@ -2066,18 +2075,24 @@ def _build_session_for_language(
     userdata: dict[str, Any],
     tts_engine: Any | None = None,
 ) -> AgentSession:
+    llm_model = GOOGLE_LLM_MODEL_FR if language == "fr" else GOOGLE_LLM_MODEL_EN
+    logger.info(
+        "Using Google LLM model for %s session: %s",
+        "French" if language == "fr" else "English",
+        llm_model,
+    )
     if language == "fr":
         return AgentSession(
             stt=deepgram.STT(language="fr"),
             tts=tts_engine or deepgram.TTS(model="aura-2-agathe-fr"),
-            llm=google.LLM(model="gemini-2.0-flash"),
+            llm=google.LLM(model=llm_model),
             userdata=userdata,
         )
 
     return AgentSession(
         stt=deepgram.STT(language="en"),
         tts=tts_engine,
-        llm=google.LLM(model="gemini-2.0-flash"),
+        llm=google.LLM(model=llm_model),
         userdata=userdata,
     )
 
