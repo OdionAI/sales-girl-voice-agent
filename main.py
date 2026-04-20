@@ -388,8 +388,8 @@ CONVERSATION_SERVICE_REQUIRED = (
 ENABLE_ODION_TTS_EN = os.getenv("ENABLE_ODION_TTS_EN", "true").lower() == "true"
 ENABLE_ODION_TTS_FR = os.getenv("ENABLE_ODION_TTS_FR", "false").lower() == "true"
 GOOGLE_LLM_MODEL_DEFAULT = (
-    str(os.getenv("GOOGLE_LLM_MODEL_DEFAULT") or "gemini-2.0-flash-lite-001").strip()
-    or "gemini-2.0-flash-lite-001"
+    str(os.getenv("GOOGLE_LLM_MODEL_DEFAULT") or "gemini-2.5-flash-lite").strip()
+    or "gemini-2.5-flash-lite"
 )
 GOOGLE_LLM_MODEL_EN = (
     str(os.getenv("GOOGLE_LLM_MODEL_EN") or GOOGLE_LLM_MODEL_DEFAULT).strip()
