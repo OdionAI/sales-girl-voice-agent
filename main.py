@@ -387,15 +387,18 @@ CONVERSATION_SERVICE_REQUIRED = (
 )
 ENABLE_ODION_TTS_EN = os.getenv("ENABLE_ODION_TTS_EN", "true").lower() == "true"
 ENABLE_ODION_TTS_FR = os.getenv("ENABLE_ODION_TTS_FR", "false").lower() == "true"
-GOOGLE_LLM_MODEL_DEFAULT = str(
-    os.getenv("GOOGLE_LLM_MODEL_DEFAULT") or "gemini-2.0-flash-lite-001"
-).strip() or "gemini-2.0-flash-lite-001"
-GOOGLE_LLM_MODEL_EN = str(
-    os.getenv("GOOGLE_LLM_MODEL_EN") or GOOGLE_LLM_MODEL_DEFAULT
-).strip() or GOOGLE_LLM_MODEL_DEFAULT
-GOOGLE_LLM_MODEL_FR = str(
-    os.getenv("GOOGLE_LLM_MODEL_FR") or GOOGLE_LLM_MODEL_DEFAULT
-).strip() or GOOGLE_LLM_MODEL_DEFAULT
+GOOGLE_LLM_MODEL_DEFAULT = (
+    str(os.getenv("GOOGLE_LLM_MODEL_DEFAULT") or "gemini-2.0-flash-lite-001").strip()
+    or "gemini-2.0-flash-lite-001"
+)
+GOOGLE_LLM_MODEL_EN = (
+    str(os.getenv("GOOGLE_LLM_MODEL_EN") or GOOGLE_LLM_MODEL_DEFAULT).strip()
+    or GOOGLE_LLM_MODEL_DEFAULT
+)
+GOOGLE_LLM_MODEL_FR = (
+    str(os.getenv("GOOGLE_LLM_MODEL_FR") or GOOGLE_LLM_MODEL_DEFAULT).strip()
+    or GOOGLE_LLM_MODEL_DEFAULT
+)
 ODION_TTS_EXPERIMENT_OWNER_ID = str(
     os.getenv("ODION_TTS_EXPERIMENT_OWNER_ID") or "mavinomichael@gmail.com"
 ).strip()
@@ -2051,23 +2054,6 @@ def _kickoff_prompt_for_language(language: str, business_use_case: str) -> str:
     )
 
 
-def _opening_greeting_for_language(
-    language: str,
-    *,
-    configured_name: str | None = None,
-) -> str:
-    display_name = str(configured_name or "").strip() or "your AI assistant"
-    if str(language or "").strip().lower() == "fr":
-        return (
-            f"Bonjour, ici {display_name}. Je suis là pour vous aider aujourd'hui. "
-            "Comment puis-je vous aider ?"
-        )
-    return (
-        f"Hello, this is {display_name}. I'm here to help you today. "
-        "How can I assist you?"
-    )
-
-
 def _build_session_for_language(
     *,
     language: str,
@@ -2105,14 +2091,9 @@ def _trigger_first_turn(
     configured_name: str | None = None,
 ) -> None:
     try:
-        # Speak a guaranteed opening line immediately, then let the live session
-        # continue normally from the caller's next turn.
-        session.say(
-            _opening_greeting_for_language(
-                language,
-                configured_name=configured_name,
-            ),
-            add_to_chat_ctx=True,
+        session.generate_reply(
+            instructions=_kickoff_prompt_for_language(language, business_use_case),
+            input_modality="text",
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning(
@@ -2120,17 +2101,6 @@ def _trigger_first_turn(
             language,
             exc,
         )
-        try:
-            session.generate_reply(
-                instructions=_kickoff_prompt_for_language(language, business_use_case),
-                input_modality="text",
-            )
-        except Exception as reply_exc:  # noqa: BLE001
-            logger.warning(
-                "Fallback first-turn generation also failed (%s): %s",
-                language,
-                reply_exc,
-            )
 
 
 def _should_use_odion_tts_for_language(config: dict[str, Any], language: str) -> bool:
