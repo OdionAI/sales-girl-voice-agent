@@ -2042,6 +2042,23 @@ def _kickoff_prompt_for_language(language: str, business_use_case: str) -> str:
     )
 
 
+def _opening_greeting_for_language(
+    language: str,
+    *,
+    configured_name: str | None = None,
+) -> str:
+    display_name = str(configured_name or "").strip() or "your AI assistant"
+    if str(language or "").strip().lower() == "fr":
+        return (
+            f"Bonjour, ici {display_name}. Je suis là pour vous aider aujourd'hui. "
+            "Comment puis-je vous aider ?"
+        )
+    return (
+        f"Hello, this is {display_name}. I'm here to help you today. "
+        "How can I assist you?"
+    )
+
+
 def _build_session_for_language(
     *,
     language: str,
@@ -2066,15 +2083,39 @@ def _build_session_for_language(
 
 
 def _trigger_first_turn(
-    session: AgentSession, *, language: str, business_use_case: str
+    session: AgentSession,
+    *,
+    language: str,
+    business_use_case: str,
+    configured_name: str | None = None,
 ) -> None:
     try:
-        session.generate_reply(
-            instructions=_kickoff_prompt_for_language(language, business_use_case),
-            input_modality="text",
+        # Speak a guaranteed opening line immediately, then let the live session
+        # continue normally from the caller's next turn.
+        session.say(
+            _opening_greeting_for_language(
+                language,
+                configured_name=configured_name,
+            ),
+            add_to_chat_ctx=True,
         )
     except Exception as exc:  # noqa: BLE001
-        logger.warning("Failed to trigger first assistant turn (%s): %s", language, exc)
+        logger.warning(
+            "Failed to trigger first assistant turn (%s): %s",
+            language,
+            exc,
+        )
+        try:
+            session.generate_reply(
+                instructions=_kickoff_prompt_for_language(language, business_use_case),
+                input_modality="text",
+            )
+        except Exception as reply_exc:  # noqa: BLE001
+            logger.warning(
+                "Fallback first-turn generation also failed (%s): %s",
+                language,
+                reply_exc,
+            )
 
 
 def _should_use_odion_tts_for_language(config: dict[str, Any], language: str) -> bool:
@@ -2384,7 +2425,10 @@ async def entrypoint(ctx: JobContext):
                 room_options=room_io.RoomOptions(delete_room_on_close=True),
             )
             _trigger_first_turn(
-                session, language="en", business_use_case=business_use_case
+                session,
+                language="en",
+                business_use_case=business_use_case,
+                configured_name=str(userdata.get("configured_agent_name") or ""),
             )
             shutdown_reason = await _wait_for_job_shutdown(ctx)
             logger.info(
@@ -2564,7 +2608,10 @@ async def entrypoint(ctx: JobContext):
                 room_options=room_io.RoomOptions(delete_room_on_close=True),
             )
             _trigger_first_turn(
-                session, language="fr", business_use_case=business_use_case
+                session,
+                language="fr",
+                business_use_case=business_use_case,
+                configured_name=str(userdata.get("configured_agent_name") or ""),
             )
             shutdown_reason = await _wait_for_job_shutdown(ctx)
             logger.info(
