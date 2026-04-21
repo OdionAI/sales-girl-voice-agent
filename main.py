@@ -399,12 +399,17 @@ GOOGLE_LLM_MODEL_FR = (
     str(os.getenv("GOOGLE_LLM_MODEL_FR") or GOOGLE_LLM_MODEL_DEFAULT).strip()
     or GOOGLE_LLM_MODEL_DEFAULT
 )
-ODION_TTS_EXPERIMENT_OWNER_ID = str(
-    os.getenv("ODION_TTS_EXPERIMENT_OWNER_ID") or ""
+ODION_TTS_DEFAULT_OWNER_ID = str(
+    os.getenv("ODION_TTS_DEFAULT_OWNER_ID")
+    or os.getenv("ODION_TTS_EXPERIMENT_OWNER_ID")
+    or "mavinomichael@gmail.com"
 ).strip()
 ODION_TTS_EXPERIMENT_VOICE_ID = str(
     os.getenv("ODION_TTS_EXPERIMENT_VOICE_ID") or ""
 ).strip()
+FORCE_ODION_TTS_EXPERIMENT_VOICE = (
+    os.getenv("FORCE_ODION_TTS_EXPERIMENT_VOICE", "false").lower() == "true"
+)
 ODION_TTS_EXPERIMENT_LANGUAGE_HINT = (
     str(os.getenv("ODION_TTS_EXPERIMENT_LANGUAGE_HINT") or "English").strip()
     or "English"
@@ -2139,7 +2144,7 @@ def _build_tts_engine_for_language(
     odion_enabled = ENABLE_ODION_TTS_FR if is_fr else ENABLE_ODION_TTS_EN
     fallback_label = "French" if is_fr else "English"
 
-    use_experiment_clone = bool(ODION_TTS_EXPERIMENT_OWNER_ID) and bool(
+    use_experiment_clone = FORCE_ODION_TTS_EXPERIMENT_VOICE and bool(
         ODION_TTS_EXPERIMENT_VOICE_ID
     )
     tts_voice_id = (
@@ -2148,9 +2153,11 @@ def _build_tts_engine_for_language(
         else str(active_agent_config.get("tts_voice_id") or "").strip()
     )
     tts_owner_id = (
-        ODION_TTS_EXPERIMENT_OWNER_ID
+        ODION_TTS_DEFAULT_OWNER_ID
         if use_experiment_clone
-        else str(active_agent_config.get("tts_owner_id") or "").strip() or business_id
+        else str(active_agent_config.get("tts_owner_id") or "").strip()
+        or ODION_TTS_DEFAULT_OWNER_ID
+        or business_id
     )
     tts_language_hint = (
         ("French" if is_fr else "English")
