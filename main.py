@@ -400,10 +400,10 @@ GOOGLE_LLM_MODEL_FR = (
     or GOOGLE_LLM_MODEL_DEFAULT
 )
 ODION_TTS_EXPERIMENT_OWNER_ID = str(
-    os.getenv("ODION_TTS_EXPERIMENT_OWNER_ID") or "mavinomichael@gmail.com"
+    os.getenv("ODION_TTS_EXPERIMENT_OWNER_ID") or ""
 ).strip()
 ODION_TTS_EXPERIMENT_VOICE_ID = str(
-    os.getenv("ODION_TTS_EXPERIMENT_VOICE_ID") or "d270a5cec6914373b9deed1d1c3cbade"
+    os.getenv("ODION_TTS_EXPERIMENT_VOICE_ID") or ""
 ).strip()
 ODION_TTS_EXPERIMENT_LANGUAGE_HINT = (
     str(os.getenv("ODION_TTS_EXPERIMENT_LANGUAGE_HINT") or "English").strip()
