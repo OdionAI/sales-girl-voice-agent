@@ -24,6 +24,8 @@ if [ -f "${APP_PATH}/.env" ]; then
 fi
 
 ENABLE_FRENCH_AGENT="${ENABLE_FRENCH_AGENT:-false}"
+DEFAULT_RUNTIME_AGENT_NAME_EN="${DEFAULT_RUNTIME_AGENT_NAME_EN:-sales-girl-agent-en}"
+DEFAULT_RUNTIME_AGENT_NAME_FR="${DEFAULT_RUNTIME_AGENT_NAME_FR:-sales-girl-agent-fr}"
 
 echo "🔧 Setting up systemd services (APP_PATH=${APP_PATH})..."
 
@@ -52,7 +54,7 @@ EOF
 # English agent service
 cat > /tmp/sales-girl-agent-en.service <<EOF
 [Unit]
-Description=SalesGirl Voice Agent - sales-girl-agent-en (English)
+Description=SalesGirl Voice Agent - ${DEFAULT_RUNTIME_AGENT_NAME_EN} (English)
 After=network.target
 
 [Service]
@@ -60,7 +62,7 @@ Type=simple
 User=${VM_USER}
 WorkingDirectory=${APP_PATH}
 EnvironmentFile=${APP_PATH}/.env
-Environment="AGENT_NAME=sales-girl-agent-en"
+Environment="AGENT_NAME=${DEFAULT_RUNTIME_AGENT_NAME_EN}"
 Environment="AGENT_PORT=8081"
 Environment="PATH=${APP_PATH}/.venv/bin"
 ExecStart=${APP_PATH}/.venv/bin/python main.py start
@@ -76,7 +78,7 @@ EOF
 # French agent service
 cat > /tmp/sales-girl-agent-fr.service <<EOF
 [Unit]
-Description=SalesGirl Voice Agent - sales-girl-agent-fr (French)
+Description=SalesGirl Voice Agent - ${DEFAULT_RUNTIME_AGENT_NAME_FR} (French)
 After=network.target
 
 [Service]
@@ -84,7 +86,7 @@ Type=simple
 User=${VM_USER}
 WorkingDirectory=${APP_PATH}
 EnvironmentFile=${APP_PATH}/.env
-Environment="AGENT_NAME=sales-girl-agent-fr"
+Environment="AGENT_NAME=${DEFAULT_RUNTIME_AGENT_NAME_FR}"
 Environment="AGENT_PORT=8082"
 Environment="PATH=${APP_PATH}/.venv/bin"
 ExecStart=${APP_PATH}/.venv/bin/python main.py start
