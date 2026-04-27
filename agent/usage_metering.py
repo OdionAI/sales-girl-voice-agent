@@ -102,6 +102,63 @@ class UsageMeter:
             model_usage = payload.get("usage", {}).get("model_usage") if isinstance(payload.get("usage"), dict) else None
         if not isinstance(model_usage, list):
             self.provider_usage.append({"session_usage_updated": payload or usage})
+            merged = {}
+            if isinstance(usage, dict):
+                merged.update(usage)
+            if isinstance(payload, dict):
+                merged.update(payload)
+            llm_in = max(
+                0,
+                _to_int(
+                    merged.get("input_tokens")
+                    or merged.get("prompt_tokens")
+                    or merged.get("total_input_tokens")
+                    or merged.get("llm_input_tokens")
+                ),
+            )
+            llm_out = max(
+                0,
+                _to_int(
+                    merged.get("output_tokens")
+                    or merged.get("completion_tokens")
+                    or merged.get("total_output_tokens")
+                    or merged.get("llm_output_tokens")
+                ),
+            )
+            llm_cached = max(
+                0,
+                _to_int(
+                    merged.get("cached_tokens")
+                    or merged.get("prompt_cached_tokens")
+                    or merged.get("llm_cached_tokens")
+                ),
+            )
+            stt_secs = max(
+                0.0,
+                _to_float(
+                    merged.get("stt_seconds")
+                    or merged.get("audio_duration_seconds")
+                    or merged.get("audio_duration")
+                    or merged.get("duration_seconds")
+                    or merged.get("speech_seconds")
+                ),
+            )
+            tts_chars = max(
+                0,
+                _to_int(
+                    merged.get("tts_characters")
+                    or merged.get("characters_count")
+                    or merged.get("characters")
+                ),
+            )
+            if any([llm_in, llm_out, llm_cached, stt_secs, tts_chars]):
+                self.llm_input_tokens = llm_in
+                self.llm_output_tokens = llm_out
+                self.llm_cached_tokens = llm_cached
+                self.stt_seconds = stt_secs
+                if tts_chars > 0:
+                    self.tts_characters = tts_chars
+                self.has_session_usage = True
             return
 
         self.provider_usage.append({"session_usage_updated": payload or usage})
