@@ -359,6 +359,12 @@ async def _finalize_session_cleanup(
             if isinstance(usage_meter, UsageMeter)
             else {}
         )
+        logger.info(
+            "Usage summary before billing report: session_id=%s conversation_id=%s usage=%s",
+            session_tracker_id or str(userdata.get("session_id") or ""),
+            str(userdata.get("conversation_id") or ""),
+            usage_summary,
+        )
         _persist_session_event_async(
             userdata,
             event_type="usage_summary",

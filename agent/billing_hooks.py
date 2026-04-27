@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import os
+import logging
 from typing import Any
 
 import httpx
+
+logger = logging.getLogger("sales_girl_voice_agent")
 
 
 BASE_URL = os.getenv("BILLING_HOOK_BASE_URL", "").rstrip("/")
@@ -28,12 +31,32 @@ def _headers(business_id: str | None = None) -> dict[str, str]:
 
 async def _post(path: str, payload: dict[str, Any], *, business_id: str | None = None) -> dict[str, Any]:
     if not is_enabled(business_id):
+        logger.warning(
+            "Billing hook disabled: base_url_set=%s token_set=%s business_id_present=%s path=%s",
+            bool(BASE_URL),
+            bool(SERVICE_TOKEN),
+            bool(business_id or BUSINESS_ID),
+            path,
+        )
         return {"status": "disabled"}
     url = f"{BASE_URL}{path}"
+    logger.info(
+        "Billing hook request: path=%s url=%s business_id=%s session_id=%s conversation_id=%s",
+        path,
+        url,
+        str(business_id or BUSINESS_ID),
+        str(payload.get("session_id") or ""),
+        str(payload.get("conversation_id") or ""),
+    )
     try:
         async with httpx.AsyncClient(timeout=TIMEOUT_SECONDS) as client:
             resp = await client.post(url, json=payload, headers=_headers(business_id))
     except httpx.HTTPError as exc:
+        logger.error(
+            "Billing hook network error: path=%s detail=%s",
+            path,
+            str(exc) or exc.__class__.__name__,
+        )
         return {
             "status": "failed",
             "detail": str(exc) or exc.__class__.__name__,
@@ -44,11 +67,22 @@ async def _post(path: str, payload: dict[str, Any], *, business_id: str | None =
     except ValueError:
         data = {}
     if resp.status_code >= 400:
+        logger.error(
+            "Billing hook http error: path=%s status=%s detail=%s",
+            path,
+            resp.status_code,
+            data.get("detail") if isinstance(data, dict) else "billing hook failed",
+        )
         return {
             "status": "failed",
             "http_status": resp.status_code,
             "detail": data.get("detail") if isinstance(data, dict) else "billing hook failed",
         }
+    logger.info(
+        "Billing hook success: path=%s status=%s",
+        path,
+        resp.status_code,
+    )
     if isinstance(data, dict):
         data["status"] = str(data.get("status") or "success")
         return data
