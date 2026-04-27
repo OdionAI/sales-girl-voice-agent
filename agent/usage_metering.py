@@ -35,36 +35,56 @@ class UsageMeter:
         if not payload:
             return
         self.provider_usage.append(payload)
-        usage = payload.get("usage") if isinstance(payload.get("usage"), dict) else payload
+        metrics = payload.get("metrics") if isinstance(payload.get("metrics"), dict) else {}
+        usage = payload.get("usage") if isinstance(payload.get("usage"), dict) else {}
+        merged = {}
+        if isinstance(metrics, dict):
+            merged.update(metrics)
+        if isinstance(usage, dict):
+            merged.update(usage)
+        merged.update(payload)
 
         self.llm_input_tokens += max(
             0,
             _to_int(
-                usage.get("input_tokens")
-                or usage.get("prompt_tokens")
-                or usage.get("llm_input_tokens")
+                merged.get("input_tokens")
+                or merged.get("prompt_tokens")
+                or merged.get("llm_input_tokens")
             ),
         )
         self.llm_output_tokens += max(
             0,
             _to_int(
-                usage.get("output_tokens")
-                or usage.get("completion_tokens")
-                or usage.get("llm_output_tokens")
+                merged.get("output_tokens")
+                or merged.get("completion_tokens")
+                or merged.get("llm_output_tokens")
             ),
         )
-        self.llm_cached_tokens += max(0, _to_int(usage.get("cached_tokens")))
+        self.llm_cached_tokens += max(
+            0,
+            _to_int(
+                merged.get("cached_tokens")
+                or merged.get("prompt_cached_tokens")
+            ),
+        )
 
         stt_secs = (
-            usage.get("stt_seconds")
-            or usage.get("audio_duration_seconds")
-            or usage.get("audio_duration")
-            or usage.get("speech_seconds")
+            merged.get("stt_seconds")
+            or merged.get("audio_duration_seconds")
+            or merged.get("audio_duration")
+            or merged.get("speech_seconds")
         )
         self.stt_seconds += max(0.0, _to_float(stt_secs))
 
         if not self.tts_characters:
-            self.tts_characters += max(0, _to_int(usage.get("tts_characters") or usage.get("characters")))
+            self.tts_characters += max(
+                0,
+                _to_int(
+                    merged.get("tts_characters")
+                    or merged.get("characters")
+                    or merged.get("characters_count")
+                ),
+            )
 
     def snapshot(self) -> dict[str, Any]:
         return {
