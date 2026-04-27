@@ -957,6 +957,11 @@ def _wire_session_timeline(session: AgentSession, userdata: dict[str, Any]) -> N
         if isinstance(usage_meter, UsageMeter):
             usage_meter.add_metrics_event(ev)
 
+    @session.on("session_usage_updated")
+    def _on_session_usage_updated(ev: Any) -> None:
+        if isinstance(usage_meter, UsageMeter):
+            usage_meter.apply_session_usage_updated(ev)
+
     @session.on("function_tools_executed")
     def _on_function_tools_executed(ev: Any) -> None:
         calls: list[dict[str, Any]] = []
