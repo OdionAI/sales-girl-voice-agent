@@ -18,6 +18,7 @@ This service owns the realtime voice runtime:
 - selecting and invoking tools
 - persisting conversation and session activity
 - reporting call billing usage
+- attaching optional STT/LLM/TTS usage summaries to billing reports
 
 ## Core interactions
 

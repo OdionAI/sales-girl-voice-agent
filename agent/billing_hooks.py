@@ -80,6 +80,7 @@ async def report_call_usage(
     end_user_id: str,
     duration_seconds: int,
     channel: str,
+    usage: dict[str, Any] | None = None,
     business_id: str | None = None,
 ) -> dict[str, Any]:
     return await _post(
@@ -90,6 +91,7 @@ async def report_call_usage(
             "end_user_id": end_user_id,
             "duration_seconds": max(0, int(duration_seconds)),
             "channel": channel,
+            "usage": usage if isinstance(usage, dict) else None,
         },
         business_id=business_id,
     )

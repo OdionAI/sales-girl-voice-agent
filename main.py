@@ -42,6 +42,8 @@ from agent.ops_api import (
 )
 from agent.odion_tts import OdionTTS
 from agent.observability import flush_traces, trace_conversation_event
+from agent.usage_metering import UsageMeter
+from agent.billing_hooks import report_call_usage
 from agent.livekit_recording import (
     finalize_room_recording,
     is_recording_enabled,
@@ -351,6 +353,20 @@ async def _finalize_session_cleanup(
                 "shutdown_reason": shutdown_reason,
             },
         )
+        usage_meter = userdata.get("usage_meter")
+        usage_summary = (
+            usage_meter.snapshot()
+            if isinstance(usage_meter, UsageMeter)
+            else {}
+        )
+        _persist_session_event_async(
+            userdata,
+            event_type="usage_summary",
+            role="system",
+            title="Usage summary",
+            body="Captured session STT/LLM/TTS usage totals.",
+            payload=usage_summary,
+        )
 
         try:
             await _drain_background_tasks(userdata)
@@ -376,6 +392,30 @@ async def _finalize_session_cleanup(
             except Exception as exc:  # noqa: BLE001
                 logger.exception(
                     "Failed to persist session end: session_id=%s error=%s",
+                    session_tracker_id,
+                    exc,
+                )
+        if session_tracker_id:
+            try:
+                billing_report = await report_call_usage(
+                    conversation_id=str(userdata.get("conversation_id") or ""),
+                    session_id=session_tracker_id,
+                    end_user_id=str(userdata.get("end_user_id") or ""),
+                    duration_seconds=duration,
+                    channel=call_channel,
+                    usage=usage_summary,
+                    business_id=business_id,
+                )
+                if str(billing_report.get("status") or "") == "failed":
+                    logger.error(
+                        "Billing usage report failed: session_id=%s detail=%s http_status=%s",
+                        session_tracker_id,
+                        billing_report.get("detail"),
+                        billing_report.get("http_status"),
+                    )
+            except Exception as exc:  # noqa: BLE001
+                logger.exception(
+                    "Failed to report billing usage: session_id=%s error=%s",
                     session_tracker_id,
                     exc,
                 )
@@ -791,10 +831,13 @@ async def _init_session_userdata(ctx: JobContext, language: str) -> dict[str, An
         "timeline_event_index": 0,
         "last_user_transcript": "",
         "last_assistant_message": "",
+        "usage_meter": UsageMeter(),
     }
 
 
 def _wire_session_timeline(session: AgentSession, userdata: dict[str, Any]) -> None:
+    usage_meter = userdata.get("usage_meter")
+
     def _next_event_idx() -> int:
         userdata["timeline_event_index"] = (
             int(userdata.get("timeline_event_index", 0)) + 1
@@ -840,6 +883,8 @@ def _wire_session_timeline(session: AgentSession, userdata: dict[str, Any]) -> N
 
         if role.lower() == "assistant":
             userdata["last_assistant_message"] = content
+            if isinstance(usage_meter, UsageMeter):
+                usage_meter.add_assistant_text(content)
         elif role.lower() == "user":
             if content != userdata.get("last_user_transcript"):
                 userdata["turn_index"] = int(userdata.get("turn_index", 0)) + 1
@@ -897,6 +942,11 @@ def _wire_session_timeline(session: AgentSession, userdata: dict[str, Any]) -> N
                         )
 
                 _track_background_task(userdata, _persist_remote())
+
+    @session.on("metrics_collected")
+    def _on_metrics_collected(ev: Any) -> None:
+        if isinstance(usage_meter, UsageMeter):
+            usage_meter.add_metrics_event(ev)
             else:
                 append_message(
                     conversation_id=str(userdata.get("conversation_id") or ""),
