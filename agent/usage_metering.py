@@ -93,12 +93,18 @@ class UsageMeter:
 
     def apply_session_usage_updated(self, event: Any) -> None:
         payload = self._as_dict(event)
-        usage = payload.get("usage") if isinstance(payload.get("usage"), dict) else {}
+        usage_obj = getattr(event, "usage", None)
+        usage = self._as_dict(usage_obj) if usage_obj is not None else {}
         model_usage = usage.get("model_usage")
         if not isinstance(model_usage, list):
             model_usage = payload.get("model_usage")
         if not isinstance(model_usage, list):
+            model_usage = payload.get("usage", {}).get("model_usage") if isinstance(payload.get("usage"), dict) else None
+        if not isinstance(model_usage, list):
+            self.provider_usage.append({"session_usage_updated": payload or usage})
             return
+
+        self.provider_usage.append({"session_usage_updated": payload or usage})
 
         llm_in = 0
         llm_out = 0
@@ -108,11 +114,17 @@ class UsageMeter:
 
         for item in model_usage:
             row = self._as_dict(item)
+            nested_usage = row.get("usage")
+            if isinstance(nested_usage, dict):
+                merged = dict(nested_usage)
+                merged.update(row)
+                row = merged
             llm_in += max(
                 0,
                 _to_int(
                     row.get("input_tokens")
                     or row.get("prompt_tokens")
+                    or row.get("total_input_tokens")
                     or row.get("llm_input_tokens")
                 ),
             )
@@ -121,6 +133,7 @@ class UsageMeter:
                 _to_int(
                     row.get("output_tokens")
                     or row.get("completion_tokens")
+                    or row.get("total_output_tokens")
                     or row.get("llm_output_tokens")
                 ),
             )
