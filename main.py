@@ -942,11 +942,6 @@ def _wire_session_timeline(session: AgentSession, userdata: dict[str, Any]) -> N
                         )
 
                 _track_background_task(userdata, _persist_remote())
-
-    @session.on("metrics_collected")
-    def _on_metrics_collected(ev: Any) -> None:
-        if isinstance(usage_meter, UsageMeter):
-            usage_meter.add_metrics_event(ev)
             else:
                 append_message(
                     conversation_id=str(userdata.get("conversation_id") or ""),
@@ -956,6 +951,11 @@ def _wire_session_timeline(session: AgentSession, userdata: dict[str, Any]) -> N
                     content=content,
                     session_id=str(userdata.get("session_id") or ""),
                 )
+
+    @session.on("metrics_collected")
+    def _on_metrics_collected(ev: Any) -> None:
+        if isinstance(usage_meter, UsageMeter):
+            usage_meter.add_metrics_event(ev)
 
     @session.on("function_tools_executed")
     def _on_function_tools_executed(ev: Any) -> None:
