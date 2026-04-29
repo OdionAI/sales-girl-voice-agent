@@ -5,6 +5,7 @@ import re
 import asyncio
 import base64
 import hashlib
+import time
 from typing import Any
 import uuid
 from dotenv import load_dotenv
@@ -59,6 +60,23 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
+
+DEBUG_LOG_PATH = "/Users/woron/Documents/sales-girl/_generated_repos/.cursor/debug-0d9f31.log"
+DEBUG_SESSION_ID = "0d9f31"
+
+
+def _emit_debug_log(payload: dict[str, Any]) -> None:
+    record = {
+        "sessionId": DEBUG_SESSION_ID,
+        "id": f"log_{int(time.time() * 1000)}_{uuid.uuid4().hex[:8]}",
+        "timestamp": int(time.time() * 1000),
+        **payload,
+    }
+    try:
+        with open(DEBUG_LOG_PATH, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(record, ensure_ascii=True, default=str) + "\n")
+    except Exception:
+        return
 
 
 # AgentServer allows only one rtc_session per process. To support both English and
@@ -858,6 +876,27 @@ def _wire_session_timeline(session: AgentSession, userdata: dict[str, Any]) -> N
 
         userdata["turn_index"] = int(userdata.get("turn_index", 0)) + 1
         userdata["last_user_transcript"] = transcript
+        turn_idx = int(userdata["turn_index"])
+        turn_run_id = (
+            f"turn-{int(time.time() * 1000)}-{uuid.uuid4().hex[:6]}-t{turn_idx}"
+        )
+        userdata["active_turn_run_id"] = turn_run_id
+        userdata["active_turn_started_monotonic"] = time.monotonic()
+        # #region agent log
+        _emit_debug_log(
+            {
+                "runId": turn_run_id,
+                "hypothesisId": "H8",
+                "location": "main.py:_wire_session_timeline:user_input_transcribed",
+                "message": "turn_user_final_transcribed",
+                "data": {
+                    "turnIndex": turn_idx,
+                    "transcriptLength": len(transcript),
+                    "language": getattr(ev, "language", None),
+                },
+            }
+        )
+        # #endregion
         event_idx = _next_event_idx()
         trace_conversation_event(
             "user_input_transcribed",
@@ -891,6 +930,26 @@ def _wire_session_timeline(session: AgentSession, userdata: dict[str, Any]) -> N
             userdata["last_assistant_message"] = content
             if isinstance(usage_meter, UsageMeter):
                 usage_meter.add_assistant_text(content)
+            started_mono = userdata.get("active_turn_started_monotonic")
+            # #region agent log
+            _emit_debug_log(
+                {
+                    "runId": str(userdata.get("active_turn_run_id") or ""),
+                    "hypothesisId": "H8",
+                    "location": "main.py:_wire_session_timeline:conversation_item_added_assistant",
+                    "message": "turn_assistant_text_ready",
+                    "data": {
+                        "turnIndex": int(userdata.get("turn_index", 0)),
+                        "assistantTextLength": len(content),
+                        "elapsedSinceUserFinalMs": (
+                            int((time.monotonic() - float(started_mono)) * 1000)
+                            if isinstance(started_mono, (int, float))
+                            else None
+                        ),
+                    },
+                }
+            )
+            # #endregion
         elif role.lower() == "user":
             if content != userdata.get("last_user_transcript"):
                 userdata["turn_index"] = int(userdata.get("turn_index", 0)) + 1
@@ -982,6 +1041,30 @@ def _wire_session_timeline(session: AgentSession, userdata: dict[str, Any]) -> N
                 )
         if not calls:
             return
+        started_mono = userdata.get("active_turn_started_monotonic")
+        # #region agent log
+        _emit_debug_log(
+            {
+                "runId": str(userdata.get("active_turn_run_id") or ""),
+                "hypothesisId": "H9",
+                "location": "main.py:_wire_session_timeline:function_tools_executed",
+                "message": "turn_function_tools_executed",
+                "data": {
+                    "turnIndex": int(userdata.get("turn_index", 0)),
+                    "toolCount": len(calls),
+                    "toolNames": [
+                        str(call.get("tool_name") or "unknown_tool")
+                        for call in calls[:6]
+                    ],
+                    "elapsedSinceUserFinalMs": (
+                        int((time.monotonic() - float(started_mono)) * 1000)
+                        if isinstance(started_mono, (int, float))
+                        else None
+                    ),
+                },
+            }
+        )
+        # #endregion
 
         event_idx = _next_event_idx()
         trace_conversation_event(
