@@ -484,6 +484,47 @@ STRICT_ODION_CLONE_CONSISTENCY = (
     os.getenv("STRICT_ODION_CLONE_CONSISTENCY", "true").lower() == "true"
 )
 
+def _float_env(name: str, default: float, *, min_value: float) -> float:
+    raw = str(os.getenv(name, "")).strip()
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        logger.warning("Invalid %s=%r; using default %.3f", name, raw, default)
+        return default
+    if value < min_value:
+        logger.warning(
+            "%s=%s is below minimum %.3f; using minimum.",
+            name,
+            value,
+            min_value,
+        )
+        return min_value
+    return value
+
+TURN_MIN_ENDPOINTING_DELAY = _float_env(
+    "TURN_MIN_ENDPOINTING_DELAY",
+    0.45,
+    min_value=0.1,
+)
+TURN_MAX_ENDPOINTING_DELAY = _float_env(
+    "TURN_MAX_ENDPOINTING_DELAY",
+    1.2,
+    min_value=0.2,
+)
+if TURN_MAX_ENDPOINTING_DELAY < TURN_MIN_ENDPOINTING_DELAY:
+    logger.warning(
+        "TURN_MAX_ENDPOINTING_DELAY < TURN_MIN_ENDPOINTING_DELAY; aligning max to min."
+    )
+    TURN_MAX_ENDPOINTING_DELAY = TURN_MIN_ENDPOINTING_DELAY
+
+TURN_MIN_INTERRUPTION_DURATION = _float_env(
+    "TURN_MIN_INTERRUPTION_DURATION",
+    0.7,
+    min_value=0.1,
+)
+
 
 def _normalize_business_id(value: str | None) -> str:
     raw = str(value or "").strip()
@@ -2268,6 +2309,9 @@ def _build_session_for_language(
             tts=tts_engine or deepgram.TTS(model="aura-2-agathe-fr"),
             llm=google.LLM(model=llm_model),
             userdata=userdata,
+            min_endpointing_delay=TURN_MIN_ENDPOINTING_DELAY,
+            max_endpointing_delay=TURN_MAX_ENDPOINTING_DELAY,
+            min_interruption_duration=TURN_MIN_INTERRUPTION_DURATION,
         )
 
     return AgentSession(
@@ -2275,6 +2319,9 @@ def _build_session_for_language(
         tts=tts_engine,
         llm=google.LLM(model=llm_model),
         userdata=userdata,
+        min_endpointing_delay=TURN_MIN_ENDPOINTING_DELAY,
+        max_endpointing_delay=TURN_MAX_ENDPOINTING_DELAY,
+        min_interruption_duration=TURN_MIN_INTERRUPTION_DURATION,
     )
 
 
