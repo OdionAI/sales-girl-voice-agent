@@ -8,6 +8,7 @@ import hashlib
 import time
 from typing import Any
 import uuid
+from urllib.parse import urlparse
 from dotenv import load_dotenv
 
 # Load env immediately so API clients can read the correct base URLs
@@ -644,6 +645,52 @@ def _decode_identity_email(identity: str) -> str:
     return _normalize_end_user_id(decoded)
 
 
+def _normalize_tts_mode(value: str) -> str:
+    mode = str(value or "").strip().lower()
+    if mode in {"default_voice", "cloned_voice", "auto"}:
+        return mode
+    return "auto"
+
+
+def _normalize_tts_endpoint(value: str) -> str:
+    endpoint = str(value or "").strip()
+    if not endpoint:
+        return ""
+    try:
+        parsed = urlparse(endpoint)
+    except Exception:
+        return ""
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return ""
+    return endpoint.rstrip("/")
+
+
+def _extract_tts_overrides_from_ctx(ctx: JobContext) -> dict[str, Any]:
+    room = getattr(ctx, "room", None)
+    participants = getattr(room, "remote_participants", None)
+    if not participants:
+        return {}
+
+    values = participants.values() if hasattr(participants, "values") else participants
+    for participant in values:
+        metadata_raw = str(getattr(participant, "metadata", "") or "").strip()
+        if not metadata_raw:
+            continue
+        try:
+            payload = json.loads(metadata_raw)
+        except json.JSONDecodeError:
+            continue
+        return {
+            "tts_endpoint": _normalize_tts_endpoint(payload.get("tts_endpoint") or ""),
+            "tts_mode": _normalize_tts_mode(payload.get("tts_mode") or ""),
+            "tts_owner_id": str(payload.get("tts_owner_id") or "").strip(),
+            "tts_voice_id": str(payload.get("tts_voice_id") or "").strip(),
+            "tts_language_hint": str(payload.get("tts_language_hint") or "").strip(),
+            "tts_seed": str(payload.get("tts_seed") or "").strip(),
+        }
+    return {}
+
+
 # Extracts participant identity and TTS endpoint from context
 def _participant_identity_from_ctx(
     ctx: JobContext,
@@ -734,6 +781,7 @@ def _participant_identity_from_ctx(
                         metadata_config_agent_id,
                         metadata_configured_agent_name,
                         metadata_end_user_name,
+                        metadata_tts_endpoint,
                     )
             except json.JSONDecodeError:
                 pass
@@ -748,6 +796,7 @@ def _participant_identity_from_ctx(
                 metadata_config_agent_id,
                 metadata_configured_agent_name,
                 metadata_end_user_name,
+                "",
             )
         if "voice_assistant_user_" in identity:
             phone_from_identity = identity.split("voice_assistant_user_", 1)[1]
@@ -760,6 +809,7 @@ def _participant_identity_from_ctx(
                     metadata_config_agent_id,
                     metadata_configured_agent_name,
                     metadata_end_user_name,
+                    "",
                 )
 
     return "", "voice", fallback_business_id, "", "", "", ""
@@ -835,6 +885,11 @@ async def _init_session_userdata(ctx: JobContext, language: str) -> dict[str, An
         "configured_agent_name": configured_agent_name,
         "end_user_name": end_user_name,
         "tts_endpoint": tts_endpoint,
+        "tts_mode": "auto",
+        "tts_owner_id": "",
+        "tts_voice_id": "",
+        "tts_language_hint": "",
+        "tts_seed": "",
         "business_id": business_id,
         "conversation_id": conversation_id,
         "session_id": stable_session_id,
@@ -847,7 +902,7 @@ async def _init_session_userdata(ctx: JobContext, language: str) -> dict[str, An
         "last_user_transcript": "",
         "last_assistant_message": "",
         "usage_meter": UsageMeter(),
-    }
+    } | _extract_tts_overrides_from_ctx(ctx)
 
 
 def _wire_session_timeline(session: AgentSession, userdata: dict[str, Any]) -> None:
@@ -2303,9 +2358,28 @@ def _build_tts_engine_for_language(
         ).strip()
         or ("French" if is_fr else "English")
     )
+    tts_endpoint_override = _normalize_tts_endpoint(userdata.get("tts_endpoint") or "")
+    tts_mode_override = _normalize_tts_mode(userdata.get("tts_mode") or "")
+    tts_owner_id_override = str(userdata.get("tts_owner_id") or "").strip()
+    tts_voice_id_override = str(userdata.get("tts_voice_id") or "").strip()
+    tts_language_hint_override = str(userdata.get("tts_language_hint") or "").strip()
+    tts_seed_raw = str(userdata.get("tts_seed") or "").strip()
+    tts_seed_override = (
+        int(tts_seed_raw) if tts_seed_raw.isdigit() and int(tts_seed_raw) >= 0 else None
+    )
+    if tts_owner_id_override:
+        tts_owner_id = tts_owner_id_override
+    if tts_voice_id_override:
+        tts_voice_id = tts_voice_id_override
+    if tts_language_hint_override:
+        tts_language_hint = tts_language_hint_override
     use_configured_clone = use_experiment_clone or _should_use_odion_tts_for_language(
         active_agent_config, lang
     )
+    if tts_mode_override == "cloned_voice":
+        use_configured_clone = True
+    elif tts_mode_override == "default_voice":
+        use_configured_clone = False
     use_odion_default = not use_configured_clone
 
     if not odion_enabled:
@@ -2322,8 +2396,11 @@ def _build_tts_engine_for_language(
                 owner_id=tts_owner_id,
                 voice_id=tts_voice_id,
                 language=tts_language_hint,
-                seed=ODION_TTS_CLONE_SEED,
+                seed=tts_seed_override
+                if tts_seed_override is not None
+                else ODION_TTS_CLONE_SEED,
                 mode="cloned_voice",
+                base_url=tts_endpoint_override or None,
             )
             logger.info(
                 "Using Odion cloned TTS for %s session: agent_config_id=%s voice_id=%s owner_id=%s seed=%s",
@@ -2339,8 +2416,9 @@ def _build_tts_engine_for_language(
                 owner_id=tts_owner_id or business_id,
                 voice_id=None,
                 language=tts_language_hint,
-                seed=None,
+                seed=tts_seed_override,
                 mode="default_voice",
+                base_url=tts_endpoint_override or None,
             )
             logger.info(
                 "Using Odion default TTS for %s session: agent_config_id=%s owner_id=%s language_hint=%s",
