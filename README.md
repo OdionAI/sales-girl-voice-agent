@@ -2,6 +2,8 @@
 
 The LiveKit worker/runtime layer for SalesGirl voice sessions.
 
+<!-- no-op dev sync marker for staging deployment trigger -->
+
 ## Read this first
 
 Shared platform reference:
