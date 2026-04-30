@@ -26,6 +26,13 @@ fi
 ENABLE_FRENCH_AGENT="${ENABLE_FRENCH_AGENT:-false}"
 DEFAULT_RUNTIME_AGENT_NAME_EN="${DEFAULT_RUNTIME_AGENT_NAME_EN:-sales-girl-agent-en}"
 DEFAULT_RUNTIME_AGENT_NAME_FR="${DEFAULT_RUNTIME_AGENT_NAME_FR:-sales-girl-agent-fr}"
+HOSTNAME_HINT="$(hostname || true)"
+if [ "${DEFAULT_RUNTIME_AGENT_NAME_EN}" = "sales-girl-agent-en" ] && [[ "${HOSTNAME_HINT}" == *"staging"* ]]; then
+  DEFAULT_RUNTIME_AGENT_NAME_EN="sales-girl-agent-en-staging"
+fi
+if [ "${DEFAULT_RUNTIME_AGENT_NAME_FR}" = "sales-girl-agent-fr" ] && [[ "${HOSTNAME_HINT}" == *"staging"* ]]; then
+  DEFAULT_RUNTIME_AGENT_NAME_FR="sales-girl-agent-fr-staging"
+fi
 
 echo "🔧 Setting up systemd services (APP_PATH=${APP_PATH})..."
 
