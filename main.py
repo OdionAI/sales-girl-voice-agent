@@ -452,9 +452,18 @@ CONVERSATION_SERVICE_REQUIRED = (
 )
 ENABLE_ODION_TTS_EN = os.getenv("ENABLE_ODION_TTS_EN", "true").lower() == "true"
 ENABLE_ODION_TTS_FR = os.getenv("ENABLE_ODION_TTS_FR", "false").lower() == "true"
-GOOGLE_LLM_MODEL_DEFAULT = "gemini-3.1-pro-preview"
-GOOGLE_LLM_MODEL_EN = "gemini-3.1-pro-preview"
-GOOGLE_LLM_MODEL_FR = "gemini-3.1-pro-preview"
+GOOGLE_LLM_MODEL_DEFAULT = (
+    str(os.getenv("GOOGLE_LLM_MODEL_DEFAULT") or "gemini-2.5-flash-lite").strip()
+    or "gemini-2.5-flash-lite"
+)
+GOOGLE_LLM_MODEL_EN = (
+    str(os.getenv("GOOGLE_LLM_MODEL_EN") or GOOGLE_LLM_MODEL_DEFAULT).strip()
+    or GOOGLE_LLM_MODEL_DEFAULT
+)
+GOOGLE_LLM_MODEL_FR = (
+    str(os.getenv("GOOGLE_LLM_MODEL_FR") or GOOGLE_LLM_MODEL_DEFAULT).strip()
+    or GOOGLE_LLM_MODEL_DEFAULT
+)
 ODION_TTS_DEFAULT_OWNER_ID = str(
     os.getenv("ODION_TTS_DEFAULT_OWNER_ID")
     or os.getenv("ODION_TTS_EXPERIMENT_OWNER_ID")
