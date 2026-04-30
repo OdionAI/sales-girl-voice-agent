@@ -24,8 +24,6 @@ if [ -f "${APP_PATH}/.env" ]; then
 fi
 
 ENABLE_FRENCH_AGENT="${ENABLE_FRENCH_AGENT:-false}"
-DEFAULT_RUNTIME_AGENT_NAME_EN="${DEFAULT_RUNTIME_AGENT_NAME_EN:-sales-girl-agent-en}"
-DEFAULT_RUNTIME_AGENT_NAME_FR="${DEFAULT_RUNTIME_AGENT_NAME_FR:-sales-girl-agent-fr}"
 
 echo "🔧 Setting up systemd services (APP_PATH=${APP_PATH})..."
 
@@ -54,7 +52,7 @@ EOF
 # English agent service
 cat > /tmp/sales-girl-agent-en.service <<EOF
 [Unit]
-Description=SalesGirl Voice Agent - ${DEFAULT_RUNTIME_AGENT_NAME_EN} (English)
+Description=SalesGirl Voice Agent - sales-girl-agent-en (English)
 After=network.target
 
 [Service]
@@ -62,7 +60,7 @@ Type=simple
 User=${VM_USER}
 WorkingDirectory=${APP_PATH}
 EnvironmentFile=${APP_PATH}/.env
-Environment="AGENT_NAME=${DEFAULT_RUNTIME_AGENT_NAME_EN}"
+Environment="AGENT_NAME=sales-girl-agent-en"
 Environment="AGENT_PORT=8081"
 Environment="PATH=${APP_PATH}/.venv/bin"
 ExecStart=${APP_PATH}/.venv/bin/python main.py start
@@ -78,7 +76,7 @@ EOF
 # French agent service
 cat > /tmp/sales-girl-agent-fr.service <<EOF
 [Unit]
-Description=SalesGirl Voice Agent - ${DEFAULT_RUNTIME_AGENT_NAME_FR} (French)
+Description=SalesGirl Voice Agent - sales-girl-agent-fr (French)
 After=network.target
 
 [Service]
@@ -86,7 +84,7 @@ Type=simple
 User=${VM_USER}
 WorkingDirectory=${APP_PATH}
 EnvironmentFile=${APP_PATH}/.env
-Environment="AGENT_NAME=${DEFAULT_RUNTIME_AGENT_NAME_FR}"
+Environment="AGENT_NAME=sales-girl-agent-fr"
 Environment="AGENT_PORT=8082"
 Environment="PATH=${APP_PATH}/.venv/bin"
 ExecStart=${APP_PATH}/.venv/bin/python main.py start
@@ -119,12 +117,10 @@ else
   systemctl disable sales-girl-agent-fr 2>/dev/null || true
 fi
 
-# Restart services so they rebind to the freshly cloned checkout.
-# A plain "start" is a no-op when the units are already running, which can
-# leave the workers attached to a deleted working directory during redeploys.
-systemctl restart sales-girl-backend sales-girl-agent-en
+# Start services
+systemctl start sales-girl-backend sales-girl-agent-en
 if [ "${ENABLE_FRENCH_AGENT}" = "true" ]; then
-  systemctl restart sales-girl-agent-fr
+  systemctl start sales-girl-agent-fr
 else
   systemctl stop sales-girl-agent-fr 2>/dev/null || true
 fi

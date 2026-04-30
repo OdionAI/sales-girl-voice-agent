@@ -60,7 +60,6 @@ def _tool_metadata(ctx: RunContext) -> dict:
         "end_user_id": str(session_userdata.get("end_user_id") or ""),
         "enabled_tool_names": list(session_userdata.get("enabled_tool_names") or []),
         "turn_index": int(session_userdata.get("turn_index", 0)),
-        "active_turn_run_id": str(session_userdata.get("active_turn_run_id") or ""),
         "last_user_transcript": str(session_userdata.get("last_user_transcript") or ""),
         "last_assistant_message": str(
             session_userdata.get("last_assistant_message") or ""

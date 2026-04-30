@@ -5,10 +5,8 @@ import re
 import asyncio
 import base64
 import hashlib
-import time
 from typing import Any
 import uuid
-from urllib.parse import urlparse
 from dotenv import load_dotenv
 
 # Load env immediately so API clients can read the correct base URLs
@@ -33,7 +31,7 @@ from agent.conversation_service_api import (
     update_session_recording as update_session_recording_remote,
     utcnow as conv_api_utcnow,
 )
-from agent.agent_config_api import get_runtime_config as get_agent_runtime_config
+from agent.agent_config_api import get_active_config as get_agent_active_config
 from agent.ops_api import (
     get_account_overview as ops_get_account_overview,
     get_payment_summary as ops_get_payment_summary,
@@ -44,8 +42,6 @@ from agent.ops_api import (
 )
 from agent.odion_tts import OdionTTS
 from agent.observability import flush_traces, trace_conversation_event
-from agent.usage_metering import UsageMeter
-from agent.billing_hooks import report_call_usage
 from agent.livekit_recording import (
     finalize_room_recording,
     is_recording_enabled,
@@ -61,23 +57,6 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
-
-DEBUG_LOG_PATH = "/Users/woron/Documents/sales-girl/_generated_repos/.cursor/debug-0d9f31.log"
-DEBUG_SESSION_ID = "0d9f31"
-
-
-def _emit_debug_log(payload: dict[str, Any]) -> None:
-    record = {
-        "sessionId": DEBUG_SESSION_ID,
-        "id": f"log_{int(time.time() * 1000)}_{uuid.uuid4().hex[:8]}",
-        "timestamp": int(time.time() * 1000),
-        **payload,
-    }
-    try:
-        with open(DEBUG_LOG_PATH, "a", encoding="utf-8") as fh:
-            fh.write(json.dumps(record, ensure_ascii=True, default=str) + "\n")
-    except Exception:
-        return
 
 
 # AgentServer allows only one rtc_session per process. To support both English and
@@ -372,26 +351,6 @@ async def _finalize_session_cleanup(
                 "shutdown_reason": shutdown_reason,
             },
         )
-        usage_meter = userdata.get("usage_meter")
-        usage_summary = (
-            usage_meter.snapshot()
-            if isinstance(usage_meter, UsageMeter)
-            else {}
-        )
-        logger.info(
-            "Usage summary before billing report: session_id=%s conversation_id=%s usage=%s",
-            session_tracker_id or str(userdata.get("session_id") or ""),
-            str(userdata.get("conversation_id") or ""),
-            usage_summary,
-        )
-        _persist_session_event_async(
-            userdata,
-            event_type="usage_summary",
-            role="system",
-            title="Usage summary",
-            body="Captured session STT/LLM/TTS usage totals.",
-            payload=usage_summary,
-        )
 
         try:
             await _drain_background_tasks(userdata)
@@ -420,30 +379,6 @@ async def _finalize_session_cleanup(
                     session_tracker_id,
                     exc,
                 )
-        if session_tracker_id:
-            try:
-                billing_report = await report_call_usage(
-                    conversation_id=str(userdata.get("conversation_id") or ""),
-                    session_id=session_tracker_id,
-                    end_user_id=str(userdata.get("end_user_id") or ""),
-                    duration_seconds=duration,
-                    channel=call_channel,
-                    usage=usage_summary,
-                    business_id=business_id,
-                )
-                if str(billing_report.get("status") or "") == "failed":
-                    logger.error(
-                        "Billing usage report failed: session_id=%s detail=%s http_status=%s",
-                        session_tracker_id,
-                        billing_report.get("detail"),
-                        billing_report.get("http_status"),
-                    )
-            except Exception as exc:  # noqa: BLE001
-                logger.exception(
-                    "Failed to report billing usage: session_id=%s error=%s",
-                    session_tracker_id,
-                    exc,
-                )
 
 
 REQUIRE_VERIFIED_PHONE = os.getenv("REQUIRE_VERIFIED_PHONE", "true").lower() == "true"
@@ -452,29 +387,12 @@ CONVERSATION_SERVICE_REQUIRED = (
 )
 ENABLE_ODION_TTS_EN = os.getenv("ENABLE_ODION_TTS_EN", "true").lower() == "true"
 ENABLE_ODION_TTS_FR = os.getenv("ENABLE_ODION_TTS_FR", "false").lower() == "true"
-GOOGLE_LLM_MODEL_DEFAULT = (
-    str(os.getenv("GOOGLE_LLM_MODEL_DEFAULT") or "gemini-2.5-flash-lite").strip()
-    or "gemini-2.5-flash-lite"
-)
-GOOGLE_LLM_MODEL_EN = (
-    str(os.getenv("GOOGLE_LLM_MODEL_EN") or GOOGLE_LLM_MODEL_DEFAULT).strip()
-    or GOOGLE_LLM_MODEL_DEFAULT
-)
-GOOGLE_LLM_MODEL_FR = (
-    str(os.getenv("GOOGLE_LLM_MODEL_FR") or GOOGLE_LLM_MODEL_DEFAULT).strip()
-    or GOOGLE_LLM_MODEL_DEFAULT
-)
-ODION_TTS_DEFAULT_OWNER_ID = str(
-    os.getenv("ODION_TTS_DEFAULT_OWNER_ID")
-    or os.getenv("ODION_TTS_EXPERIMENT_OWNER_ID")
-    or "mavinomichael@gmail.com"
+ODION_TTS_EXPERIMENT_OWNER_ID = str(
+    os.getenv("ODION_TTS_EXPERIMENT_OWNER_ID") or "mavinomichael@gmail.com"
 ).strip()
 ODION_TTS_EXPERIMENT_VOICE_ID = str(
-    os.getenv("ODION_TTS_EXPERIMENT_VOICE_ID") or ""
+    os.getenv("ODION_TTS_EXPERIMENT_VOICE_ID") or "d270a5cec6914373b9deed1d1c3cbade"
 ).strip()
-FORCE_ODION_TTS_EXPERIMENT_VOICE = (
-    os.getenv("FORCE_ODION_TTS_EXPERIMENT_VOICE", "false").lower() == "true"
-)
 ODION_TTS_EXPERIMENT_LANGUAGE_HINT = (
     str(os.getenv("ODION_TTS_EXPERIMENT_LANGUAGE_HINT") or "English").strip()
     or "English"
@@ -491,47 +409,6 @@ ODION_TTS_CLONE_SEED = (
 )
 STRICT_ODION_CLONE_CONSISTENCY = (
     os.getenv("STRICT_ODION_CLONE_CONSISTENCY", "true").lower() == "true"
-)
-
-def _float_env(name: str, default: float, *, min_value: float) -> float:
-    raw = str(os.getenv(name, "")).strip()
-    if not raw:
-        return default
-    try:
-        value = float(raw)
-    except ValueError:
-        logger.warning("Invalid %s=%r; using default %.3f", name, raw, default)
-        return default
-    if value < min_value:
-        logger.warning(
-            "%s=%s is below minimum %.3f; using minimum.",
-            name,
-            value,
-            min_value,
-        )
-        return min_value
-    return value
-
-TURN_MIN_ENDPOINTING_DELAY = _float_env(
-    "TURN_MIN_ENDPOINTING_DELAY",
-    0.45,
-    min_value=0.1,
-)
-TURN_MAX_ENDPOINTING_DELAY = _float_env(
-    "TURN_MAX_ENDPOINTING_DELAY",
-    1.2,
-    min_value=0.2,
-)
-if TURN_MAX_ENDPOINTING_DELAY < TURN_MIN_ENDPOINTING_DELAY:
-    logger.warning(
-        "TURN_MAX_ENDPOINTING_DELAY < TURN_MIN_ENDPOINTING_DELAY; aligning max to min."
-    )
-    TURN_MAX_ENDPOINTING_DELAY = TURN_MIN_ENDPOINTING_DELAY
-
-TURN_MIN_INTERRUPTION_DURATION = _float_env(
-    "TURN_MIN_INTERRUPTION_DURATION",
-    0.7,
-    min_value=0.1,
 )
 
 
@@ -695,52 +572,6 @@ def _decode_identity_email(identity: str) -> str:
     return _normalize_end_user_id(decoded)
 
 
-def _normalize_tts_mode(value: str) -> str:
-    mode = str(value or "").strip().lower()
-    if mode in {"default_voice", "cloned_voice", "auto"}:
-        return mode
-    return "auto"
-
-
-def _normalize_tts_endpoint(value: str) -> str:
-    endpoint = str(value or "").strip()
-    if not endpoint:
-        return ""
-    try:
-        parsed = urlparse(endpoint)
-    except Exception:
-        return ""
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-        return ""
-    return endpoint.rstrip("/")
-
-
-def _extract_tts_overrides_from_ctx(ctx: JobContext) -> dict[str, Any]:
-    room = getattr(ctx, "room", None)
-    participants = getattr(room, "remote_participants", None)
-    if not participants:
-        return {}
-
-    values = participants.values() if hasattr(participants, "values") else participants
-    for participant in values:
-        metadata_raw = str(getattr(participant, "metadata", "") or "").strip()
-        if not metadata_raw:
-            continue
-        try:
-            payload = json.loads(metadata_raw)
-        except json.JSONDecodeError:
-            continue
-        return {
-            "tts_endpoint": _normalize_tts_endpoint(payload.get("tts_endpoint") or ""),
-            "tts_mode": _normalize_tts_mode(payload.get("tts_mode") or ""),
-            "tts_owner_id": str(payload.get("tts_owner_id") or "").strip(),
-            "tts_voice_id": str(payload.get("tts_voice_id") or "").strip(),
-            "tts_language_hint": str(payload.get("tts_language_hint") or "").strip(),
-            "tts_seed": str(payload.get("tts_seed") or "").strip(),
-        }
-    return {}
-
-
 # Extracts participant identity and TTS endpoint from context
 def _participant_identity_from_ctx(
     ctx: JobContext,
@@ -831,7 +662,6 @@ def _participant_identity_from_ctx(
                         metadata_config_agent_id,
                         metadata_configured_agent_name,
                         metadata_end_user_name,
-                        metadata_tts_endpoint,
                     )
             except json.JSONDecodeError:
                 pass
@@ -846,7 +676,6 @@ def _participant_identity_from_ctx(
                 metadata_config_agent_id,
                 metadata_configured_agent_name,
                 metadata_end_user_name,
-                "",
             )
         if "voice_assistant_user_" in identity:
             phone_from_identity = identity.split("voice_assistant_user_", 1)[1]
@@ -859,7 +688,6 @@ def _participant_identity_from_ctx(
                     metadata_config_agent_id,
                     metadata_configured_agent_name,
                     metadata_end_user_name,
-                    "",
                 )
 
     return "", "voice", fallback_business_id, "", "", "", ""
@@ -935,11 +763,6 @@ async def _init_session_userdata(ctx: JobContext, language: str) -> dict[str, An
         "configured_agent_name": configured_agent_name,
         "end_user_name": end_user_name,
         "tts_endpoint": tts_endpoint,
-        "tts_mode": "auto",
-        "tts_owner_id": "",
-        "tts_voice_id": "",
-        "tts_language_hint": "",
-        "tts_seed": "",
         "business_id": business_id,
         "conversation_id": conversation_id,
         "session_id": stable_session_id,
@@ -951,13 +774,10 @@ async def _init_session_userdata(ctx: JobContext, language: str) -> dict[str, An
         "timeline_event_index": 0,
         "last_user_transcript": "",
         "last_assistant_message": "",
-        "usage_meter": UsageMeter(),
-    } | _extract_tts_overrides_from_ctx(ctx)
+    }
 
 
 def _wire_session_timeline(session: AgentSession, userdata: dict[str, Any]) -> None:
-    usage_meter = userdata.get("usage_meter")
-
     def _next_event_idx() -> int:
         userdata["timeline_event_index"] = (
             int(userdata.get("timeline_event_index", 0)) + 1
@@ -972,27 +792,6 @@ def _wire_session_timeline(session: AgentSession, userdata: dict[str, Any]) -> N
 
         userdata["turn_index"] = int(userdata.get("turn_index", 0)) + 1
         userdata["last_user_transcript"] = transcript
-        turn_idx = int(userdata["turn_index"])
-        turn_run_id = (
-            f"turn-{int(time.time() * 1000)}-{uuid.uuid4().hex[:6]}-t{turn_idx}"
-        )
-        userdata["active_turn_run_id"] = turn_run_id
-        userdata["active_turn_started_monotonic"] = time.monotonic()
-        # #region agent log
-        _emit_debug_log(
-            {
-                "runId": turn_run_id,
-                "hypothesisId": "H8",
-                "location": "main.py:_wire_session_timeline:user_input_transcribed",
-                "message": "turn_user_final_transcribed",
-                "data": {
-                    "turnIndex": turn_idx,
-                    "transcriptLength": len(transcript),
-                    "language": getattr(ev, "language", None),
-                },
-            }
-        )
-        # #endregion
         event_idx = _next_event_idx()
         trace_conversation_event(
             "user_input_transcribed",
@@ -1024,28 +823,6 @@ def _wire_session_timeline(session: AgentSession, userdata: dict[str, Any]) -> N
 
         if role.lower() == "assistant":
             userdata["last_assistant_message"] = content
-            if isinstance(usage_meter, UsageMeter):
-                usage_meter.add_assistant_text(content)
-            started_mono = userdata.get("active_turn_started_monotonic")
-            # #region agent log
-            _emit_debug_log(
-                {
-                    "runId": str(userdata.get("active_turn_run_id") or ""),
-                    "hypothesisId": "H8",
-                    "location": "main.py:_wire_session_timeline:conversation_item_added_assistant",
-                    "message": "turn_assistant_text_ready",
-                    "data": {
-                        "turnIndex": int(userdata.get("turn_index", 0)),
-                        "assistantTextLength": len(content),
-                        "elapsedSinceUserFinalMs": (
-                            int((time.monotonic() - float(started_mono)) * 1000)
-                            if isinstance(started_mono, (int, float))
-                            else None
-                        ),
-                    },
-                }
-            )
-            # #endregion
         elif role.lower() == "user":
             if content != userdata.get("last_user_transcript"):
                 userdata["turn_index"] = int(userdata.get("turn_index", 0)) + 1
@@ -1113,16 +890,6 @@ def _wire_session_timeline(session: AgentSession, userdata: dict[str, Any]) -> N
                     session_id=str(userdata.get("session_id") or ""),
                 )
 
-    @session.on("metrics_collected")
-    def _on_metrics_collected(ev: Any) -> None:
-        if isinstance(usage_meter, UsageMeter):
-            usage_meter.add_metrics_event(ev)
-
-    @session.on("session_usage_updated")
-    def _on_session_usage_updated(ev: Any) -> None:
-        if isinstance(usage_meter, UsageMeter):
-            usage_meter.apply_session_usage_updated(ev)
-
     @session.on("function_tools_executed")
     def _on_function_tools_executed(ev: Any) -> None:
         calls: list[dict[str, Any]] = []
@@ -1137,30 +904,6 @@ def _wire_session_timeline(session: AgentSession, userdata: dict[str, Any]) -> N
                 )
         if not calls:
             return
-        started_mono = userdata.get("active_turn_started_monotonic")
-        # #region agent log
-        _emit_debug_log(
-            {
-                "runId": str(userdata.get("active_turn_run_id") or ""),
-                "hypothesisId": "H9",
-                "location": "main.py:_wire_session_timeline:function_tools_executed",
-                "message": "turn_function_tools_executed",
-                "data": {
-                    "turnIndex": int(userdata.get("turn_index", 0)),
-                    "toolCount": len(calls),
-                    "toolNames": [
-                        str(call.get("tool_name") or "unknown_tool")
-                        for call in calls[:6]
-                    ],
-                    "elapsedSinceUserFinalMs": (
-                        int((time.monotonic() - float(started_mono)) * 1000)
-                        if isinstance(started_mono, (int, float))
-                        else None
-                    ),
-                },
-            }
-        )
-        # #endregion
 
         event_idx = _next_event_idx()
         trace_conversation_event(
@@ -1496,19 +1239,19 @@ def _validate_runtime_requirements() -> None:
         )
 
 
-async def _fetch_agent_runtime_config(
+async def _fetch_active_agent_runtime_config(
     userdata: dict[str, Any],
 ) -> dict[str, Any]:
     business_id = _normalize_business_id(str(userdata.get("business_id") or ""))
     config_agent_id = str(userdata.get("agent_config_id") or "").strip()
     if not business_id or not config_agent_id:
         return {}
-    payload = await get_agent_runtime_config(
+    payload = await get_agent_active_config(
         agent_id=config_agent_id, business_id=business_id
     )
     if str(payload.get("status") or "") == "failed":
         logger.error(
-            "Agent runtime config fetch failed: business_id=%s agent_id=%s detail=%s http_status=%s",
+            "Agent config fetch failed: business_id=%s agent_id=%s detail=%s http_status=%s",
             business_id,
             config_agent_id,
             payload.get("detail"),
@@ -2306,40 +2049,24 @@ def _build_session_for_language(
     userdata: dict[str, Any],
     tts_engine: Any | None = None,
 ) -> AgentSession:
-    llm_model = GOOGLE_LLM_MODEL_FR if language == "fr" else GOOGLE_LLM_MODEL_EN
-    logger.info(
-        "Using Google LLM model for %s session: %s",
-        "French" if language == "fr" else "English",
-        llm_model,
-    )
     if language == "fr":
         return AgentSession(
             stt=deepgram.STT(language="fr"),
             tts=tts_engine or deepgram.TTS(model="aura-2-agathe-fr"),
-            llm=google.LLM(model=llm_model),
+            llm=google.LLM(model="gemini-2.0-flash"),
             userdata=userdata,
-            min_endpointing_delay=TURN_MIN_ENDPOINTING_DELAY,
-            max_endpointing_delay=TURN_MAX_ENDPOINTING_DELAY,
-            min_interruption_duration=TURN_MIN_INTERRUPTION_DURATION,
         )
 
     return AgentSession(
         stt=deepgram.STT(language="en"),
         tts=tts_engine,
-        llm=google.LLM(model=llm_model),
+        llm=google.LLM(model="gemini-2.0-flash"),
         userdata=userdata,
-        min_endpointing_delay=TURN_MIN_ENDPOINTING_DELAY,
-        max_endpointing_delay=TURN_MAX_ENDPOINTING_DELAY,
-        min_interruption_duration=TURN_MIN_INTERRUPTION_DURATION,
     )
 
 
 def _trigger_first_turn(
-    session: AgentSession,
-    *,
-    language: str,
-    business_use_case: str,
-    configured_name: str | None = None,
+    session: AgentSession, *, language: str, business_use_case: str
 ) -> None:
     try:
         session.generate_reply(
@@ -2347,11 +2074,7 @@ def _trigger_first_turn(
             input_modality="text",
         )
     except Exception as exc:  # noqa: BLE001
-        logger.warning(
-            "Failed to trigger first assistant turn (%s): %s",
-            language,
-            exc,
-        )
+        logger.warning("Failed to trigger first assistant turn (%s): %s", language, exc)
 
 
 def _should_use_odion_tts_for_language(config: dict[str, Any], language: str) -> bool:
@@ -2390,7 +2113,7 @@ def _build_tts_engine_for_language(
     odion_enabled = ENABLE_ODION_TTS_FR if is_fr else ENABLE_ODION_TTS_EN
     fallback_label = "French" if is_fr else "English"
 
-    use_experiment_clone = FORCE_ODION_TTS_EXPERIMENT_VOICE and bool(
+    use_experiment_clone = bool(ODION_TTS_EXPERIMENT_OWNER_ID) and bool(
         ODION_TTS_EXPERIMENT_VOICE_ID
     )
     tts_voice_id = (
@@ -2399,11 +2122,9 @@ def _build_tts_engine_for_language(
         else str(active_agent_config.get("tts_voice_id") or "").strip()
     )
     tts_owner_id = (
-        ODION_TTS_DEFAULT_OWNER_ID
+        ODION_TTS_EXPERIMENT_OWNER_ID
         if use_experiment_clone
-        else str(active_agent_config.get("tts_owner_id") or "").strip()
-        or ODION_TTS_DEFAULT_OWNER_ID
-        or business_id
+        else str(active_agent_config.get("tts_owner_id") or "").strip() or business_id
     )
     tts_language_hint = (
         ("French" if is_fr else "English")
@@ -2414,28 +2135,9 @@ def _build_tts_engine_for_language(
         ).strip()
         or ("French" if is_fr else "English")
     )
-    tts_endpoint_override = _normalize_tts_endpoint(userdata.get("tts_endpoint") or "")
-    tts_mode_override = _normalize_tts_mode(userdata.get("tts_mode") or "")
-    tts_owner_id_override = str(userdata.get("tts_owner_id") or "").strip()
-    tts_voice_id_override = str(userdata.get("tts_voice_id") or "").strip()
-    tts_language_hint_override = str(userdata.get("tts_language_hint") or "").strip()
-    tts_seed_raw = str(userdata.get("tts_seed") or "").strip()
-    tts_seed_override = (
-        int(tts_seed_raw) if tts_seed_raw.isdigit() and int(tts_seed_raw) >= 0 else None
-    )
-    if tts_owner_id_override:
-        tts_owner_id = tts_owner_id_override
-    if tts_voice_id_override:
-        tts_voice_id = tts_voice_id_override
-    if tts_language_hint_override:
-        tts_language_hint = tts_language_hint_override
     use_configured_clone = use_experiment_clone or _should_use_odion_tts_for_language(
         active_agent_config, lang
     )
-    if tts_mode_override == "cloned_voice":
-        use_configured_clone = True
-    elif tts_mode_override == "default_voice":
-        use_configured_clone = False
     use_odion_default = not use_configured_clone
 
     if not odion_enabled:
@@ -2452,11 +2154,8 @@ def _build_tts_engine_for_language(
                 owner_id=tts_owner_id,
                 voice_id=tts_voice_id,
                 language=tts_language_hint,
-                seed=tts_seed_override
-                if tts_seed_override is not None
-                else ODION_TTS_CLONE_SEED,
+                seed=ODION_TTS_CLONE_SEED,
                 mode="cloned_voice",
-                base_url=tts_endpoint_override or None,
             )
             logger.info(
                 "Using Odion cloned TTS for %s session: agent_config_id=%s voice_id=%s owner_id=%s seed=%s",
@@ -2472,9 +2171,8 @@ def _build_tts_engine_for_language(
                 owner_id=tts_owner_id or business_id,
                 voice_id=None,
                 language=tts_language_hint,
-                seed=tts_seed_override,
+                seed=None,
                 mode="default_voice",
-                base_url=tts_endpoint_override or None,
             )
             logger.info(
                 "Using Odion default TTS for %s session: agent_config_id=%s owner_id=%s language_hint=%s",
@@ -2523,7 +2221,7 @@ async def entrypoint(ctx: JobContext):
     """
     if _is_en_agent_name(AGENT_NAME):
         userdata = await _init_session_userdata(ctx, language="en")
-        active_agent_config = await _fetch_agent_runtime_config(userdata)
+        active_agent_config = await _fetch_active_agent_runtime_config(userdata)
         business_use_case = _detect_business_use_case(
             active_agent_config=active_agent_config,
             userdata=userdata,
@@ -2686,10 +2384,7 @@ async def entrypoint(ctx: JobContext):
                 room_options=room_io.RoomOptions(delete_room_on_close=True),
             )
             _trigger_first_turn(
-                session,
-                language="en",
-                business_use_case=business_use_case,
-                configured_name=str(userdata.get("configured_agent_name") or ""),
+                session, language="en", business_use_case=business_use_case
             )
             shutdown_reason = await _wait_for_job_shutdown(ctx)
             logger.info(
@@ -2712,7 +2407,7 @@ async def entrypoint(ctx: JobContext):
             )
     else:
         userdata = await _init_session_userdata(ctx, language="fr")
-        active_agent_config = await _fetch_agent_runtime_config(userdata)
+        active_agent_config = await _fetch_active_agent_runtime_config(userdata)
         business_use_case = _detect_business_use_case(
             active_agent_config=active_agent_config,
             userdata=userdata,
@@ -2869,10 +2564,7 @@ async def entrypoint(ctx: JobContext):
                 room_options=room_io.RoomOptions(delete_room_on_close=True),
             )
             _trigger_first_turn(
-                session,
-                language="fr",
-                business_use_case=business_use_case,
-                configured_name=str(userdata.get("configured_agent_name") or ""),
+                session, language="fr", business_use_case=business_use_case
             )
             shutdown_reason = await _wait_for_job_shutdown(ctx)
             logger.info(

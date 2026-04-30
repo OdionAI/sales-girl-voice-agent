@@ -2,9 +2,6 @@ from __future__ import annotations
 
 import os
 import logging
-import json
-import time
-import uuid
 from typing import Any
 from urllib.parse import urlparse
 
@@ -36,22 +33,6 @@ AGENT_CLIENT_ID = os.getenv("AGENT_CLIENT_ID", "sales-girl-internal")
 AGENT_NAME = os.getenv("AGENT_NAME", "sales-girl-agent-en")
 OPS_SHARED_OWNER_EMAIL = str(os.getenv("OPS_SHARED_OWNER_EMAIL") or "").strip().lower()
 logger = logging.getLogger(__name__)
-DEBUG_LOG_PATH = "/Users/woron/Documents/sales-girl/_generated_repos/.cursor/debug-0d9f31.log"
-DEBUG_SESSION_ID = "0d9f31"
-
-
-def _emit_debug_log(payload: dict[str, Any]) -> None:
-    record = {
-        "sessionId": DEBUG_SESSION_ID,
-        "id": f"log_{int(time.time() * 1000)}_{uuid.uuid4().hex[:8]}",
-        "timestamp": int(time.time() * 1000),
-        **payload,
-    }
-    try:
-        with open(DEBUG_LOG_PATH, "a", encoding="utf-8") as fh:
-            fh.write(json.dumps(record, ensure_ascii=True, default=str) + "\n")
-    except Exception:
-        return
 
 
 def _business_use_case(metadata: dict[str, Any] | None) -> str:
@@ -135,7 +116,6 @@ async def _request_json(
     json_body: dict[str, Any] | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    start_mono = time.monotonic()
     base_url = _ops_base_url(metadata)
     if not str(base_url or "").strip():
         output = {"status": "failed", "message": "Hotel ops backend is not configured."}
@@ -176,42 +156,10 @@ async def _request_json(
                 headers=headers,
             )
     except httpx.TimeoutException:
-        # #region agent log
-        _emit_debug_log(
-            {
-                "runId": str((metadata or {}).get("active_turn_run_id") or ""),
-                "hypothesisId": "H9",
-                "location": "agent/ops_api.py:_request_json:timeout",
-                "message": "tool_http_request_completed",
-                "data": {
-                    "method": method,
-                    "path": path,
-                    "status": "timeout",
-                    "durationMs": int((time.monotonic() - start_mono) * 1000),
-                },
-            }
-        )
-        # #endregion
         output = {"status": "failed", "message": "Ops backend request timed out."}
         update_observation(output=output)
         return output
     except httpx.HTTPError:
-        # #region agent log
-        _emit_debug_log(
-            {
-                "runId": str((metadata or {}).get("active_turn_run_id") or ""),
-                "hypothesisId": "H9",
-                "location": "agent/ops_api.py:_request_json:http_error",
-                "message": "tool_http_request_completed",
-                "data": {
-                    "method": method,
-                    "path": path,
-                    "status": "http_error",
-                    "durationMs": int((time.monotonic() - start_mono) * 1000),
-                },
-            }
-        )
-        # #endregion
         output = {"status": "failed", "message": "Ops backend is unavailable."}
         update_observation(output=output)
         return output
@@ -223,23 +171,6 @@ async def _request_json(
         payload = None
 
     if response.status_code >= 400:
-        # #region agent log
-        _emit_debug_log(
-            {
-                "runId": str((metadata or {}).get("active_turn_run_id") or ""),
-                "hypothesisId": "H9",
-                "location": "agent/ops_api.py:_request_json:status_error",
-                "message": "tool_http_request_completed",
-                "data": {
-                    "method": method,
-                    "path": path,
-                    "status": "failed",
-                    "httpStatus": response.status_code,
-                    "durationMs": int((time.monotonic() - start_mono) * 1000),
-                },
-            }
-        )
-        # #endregion
         detail = "Request failed."
         if isinstance(payload, dict):
             detail = str(payload.get("detail") or detail)
@@ -254,43 +185,11 @@ async def _request_json(
     if isinstance(payload, dict):
         logger.info("OPS response %s %s -> %s", method, path, payload)
         payload["status"] = "success"
-        # #region agent log
-        _emit_debug_log(
-            {
-                "runId": str((metadata or {}).get("active_turn_run_id") or ""),
-                "hypothesisId": "H9",
-                "location": "agent/ops_api.py:_request_json:success_dict",
-                "message": "tool_http_request_completed",
-                "data": {
-                    "method": method,
-                    "path": path,
-                    "status": "success",
-                    "durationMs": int((time.monotonic() - start_mono) * 1000),
-                },
-            }
-        )
-        # #endregion
         update_observation(output=payload)
         return payload
     if isinstance(payload, list):
         output = {"status": "success", "items": payload}
         logger.info("OPS response %s %s -> %s", method, path, output)
-        # #region agent log
-        _emit_debug_log(
-            {
-                "runId": str((metadata or {}).get("active_turn_run_id") or ""),
-                "hypothesisId": "H9",
-                "location": "agent/ops_api.py:_request_json:success_list",
-                "message": "tool_http_request_completed",
-                "data": {
-                    "method": method,
-                    "path": path,
-                    "status": "success",
-                    "durationMs": int((time.monotonic() - start_mono) * 1000),
-                },
-            }
-        )
-        # #endregion
         update_observation(output=output)
         return output
 
