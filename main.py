@@ -2141,6 +2141,73 @@ def _normalized_language_code(value: str) -> str:
     return "en"
 
 
+def _deepgram_tts_model_for_language(language: str) -> str:
+    return "aura-2-agathe-fr" if str(language or "").strip().lower() == "fr" else "aura-asteria-en"
+
+
+def _strict_language_aware_deepgram_model(model: str, language: str) -> str:
+    selected_model = str(model or "").strip()
+    if not selected_model:
+        return _deepgram_tts_model_for_language(language)
+    lowered_model = selected_model.lower()
+    normalized_lang = str(language or "").strip().lower()
+    if normalized_lang == "fr" and lowered_model.endswith("-en"):
+        return _deepgram_tts_model_for_language("fr")
+    if normalized_lang != "fr" and lowered_model.endswith("-fr"):
+        return _deepgram_tts_model_for_language("en")
+    return selected_model
+
+
+def _deepgram_stt_language_for_language(language: str) -> str:
+    return "fr" if str(language or "").strip().lower() == "fr" else "en"
+
+
+def _runtime_overrides_from_userdata(userdata: dict[str, Any]) -> dict[str, str]:
+    raw = userdata.get("runtime_overrides")
+    if not isinstance(raw, dict):
+        return {}
+    normalized: dict[str, str] = {}
+    for key in (
+        "stt_provider",
+        "stt_model",
+        "stt_base_url",
+        "tts_provider",
+        "tts_model",
+        "tts_base_url",
+    ):
+        value = str(raw.get(key) or "").strip()
+        if value:
+            normalized[key] = value
+    return normalized
+
+
+def _build_stt_engine_for_language(*, language: str, userdata: dict[str, Any]) -> Any:
+    lang = str(language or "").strip().lower()
+    overrides = _runtime_overrides_from_userdata(userdata)
+    provider = str(overrides.get("stt_provider") or "deepgram").strip().lower()
+    model = str(overrides.get("stt_model") or "nova-3").strip() or "nova-3"
+    base_url = str(overrides.get("stt_base_url") or "").strip()
+
+    stt_kwargs: dict[str, Any] = {
+        "language": _deepgram_stt_language_for_language(lang),
+        "model": model,
+    }
+    if provider == "custom" and base_url:
+        stt_kwargs["base_url"] = base_url
+        logger.info(
+            "Using custom Deepgram-compatible STT override: base_url=%s model=%s language=%s",
+            base_url,
+            model,
+            lang,
+        )
+    elif model != "nova-3":
+        logger.info(
+            "Using Deepgram STT override: model=%s language=%s",
+            model,
+            lang,
+        )
+
+    return deepgram.STT(**stt_kwargs)
 def _build_tts_engine_for_language(
     *,
     language: str,
@@ -2151,18 +2218,48 @@ def _build_tts_engine_for_language(
     lang = str(language or "").strip().lower()
     is_fr = lang == "fr"
     saved_provider = str(active_agent_config.get("tts_provider") or "").strip().lower()
-    fallback_tts: Any = (
-        deepgram.TTS(model="aura-2-agathe-fr")
-        if is_fr
-        else deepgram.TTS(model="aura-asteria-en")
+    runtime_overrides = _runtime_overrides_from_userdata(userdata)
+    override_provider = str(runtime_overrides.get("tts_provider") or "").strip().lower()
+    override_model = (
+        str(runtime_overrides.get("tts_model") or "").strip()
+        or _deepgram_tts_model_for_language(lang)
     )
+    override_base_url = str(runtime_overrides.get("tts_base_url") or "").strip()
+    fallback_tts: Any = deepgram.TTS(model=_deepgram_tts_model_for_language(lang))
     odion_enabled = ENABLE_ODION_TTS_FR if is_fr else ENABLE_ODION_TTS_EN
     fallback_label = "French" if is_fr else "English"
-
+    if override_provider in {"deepgram", "custom"}:
+        resolved_override_model = _strict_language_aware_deepgram_model(
+            override_model, lang
+        )
+        if resolved_override_model != override_model:
+            logger.info(
+                "Adjusted Deepgram override model for language: requested=%s resolved=%s language=%s",
+                override_model,
+                resolved_override_model,
+                lang,
+            )
+        tts_kwargs: dict[str, Any] = {"model": resolved_override_model}
+        if override_provider == "custom" and override_base_url:
+            tts_kwargs["base_url"] = override_base_url
+            logger.info(
+                "Using custom Deepgram-compatible TTS override: base_url=%s model=%s language=%s",
+                override_base_url,
+                override_model,
+                lang,
+            )
+        else:
+            logger.info(
+                "Using Deepgram TTS override: model=%s language=%s",
+                resolved_override_model,
+                lang,
+            )
+        return deepgram.TTS(**tts_kwargs)
     if saved_provider == "deepgram":
-        saved_model = (
+        saved_model = _strict_language_aware_deepgram_model(
             str(active_agent_config.get("tts_voice_id") or "").strip()
-            or _deepgram_tts_model_for_language(lang)
+            or _deepgram_tts_model_for_language(lang),
+            lang,
         )
         logger.info(
             "Using saved Deepgram TTS provider: model=%s language=%s agent_config_id=%s",
