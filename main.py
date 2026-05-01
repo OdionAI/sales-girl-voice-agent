@@ -2198,6 +2198,19 @@ def _deepgram_tts_model_for_language(language: str) -> str:
     return "aura-2-agathe-fr" if str(language or "").strip().lower() == "fr" else "aura-asteria-en"
 
 
+def _strict_language_aware_deepgram_model(model: str, language: str) -> str:
+    selected_model = str(model or "").strip()
+    if not selected_model:
+        return _deepgram_tts_model_for_language(language)
+    lowered_model = selected_model.lower()
+    normalized_lang = str(language or "").strip().lower()
+    if normalized_lang == "fr" and lowered_model.endswith("-en"):
+        return _deepgram_tts_model_for_language("fr")
+    if normalized_lang != "fr" and lowered_model.endswith("-fr"):
+        return _deepgram_tts_model_for_language("en")
+    return selected_model
+
+
 def _deepgram_stt_language_for_language(language: str) -> str:
     return "fr" if str(language or "").strip().lower() == "fr" else "en"
 
@@ -2274,7 +2287,17 @@ def _build_tts_engine_for_language(
     fallback_label = "French" if is_fr else "English"
 
     if override_provider in {"deepgram", "custom"}:
-        tts_kwargs: dict[str, Any] = {"model": override_model}
+        resolved_override_model = _strict_language_aware_deepgram_model(
+            override_model, lang
+        )
+        if resolved_override_model != override_model:
+            logger.info(
+                "Adjusted Deepgram override model for language: requested=%s resolved=%s language=%s",
+                override_model,
+                resolved_override_model,
+                lang,
+            )
+        tts_kwargs: dict[str, Any] = {"model": resolved_override_model}
         if override_provider == "custom" and override_base_url:
             tts_kwargs["base_url"] = override_base_url
             logger.info(
@@ -2292,9 +2315,10 @@ def _build_tts_engine_for_language(
         return deepgram.TTS(**tts_kwargs)
 
     if saved_provider == "deepgram":
-        saved_model = (
+        saved_model = _strict_language_aware_deepgram_model(
             str(active_agent_config.get("tts_voice_id") or "").strip()
-            or _deepgram_tts_model_for_language(lang)
+            or _deepgram_tts_model_for_language(lang),
+            lang,
         )
         logger.info(
             "Using saved Deepgram TTS provider: model=%s language=%s agent_config_id=%s",
