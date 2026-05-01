@@ -388,11 +388,14 @@ CONVERSATION_SERVICE_REQUIRED = (
 ENABLE_ODION_TTS_EN = os.getenv("ENABLE_ODION_TTS_EN", "true").lower() == "true"
 ENABLE_ODION_TTS_FR = os.getenv("ENABLE_ODION_TTS_FR", "false").lower() == "true"
 ODION_TTS_EXPERIMENT_OWNER_ID = str(
-    os.getenv("ODION_TTS_EXPERIMENT_OWNER_ID") or "mavinomichael@gmail.com"
+    os.getenv("ODION_TTS_EXPERIMENT_OWNER_ID") or ""
 ).strip()
 ODION_TTS_EXPERIMENT_VOICE_ID = str(
-    os.getenv("ODION_TTS_EXPERIMENT_VOICE_ID") or "d270a5cec6914373b9deed1d1c3cbade"
+    os.getenv("ODION_TTS_EXPERIMENT_VOICE_ID") or ""
 ).strip()
+FORCE_ODION_TTS_EXPERIMENT_VOICE = (
+    os.getenv("FORCE_ODION_TTS_EXPERIMENT_VOICE", "false").lower() == "true"
+)
 ODION_TTS_EXPERIMENT_LANGUAGE_HINT = (
     str(os.getenv("ODION_TTS_EXPERIMENT_LANGUAGE_HINT") or "English").strip()
     or "English"
@@ -2301,7 +2304,9 @@ def _build_tts_engine_for_language(
         )
         return deepgram.TTS(model=saved_model)
 
-    use_experiment_clone = bool(ODION_TTS_EXPERIMENT_OWNER_ID) and bool(
+    use_experiment_clone = FORCE_ODION_TTS_EXPERIMENT_VOICE and bool(
+        ODION_TTS_EXPERIMENT_OWNER_ID
+    ) and bool(
         ODION_TTS_EXPERIMENT_VOICE_ID
     )
     tts_voice_id = (
