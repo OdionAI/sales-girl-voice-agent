@@ -2243,6 +2243,7 @@ def _build_tts_engine_for_language(
 ) -> Any:
     lang = str(language or "").strip().lower()
     is_fr = lang == "fr"
+    saved_provider = str(active_agent_config.get("tts_provider") or "").strip().lower()
     runtime_overrides = _runtime_overrides_from_userdata(userdata)
     override_provider = str(runtime_overrides.get("tts_provider") or "").strip().lower()
     override_model = (
@@ -2273,6 +2274,19 @@ def _build_tts_engine_for_language(
                 lang,
             )
         return deepgram.TTS(**tts_kwargs)
+
+    if saved_provider == "deepgram":
+        saved_model = (
+            str(active_agent_config.get("tts_voice_id") or "").strip()
+            or _deepgram_tts_model_for_language(lang)
+        )
+        logger.info(
+            "Using saved Deepgram TTS provider: model=%s language=%s agent_config_id=%s",
+            saved_model,
+            lang,
+            userdata.get("agent_config_id"),
+        )
+        return deepgram.TTS(model=saved_model)
 
     use_experiment_clone = bool(ODION_TTS_EXPERIMENT_OWNER_ID) and bool(
         ODION_TTS_EXPERIMENT_VOICE_ID
