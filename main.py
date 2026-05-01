@@ -613,7 +613,8 @@ def _decode_identity_email(identity: str) -> str:
     return _normalize_end_user_id(decoded)
 
 
-# Extracts participant identity and TTS endpoint from context\ndef _participant_identity_from_ctx(
+# Extract participant identity and related room context from the LiveKit job.
+def _participant_identity_from_ctx(
     ctx: JobContext,
 ) -> tuple[str, str, str, str, str, str, str]:
     room = getattr(ctx, "room", None)
