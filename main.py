@@ -452,6 +452,19 @@ TURN_MIN_INTERRUPTION_DURATION = _float_env(
     min_value=0.1,
 )
 
+GOOGLE_LLM_MODEL_DEFAULT = (
+    str(os.getenv("GOOGLE_LLM_MODEL_DEFAULT") or "gemini-2.0-flash").strip()
+    or "gemini-2.0-flash"
+)
+GOOGLE_LLM_MODEL_EN = (
+    str(os.getenv("GOOGLE_LLM_MODEL_EN") or GOOGLE_LLM_MODEL_DEFAULT).strip()
+    or GOOGLE_LLM_MODEL_DEFAULT
+)
+GOOGLE_LLM_MODEL_FR = (
+    str(os.getenv("GOOGLE_LLM_MODEL_FR") or GOOGLE_LLM_MODEL_DEFAULT).strip()
+    or GOOGLE_LLM_MODEL_DEFAULT
+)
+
 
 def _normalize_business_id(value: str | None) -> str:
     raw = str(value or "").strip()
@@ -2129,7 +2142,7 @@ def _build_session_for_language(
         return AgentSession(
             stt=stt_engine,
             tts=tts_engine or deepgram.TTS(model="aura-2-agathe-fr"),
-            llm=google.LLM(model="gemini-3.1-pro"),
+            llm=google.LLM(model=GOOGLE_LLM_MODEL_FR),
             userdata=userdata,
             min_endpointing_delay=TURN_MIN_ENDPOINTING_DELAY,
             max_endpointing_delay=TURN_MAX_ENDPOINTING_DELAY,
@@ -2139,7 +2152,7 @@ def _build_session_for_language(
     return AgentSession(
         stt=stt_engine,
         tts=tts_engine,
-        llm=google.LLM(model="gemini-3.1-pro"),
+        llm=google.LLM(model=GOOGLE_LLM_MODEL_EN),
         userdata=userdata,
         min_endpointing_delay=TURN_MIN_ENDPOINTING_DELAY,
         max_endpointing_delay=TURN_MAX_ENDPOINTING_DELAY,
