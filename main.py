@@ -613,7 +613,7 @@ def _decode_identity_email(identity: str) -> str:
     return _normalize_end_user_id(decoded)
 
 
-# Extracts participant identity and TTS endpoint from context
+# Extract participant identity and related room context from the LiveKit job.
 def _participant_identity_from_ctx(
     ctx: JobContext,
 ) -> tuple[str, str, str, str, str, str, str]:
@@ -2094,7 +2094,7 @@ def _build_session_for_language(
         return AgentSession(
             stt=deepgram.STT(language="fr"),
             tts=tts_engine or deepgram.TTS(model="aura-2-agathe-fr"),
-            llm=google.LLM(model="gemini-2.0-flash"),
+            llm=google.LLM(model="gemini-3.1-pro"),
             userdata=userdata,
             min_endpointing_delay=TURN_MIN_ENDPOINTING_DELAY,
             max_endpointing_delay=TURN_MAX_ENDPOINTING_DELAY,
@@ -2104,7 +2104,7 @@ def _build_session_for_language(
     return AgentSession(
         stt=deepgram.STT(language="en"),
         tts=tts_engine,
-        llm=google.LLM(model="gemini-2.0-flash"),
+        llm=google.LLM(model="gemini-3.1-pro"),
         userdata=userdata,
         min_endpointing_delay=TURN_MIN_ENDPOINTING_DELAY,
         max_endpointing_delay=TURN_MAX_ENDPOINTING_DELAY,
