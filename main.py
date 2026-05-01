@@ -2149,6 +2149,7 @@ def _build_tts_engine_for_language(
 ) -> Any:
     lang = str(language or "").strip().lower()
     is_fr = lang == "fr"
+    saved_provider = str(active_agent_config.get("tts_provider") or "").strip().lower()
     fallback_tts: Any = (
         deepgram.TTS(model="aura-2-agathe-fr")
         if is_fr
@@ -2157,6 +2158,18 @@ def _build_tts_engine_for_language(
     odion_enabled = ENABLE_ODION_TTS_FR if is_fr else ENABLE_ODION_TTS_EN
     fallback_label = "French" if is_fr else "English"
 
+    if saved_provider == "deepgram":
+        saved_model = (
+            str(active_agent_config.get("tts_voice_id") or "").strip()
+            or _deepgram_tts_model_for_language(lang)
+        )
+        logger.info(
+            "Using saved Deepgram TTS provider: model=%s language=%s agent_config_id=%s",
+            saved_model,
+            lang,
+            userdata.get("agent_config_id"),
+        )
+        return deepgram.TTS(model=saved_model)
     use_experiment_clone = bool(ODION_TTS_EXPERIMENT_OWNER_ID) and bool(
         ODION_TTS_EXPERIMENT_VOICE_ID
     )
