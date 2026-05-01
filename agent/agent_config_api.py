@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import os
+import logging
 from typing import Any
 
 import httpx
 
+logger = logging.getLogger(__name__)
 
 BASE_URL = os.getenv("AGENT_CONFIG_API_BASE_URL", "").rstrip("/")
 SERVICE_TOKEN = os.getenv("AGENT_CONFIG_SERVICE_TOKEN", os.getenv("CONVERSATION_SERVICE_TOKEN", ""))
@@ -37,6 +39,12 @@ async def get_active_config(*, agent_id: str, business_id: str) -> dict[str, Any
     except ValueError:
         payload = {}
     if response.status_code >= 400:
+        logger.error(
+            "Agent config API request failed: url=%s status=%s detail=%s",
+            url,
+            response.status_code,
+            payload.get("detail") if isinstance(payload, dict) else "request failed",
+        )
         return {
             "status": "failed",
             "http_status": response.status_code,
