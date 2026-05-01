@@ -616,7 +616,7 @@ def _decode_identity_email(identity: str) -> str:
 # Extract participant identity and related room context from the LiveKit job.
 def _participant_identity_from_ctx(
     ctx: JobContext,
-) -> tuple[str, str, str, str, str, str, str]:
+) -> tuple[str, str, str, str, str, str, str, dict[str, str]]:
     room = getattr(ctx, "room", None)
     room_name = _room_name_from_ctx(ctx)
     fallback_business_id = _normalize_business_id(
@@ -642,17 +642,35 @@ def _participant_identity_from_ctx(
             room_configured_name,
             room_end_user_name,
             "",
+            {},
         )
 
     # First preference: encoded phone in room name (always available at session bootstrap)
     phone_from_room = _phone_from_room_name(room_name)
     if phone_from_room:
-        return phone_from_room, "voice", fallback_business_id, "", "", "", ""
+        return phone_from_room, "voice", fallback_business_id, "", "", "", "", {}
 
     # Fallback: read remote participant metadata / identity
     participants = getattr(room, "remote_participants", None)
     if not participants:
-        return "", "voice", fallback_business_id, "", "", "", ""
+        return "", "voice", fallback_business_id, "", "", "", "", {}
+
+    def _normalize_runtime_overrides(payload: Any) -> dict[str, str]:
+        if not isinstance(payload, dict):
+            return {}
+        normalized: dict[str, str] = {}
+        for key in (
+            "stt_provider",
+            "stt_model",
+            "stt_base_url",
+            "tts_provider",
+            "tts_model",
+            "tts_base_url",
+        ):
+            value = str(payload.get(key) or "").strip()
+            if value:
+                normalized[key] = value
+        return normalized
 
     values = participants.values() if hasattr(participants, "values") else participants
     for participant in values:
@@ -660,6 +678,8 @@ def _participant_identity_from_ctx(
         metadata_config_agent_id = ""
         metadata_configured_agent_name = ""
         metadata_end_user_name = ""
+        metadata_tts_endpoint = ""
+        metadata_runtime_overrides: dict[str, str] = {}
         metadata_raw = str(getattr(participant, "metadata", "") or "").strip()
         if metadata_raw:
             try:
@@ -673,6 +693,9 @@ def _participant_identity_from_ctx(
                 ).strip()
                 metadata_end_user_name = str(payload.get("end_user_name") or "").strip()
                 metadata_tts_endpoint = str(payload.get("tts_endpoint") or "").strip()
+                metadata_runtime_overrides = _normalize_runtime_overrides(
+                    payload.get("runtime_overrides")
+                )
                 email_candidate = str(payload.get("end_user_email") or "").strip()
                 if email_candidate:
                     normalized_email = _normalize_end_user_id(email_candidate)
@@ -686,6 +709,7 @@ def _participant_identity_from_ctx(
                             metadata_configured_agent_name,
                             metadata_end_user_name,
                             metadata_tts_endpoint,
+                            metadata_runtime_overrides,
                         )
                 candidate = str(
                     payload.get("end_user_phone") or payload.get("end_user_id") or ""
@@ -703,6 +727,8 @@ def _participant_identity_from_ctx(
                         metadata_config_agent_id,
                         metadata_configured_agent_name,
                         metadata_end_user_name,
+                        metadata_tts_endpoint,
+                        metadata_runtime_overrides,
                     )
             except json.JSONDecodeError:
                 pass
@@ -717,6 +743,8 @@ def _participant_identity_from_ctx(
                 metadata_config_agent_id,
                 metadata_configured_agent_name,
                 metadata_end_user_name,
+                metadata_tts_endpoint,
+                metadata_runtime_overrides,
             )
         if "voice_assistant_user_" in identity:
             phone_from_identity = identity.split("voice_assistant_user_", 1)[1]
@@ -729,9 +757,11 @@ def _participant_identity_from_ctx(
                     metadata_config_agent_id,
                     metadata_configured_agent_name,
                     metadata_end_user_name,
+                    metadata_tts_endpoint,
+                    metadata_runtime_overrides,
                 )
 
-    return "", "voice", fallback_business_id, "", "", "", ""
+    return "", "voice", fallback_business_id, "", "", "", "", {}
 
 
 async def _init_session_userdata(ctx: JobContext, language: str) -> dict[str, Any]:
@@ -745,6 +775,7 @@ async def _init_session_userdata(ctx: JobContext, language: str) -> dict[str, An
         configured_agent_name,
         end_user_name,
         tts_endpoint,
+        runtime_overrides,
     ) = _participant_identity_from_ctx(ctx)
     if REQUIRE_VERIFIED_PHONE and not end_user_id:
         try:
@@ -758,9 +789,10 @@ async def _init_session_userdata(ctx: JobContext, language: str) -> dict[str, An
                 configured_agent_name,
                 end_user_name,
                 tts_endpoint,
+                runtime_overrides,
             ) = _participant_identity_from_ctx(ctx)
             logger.info(
-                "Retried participant identity after join: end_user_id=%s type=%s business_id=%s config_agent_id=%s configured_name=%s end_user_name=%s tts_endpoint=%s",
+                "Retried participant identity after join: end_user_id=%s type=%s business_id=%s config_agent_id=%s configured_name=%s end_user_name=%s tts_endpoint=%s runtime_overrides=%s",
                 end_user_id,
                 identity_type,
                 business_id,
@@ -768,6 +800,7 @@ async def _init_session_userdata(ctx: JobContext, language: str) -> dict[str, An
                 configured_agent_name,
                 end_user_name,
                 tts_endpoint,
+                runtime_overrides,
             )
         except RuntimeError as exc:
             # Some jobs can reach here before room connection is established.
@@ -804,6 +837,7 @@ async def _init_session_userdata(ctx: JobContext, language: str) -> dict[str, An
         "configured_agent_name": configured_agent_name,
         "end_user_name": end_user_name,
         "tts_endpoint": tts_endpoint,
+        "runtime_overrides": runtime_overrides,
         "business_id": business_id,
         "conversation_id": conversation_id,
         "session_id": stable_session_id,
@@ -2090,9 +2124,10 @@ def _build_session_for_language(
     userdata: dict[str, Any],
     tts_engine: Any | None = None,
 ) -> AgentSession:
+    stt_engine = _build_stt_engine_for_language(language=language, userdata=userdata)
     if language == "fr":
         return AgentSession(
-            stt=deepgram.STT(language="fr"),
+            stt=stt_engine,
             tts=tts_engine or deepgram.TTS(model="aura-2-agathe-fr"),
             llm=google.LLM(model="gemini-3.1-pro"),
             userdata=userdata,
@@ -2102,7 +2137,7 @@ def _build_session_for_language(
         )
 
     return AgentSession(
-        stt=deepgram.STT(language="en"),
+        stt=stt_engine,
         tts=tts_engine,
         llm=google.LLM(model="gemini-3.1-pro"),
         userdata=userdata,
@@ -2143,6 +2178,62 @@ def _normalized_language_code(value: str) -> str:
     return "en"
 
 
+def _deepgram_tts_model_for_language(language: str) -> str:
+    return "aura-2-agathe-fr" if str(language or "").strip().lower() == "fr" else "aura-asteria-en"
+
+
+def _deepgram_stt_language_for_language(language: str) -> str:
+    return "fr" if str(language or "").strip().lower() == "fr" else "en"
+
+
+def _runtime_overrides_from_userdata(userdata: dict[str, Any]) -> dict[str, str]:
+    raw = userdata.get("runtime_overrides")
+    if not isinstance(raw, dict):
+        return {}
+    normalized: dict[str, str] = {}
+    for key in (
+        "stt_provider",
+        "stt_model",
+        "stt_base_url",
+        "tts_provider",
+        "tts_model",
+        "tts_base_url",
+    ):
+        value = str(raw.get(key) or "").strip()
+        if value:
+            normalized[key] = value
+    return normalized
+
+
+def _build_stt_engine_for_language(*, language: str, userdata: dict[str, Any]) -> Any:
+    lang = str(language or "").strip().lower()
+    overrides = _runtime_overrides_from_userdata(userdata)
+    provider = str(overrides.get("stt_provider") or "deepgram").strip().lower()
+    model = str(overrides.get("stt_model") or "nova-3").strip() or "nova-3"
+    base_url = str(overrides.get("stt_base_url") or "").strip()
+
+    stt_kwargs: dict[str, Any] = {
+        "language": _deepgram_stt_language_for_language(lang),
+        "model": model,
+    }
+    if provider == "custom" and base_url:
+        stt_kwargs["base_url"] = base_url
+        logger.info(
+            "Using custom Deepgram-compatible STT override: base_url=%s model=%s language=%s",
+            base_url,
+            model,
+            lang,
+        )
+    elif model != "nova-3":
+        logger.info(
+            "Using Deepgram STT override: model=%s language=%s",
+            model,
+            lang,
+        )
+
+    return deepgram.STT(**stt_kwargs)
+
+
 def _build_tts_engine_for_language(
     *,
     language: str,
@@ -2152,13 +2243,36 @@ def _build_tts_engine_for_language(
 ) -> Any:
     lang = str(language or "").strip().lower()
     is_fr = lang == "fr"
+    runtime_overrides = _runtime_overrides_from_userdata(userdata)
+    override_provider = str(runtime_overrides.get("tts_provider") or "").strip().lower()
+    override_model = (
+        str(runtime_overrides.get("tts_model") or "").strip()
+        or _deepgram_tts_model_for_language(lang)
+    )
+    override_base_url = str(runtime_overrides.get("tts_base_url") or "").strip()
     fallback_tts: Any = (
-        deepgram.TTS(model="aura-2-agathe-fr")
-        if is_fr
-        else deepgram.TTS(model="aura-asteria-en")
+        deepgram.TTS(model=_deepgram_tts_model_for_language(lang))
     )
     odion_enabled = ENABLE_ODION_TTS_FR if is_fr else ENABLE_ODION_TTS_EN
     fallback_label = "French" if is_fr else "English"
+
+    if override_provider in {"deepgram", "custom"}:
+        tts_kwargs: dict[str, Any] = {"model": override_model}
+        if override_provider == "custom" and override_base_url:
+            tts_kwargs["base_url"] = override_base_url
+            logger.info(
+                "Using custom Deepgram-compatible TTS override: base_url=%s model=%s language=%s",
+                override_base_url,
+                override_model,
+                lang,
+            )
+        else:
+            logger.info(
+                "Using Deepgram TTS override: model=%s language=%s",
+                override_model,
+                lang,
+            )
+        return deepgram.TTS(**tts_kwargs)
 
     use_experiment_clone = bool(ODION_TTS_EXPERIMENT_OWNER_ID) and bool(
         ODION_TTS_EXPERIMENT_VOICE_ID
