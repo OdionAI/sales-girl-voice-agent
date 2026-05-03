@@ -113,6 +113,11 @@ GENERIC_STATIC_PROMPT_EN = (
     "and create a support ticket when human follow-up is needed."
 )
 
+SHARED_ODION_CATALOG_OWNER_BY_VOICE_ID = {
+    "d270a5cec6914373b9deed1d1c3cbade": "mavinomichael@gmail.com",
+    "46f5ac744a504023b93c6dd8ddd46ac6": "mavinomichael@gmail.com",
+}
+
 
 def _is_en_agent_name(name: str) -> bool:
     value = str(name or "").strip().lower()
@@ -2360,6 +2365,25 @@ def _should_use_odion_tts_for_language(config: dict[str, Any], language: str) ->
     return scope == language
 
 
+def _resolve_saved_odion_owner_id(
+    *,
+    tts_voice_id: str,
+    explicit_owner_id: str,
+    business_id: str,
+) -> str:
+    normalized_explicit_owner_id = str(explicit_owner_id or "").strip()
+    if normalized_explicit_owner_id:
+        return normalized_explicit_owner_id
+
+    normalized_voice_id = str(tts_voice_id or "").strip()
+    if normalized_voice_id:
+        mapped_owner = SHARED_ODION_CATALOG_OWNER_BY_VOICE_ID.get(normalized_voice_id)
+        if mapped_owner:
+            return mapped_owner
+
+    return str(business_id or "").strip()
+
+
 def _normalized_language_code(value: str) -> str:
     lowered = str(value or "").strip().lower()
     if lowered in {"fr", "french", "français", "francais"}:
@@ -2514,7 +2538,11 @@ def _build_tts_engine_for_language(
     tts_owner_id = (
         ODION_TTS_EXPERIMENT_OWNER_ID
         if use_experiment_clone
-        else str(active_agent_config.get("tts_owner_id") or "").strip() or business_id
+        else _resolve_saved_odion_owner_id(
+            tts_voice_id=tts_voice_id,
+            explicit_owner_id=str(active_agent_config.get("tts_owner_id") or "").strip(),
+            business_id=business_id,
+        )
     )
     tts_language_hint = (
         ("French" if is_fr else "English")
