@@ -32,6 +32,12 @@ KNOWLEDGE_SERVICE_TIMEOUT_SECONDS = float(
 AGENT_CLIENT_ID = os.getenv("AGENT_CLIENT_ID", "sales-girl-internal")
 AGENT_NAME = os.getenv("AGENT_NAME", "sales-girl-agent-en")
 OPS_SHARED_OWNER_EMAIL = str(os.getenv("OPS_SHARED_OWNER_EMAIL") or "").strip().lower()
+# Dashboard tickets are stored in conversation-service; voice agent should prefer this
+# over demo CRM / fidelity-ops when the URL is configured (staging/prod).
+CONVERSATION_API_BASE_URL = os.getenv("CONVERSATION_API_BASE_URL", "").rstrip("/")
+CONVERSATION_SERVICE_TOKEN_FOR_OPS = os.getenv(
+    "CONVERSATION_SERVICE_TOKEN", OPS_SERVICE_TOKEN
+)
 logger = logging.getLogger(__name__)
 
 
@@ -81,6 +87,26 @@ def _normalize_http_url(value: str | None) -> str:
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         return ""
     return parsed.geturl().rstrip("/")
+
+
+def _conversation_ticket_store_url() -> str:
+    return _normalize_http_url(CONVERSATION_API_BASE_URL or None)
+
+
+def _conversation_ticket_headers(metadata: dict[str, Any] | None) -> dict[str, str]:
+    """Headers for conversation-service ticket APIs (always business-scoped)."""
+    md = metadata or {}
+    return {
+        "Content-Type": "application/json",
+        "X-Service-Token": CONVERSATION_SERVICE_TOKEN_FOR_OPS,
+        "X-Service-Name": AGENT_CLIENT_ID,
+        "X-Business-ID": str(md.get("business_id") or "").strip(),
+        "X-Client-ID": str(md.get("client_id") or AGENT_CLIENT_ID),
+        "X-Agent-ID": str(md.get("agent_id") or AGENT_NAME),
+        "X-Conversation-ID": str(md.get("conversation_id") or ""),
+        "X-Session-ID": str(md.get("session_id") or ""),
+        "X-End-User-ID": str(md.get("end_user_id") or ""),
+    }
 
 
 def _service_headers(metadata: dict[str, Any] | None) -> dict[str, str]:
@@ -203,6 +229,100 @@ async def _request_json(
         return output
 
     output = {"status": "failed", "message": "Invalid response from ops backend."}
+    update_observation(output=output)
+    return output
+
+
+@observe(name="ops_api.conversation_request", as_type="span")
+async def _request_conversation_service_json(
+    method: str,
+    path: str,
+    *,
+    json_body: dict[str, Any] | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    base_url = _conversation_ticket_store_url()
+    if not base_url:
+        output = {
+            "status": "failed",
+            "message": "Conversation service is not configured for tickets.",
+        }
+        update_observation(output=output)
+        return output
+    url = f"{base_url}{path}"
+    headers = _conversation_ticket_headers(metadata)
+    if not str(headers.get("X-Business-ID") or "").strip():
+        output = {
+            "status": "failed",
+            "message": "Missing business scope for ticket request.",
+        }
+        update_observation(output=output)
+        return output
+    update_observation(
+        input={
+            "method": method,
+            "path": path,
+            "json": json_body,
+            "headers": {k: v for k, v in headers.items() if k != "X-Service-Token"},
+        }
+    )
+    try:
+        logger.info(
+            "Conversation ticket request %s %s base_url=%s business_scope=%s end_user=%s body=%s",
+            method,
+            path,
+            base_url,
+            headers.get("X-Business-ID"),
+            headers.get("X-End-User-ID"),
+            json_body,
+        )
+        async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT_SECONDS) as client:
+            response = await client.request(
+                method=method,
+                url=url,
+                json=json_body,
+                headers=headers,
+            )
+    except httpx.TimeoutException:
+        output = {
+            "status": "failed",
+            "message": "Conversation service ticket request timed out.",
+        }
+        update_observation(output=output)
+        return output
+    except httpx.HTTPError:
+        output = {
+            "status": "failed",
+            "message": "Conversation service is unavailable.",
+        }
+        update_observation(output=output)
+        return output
+
+    payload: dict[str, Any] | list[Any] | None
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = None
+
+    if response.status_code >= 400:
+        detail = "Request failed."
+        if isinstance(payload, dict):
+            detail = str(payload.get("detail") or detail)
+        output = {
+            "status": "failed",
+            "message": detail,
+            "http_status": response.status_code,
+        }
+        update_observation(output=output)
+        return output
+
+    if isinstance(payload, dict):
+        logger.info("Conversation ticket response %s %s -> %s", method, path, payload)
+        payload["status"] = "success"
+        update_observation(output=payload)
+        return payload
+
+    output = {"status": "failed", "message": "Invalid response from conversation service."}
     update_observation(output=output)
     return output
 
@@ -551,27 +671,45 @@ async def create_ticket(
 ) -> dict[str, Any]:
     caller_id = str((metadata or {}).get("end_user_id") or "")
     _trace("create_ticket", metadata, user_id=caller_id)
-    if _uses_internal_business_ops(metadata):
-        conversation_id = (
-            str((metadata or {}).get("conversation_id") or "").strip() or None
+    conversation_id = (
+        str((metadata or {}).get("conversation_id") or "").strip() or None
+    )
+    agent_id = str((metadata or {}).get("agent_id") or "").strip() or None
+    customer_name = (
+        str((metadata or {}).get("end_user_name") or "").strip() or None
+    )
+    customer_contact = (
+        str((metadata or {}).get("caller_phone_e164") or "").strip() or None
+    )
+    if not customer_name and not customer_contact:
+        resolved = _resolve_customer_identifier(customer_identifier, metadata)
+        if resolved:
+            customer_contact = resolved
+
+    dashboard_body: dict[str, Any] = {
+        "customer_name": customer_name,
+        "customer_contact": customer_contact,
+        "title": title,
+        "description": description,
+        "priority": priority,
+        "status": "open",
+    }
+    if conversation_id:
+        dashboard_body["conversation_id"] = conversation_id
+    if agent_id:
+        dashboard_body["agent_id"] = agent_id
+
+    if _conversation_ticket_store_url():
+        return await _request_conversation_service_json(
+            "POST",
+            "/v1/tickets",
+            json_body=dashboard_body,
+            metadata=metadata,
         )
-        agent_id = str((metadata or {}).get("agent_id") or "").strip() or None
-        body: dict[str, Any] = {
-            "customer_name": str((metadata or {}).get("end_user_name") or "").strip()
-            or None,
-            "customer_contact": str(
-                (metadata or {}).get("caller_phone_e164") or ""
-            ).strip()
-            or None,
-            "title": title,
-            "description": description,
-            "priority": priority,
-            "status": "open",
-            "conversation_id": conversation_id,
-            "agent_id": agent_id,
-        }
+
+    if _uses_internal_business_ops(metadata):
         return await _request_json(
-            "POST", "/v1/tickets", json_body=body, metadata=metadata
+            "POST", "/v1/tickets", json_body=dashboard_body, metadata=metadata
         )
 
     resolved_customer_identifier = _resolve_customer_identifier(
