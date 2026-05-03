@@ -1835,6 +1835,8 @@ def _detect_business_use_case(
         return "restaurant"
     if "fetch_product_availability" in tool_names:
         return "fashion"
+    if tool_names and tool_names <= {"create_ticket", "send_email"}:
+        return "generic"
 
     text = " ".join(
         [
@@ -1871,50 +1873,6 @@ def _detect_business_use_case(
         )
     ):
         return "fidelity"
-    if any(
-        token in text
-        for token in (
-            "restaurant",
-            "menu",
-            "order tool",
-            "create_order",
-            "dining",
-            "host stand",
-            "reservation request",
-            "pickup",
-            "delivery",
-        )
-    ):
-        return "restaurant"
-    if any(
-        token in text
-        for token in (
-            "fashion",
-            "size",
-            "sizes",
-            "style",
-            "styles",
-            "product availability",
-            "catalog",
-            "boutique",
-            "apparel",
-        )
-    ):
-        return "fashion"
-    if any(
-        token in text
-        for token in (
-            "hotel",
-            "guest support",
-            "room availability",
-            "check-in",
-            "check out",
-            "accommodation",
-            "concierge",
-            "room reservation",
-        )
-    ):
-        return "hotel"
     if any(
         token in text
         for token in (
