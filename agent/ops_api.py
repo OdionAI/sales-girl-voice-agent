@@ -98,6 +98,57 @@ def _resolve_customer_identifier(
     return str(md.get("end_user_id") or "").strip()
 
 
+# Web clients often send a generic display label while the verified caller id lives
+# in metadata.end_user_id (email or E.164). Tickets must still show that id.
+_PLACEHOLDER_CUSTOMER_NAMES = frozenset(
+    {
+        "guest",
+        "guests",
+        "anonymous",
+        "caller",
+        "user",
+        "visitor",
+        "me",
+        "customer",
+    }
+)
+
+
+def _is_placeholder_customer_name(name: str | None) -> bool:
+    n = str(name or "").strip().lower()
+    return not n or n in _PLACEHOLDER_CUSTOMER_NAMES
+
+
+def _ticket_customer_name_and_contact(
+    *,
+    customer_identifier: str | None,
+    metadata: dict[str, Any] | None,
+) -> tuple[str | None, str | None]:
+    md = metadata or {}
+    raw_name = str(md.get("end_user_name") or "").strip() or None
+    phone = str(md.get("caller_phone_e164") or "").strip() or None
+    resolved = _resolve_customer_identifier(customer_identifier, md).strip() or None
+
+    contact = phone or None
+    if not contact and resolved:
+        contact = resolved
+
+    name = raw_name
+    if _is_placeholder_customer_name(name):
+        if resolved and "@" in resolved:
+            # Prefer the verified email for dashboard "Guest" column on web calls.
+            name = resolved
+        elif resolved:
+            name = resolved
+        elif contact and "@" in contact:
+            name = contact
+
+    if not name and contact and "@" in contact:
+        name = contact
+
+    return name, contact
+
+
 def _normalize_http_url(value: str | None) -> str:
     resolved = str(value or "").strip()
     if not resolved:
@@ -692,16 +743,10 @@ async def create_ticket(
         str((metadata or {}).get("conversation_id") or "").strip() or None
     )
     agent_id = str((metadata or {}).get("agent_id") or "").strip() or None
-    customer_name = (
-        str((metadata or {}).get("end_user_name") or "").strip() or None
+    customer_name, customer_contact = _ticket_customer_name_and_contact(
+        customer_identifier=customer_identifier,
+        metadata=metadata,
     )
-    customer_contact = (
-        str((metadata or {}).get("caller_phone_e164") or "").strip() or None
-    )
-    if not customer_name and not customer_contact:
-        resolved = _resolve_customer_identifier(customer_identifier, metadata)
-        if resolved:
-            customer_contact = resolved
 
     dashboard_body: dict[str, Any] = {
         "customer_name": customer_name,
