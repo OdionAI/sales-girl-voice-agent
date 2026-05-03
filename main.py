@@ -33,6 +33,7 @@ from agent.conversation_service_api import (
 )
 from agent.agent_config_api import get_active_config as get_agent_active_config
 from agent.ops_api import (
+    create_ticket as ops_create_ticket,
     get_account_overview as ops_get_account_overview,
     get_payment_summary as ops_get_payment_summary,
     get_recent_transactions as ops_get_recent_transactions,
@@ -209,6 +210,196 @@ def _track_background_task(userdata: dict[str, Any], coro: Any) -> None:
             pass
 
     task.add_done_callback(_cleanup)
+
+
+def _append_recent_user_message(userdata: dict[str, Any], content: str) -> None:
+    recent = userdata.setdefault("recent_user_messages", [])
+    if not isinstance(recent, list):
+        recent = []
+        userdata["recent_user_messages"] = recent
+    cleaned = str(content or "").strip()
+    if not cleaned:
+        return
+    recent.append(cleaned)
+    if len(recent) > 8:
+        del recent[:-8]
+
+
+def _tool_metadata_from_userdata(userdata: dict[str, Any]) -> dict[str, Any]:
+    conversation_id = str(userdata.get("conversation_id") or "")
+    session_id = str(userdata.get("session_id") or conversation_id)
+    return {
+        "client_id": str(userdata.get("client_id") or "sales-girl-internal"),
+        "agent_id": str(
+            userdata.get("agent_config_id")
+            or userdata.get("agent_id")
+            or AGENT_NAME
+        ),
+        "business_id": str(userdata.get("business_id") or ""),
+        "business_use_case": str(userdata.get("business_use_case") or ""),
+        "live_data_endpoint": str(userdata.get("live_data_endpoint") or ""),
+        "conversation_id": conversation_id,
+        "session_id": session_id,
+        "end_user_id": str(userdata.get("end_user_id") or ""),
+        "end_user_name": str(userdata.get("end_user_name") or ""),
+        "caller_phone_e164": str(userdata.get("caller_phone_e164") or ""),
+        "enabled_tool_names": list(userdata.get("enabled_tool_names") or []),
+        "turn_index": int(userdata.get("turn_index", 0)),
+        "last_user_transcript": str(userdata.get("last_user_transcript") or ""),
+        "last_assistant_message": str(userdata.get("last_assistant_message") or ""),
+        "timeline_event_index": int(userdata.get("timeline_event_index", 0)),
+    }
+
+
+def _assistant_claims_ticket_created(message: str) -> bool:
+    normalized = str(message or "").strip().lower()
+    if not normalized:
+        return False
+    patterns = (
+        "i have created a ticket",
+        "i created a ticket",
+        "ticket has been created",
+        "j'ai créé un ticket",
+        "j’ai créé un ticket",
+        "le ticket a été créé",
+        "un ticket a été créé",
+    )
+    return any(pattern in normalized for pattern in patterns)
+
+
+def _assistant_claims_ticket_failed(message: str) -> bool:
+    normalized = str(message or "").strip().lower()
+    if not normalized:
+        return False
+    patterns = (
+        "ticket creation failed",
+        "couldn't create the ticket",
+        "could not create the ticket",
+        "could not create a ticket",
+        "n'ai pas pu créer le ticket",
+        "la création du ticket a échoué",
+        "je suis désolé, la création du ticket a échoué",
+    )
+    return any(pattern in normalized for pattern in patterns)
+
+
+def _is_non_informative_ticket_reply(text: str) -> bool:
+    normalized = str(text or "").strip().lower()
+    if not normalized:
+        return True
+    trivial = {
+        "ok",
+        "okay",
+        "no problem",
+        "oui",
+        "yes",
+        "d'accord",
+        "d’accord",
+        "or",
+        "dit",
+    }
+    return normalized in trivial or len(normalized) < 3
+
+
+def _fallback_ticket_summary(userdata: dict[str, Any]) -> tuple[str, str]:
+    recent = [
+        str(item).strip()
+        for item in list(userdata.get("recent_user_messages") or [])
+        if not _is_non_informative_ticket_reply(str(item))
+    ]
+    combined = " ".join(recent[-4:]).strip()
+    lowered = combined.lower()
+    if "alat" in lowered:
+        return (
+            "ALAT App Issues",
+            combined or "Customer reported issues while using the ALAT app.",
+        )
+    if "passeport" in lowered or "passport" in lowered:
+        return (
+            "Passport Support Request",
+            combined or "Customer requested help related to a passport issue.",
+        )
+    title_source = recent[0] if recent else "Support Request"
+    title = " ".join(title_source.replace('"', "").split()[:6]).strip() or "Support Request"
+    if len(title) < 2:
+        title = "Support Request"
+    description = combined or str(userdata.get("last_user_transcript") or "").strip() or "Customer requested human follow-up."
+    return title[:255], description
+
+
+async def _reconcile_ticket_claim_if_needed(userdata: dict[str, Any], assistant_message: str) -> None:
+    enabled = {
+        str(name or "").strip()
+        for name in list(userdata.get("enabled_tool_names") or [])
+        if str(name or "").strip()
+    }
+    if "create_ticket" not in enabled:
+        return
+
+    current_turn = int(userdata.get("turn_index", 0))
+    successful_turn = int(userdata.get("last_create_ticket_success_turn", -1))
+    if successful_turn == current_turn:
+        return
+
+    assistant_message = str(assistant_message or "").strip()
+    if not assistant_message:
+        return
+
+    should_reconcile = _assistant_claims_ticket_created(assistant_message)
+    if not should_reconcile and _assistant_claims_ticket_failed(assistant_message):
+        recent = " ".join(list(userdata.get("recent_user_messages") or [])[-4:]).lower()
+        should_reconcile = any(
+            phrase in recent
+            for phrase in (
+                "create a ticket",
+                "create ticket",
+                "créer un billet",
+                "créer un ticket",
+                "creer un ticket",
+            )
+        )
+    if not should_reconcile:
+        return
+
+    title, description = _fallback_ticket_summary(userdata)
+    logger.warning(
+        "Reconciling missing ticket tool execution: business_id=%s conversation_id=%s turn=%s title=%s",
+        userdata.get("business_id"),
+        userdata.get("conversation_id"),
+        current_turn,
+        title,
+    )
+    result = await ops_create_ticket(
+        title=title,
+        description=description,
+        issue_type="general",
+        priority="high",
+        requires_human=True,
+        metadata=_tool_metadata_from_userdata(userdata),
+    )
+    if str(result.get("status") or "").lower() != "failed":
+        userdata["last_create_ticket_success_turn"] = current_turn
+        userdata["last_create_ticket_result"] = result
+        _persist_session_event_async(
+            userdata,
+            event_type="tool_call",
+            role="tool",
+            title="create_ticket_fallback",
+            body=_summarize_tool_output(result),
+            payload={
+                "tool_name": "create_ticket_fallback",
+                "tool_result": result,
+                "event_index": int(userdata.get("timeline_event_index", 0)),
+                "turn_index": current_turn,
+            },
+        )
+    else:
+        logger.error(
+            "Fallback ticket reconciliation failed: business_id=%s conversation_id=%s detail=%s",
+            userdata.get("business_id"),
+            userdata.get("conversation_id"),
+            result.get("detail") or result.get("message"),
+        )
 
 
 async def _drain_background_tasks(userdata: dict[str, Any]) -> None:
@@ -918,6 +1109,7 @@ def _wire_session_timeline(session: AgentSession, userdata: dict[str, Any]) -> N
             if content != userdata.get("last_user_transcript"):
                 userdata["turn_index"] = int(userdata.get("turn_index", 0)) + 1
             userdata["last_user_transcript"] = content
+            _append_recent_user_message(userdata, content)
 
         event_idx = _next_event_idx()
         trace_conversation_event(
@@ -981,6 +1173,13 @@ def _wire_session_timeline(session: AgentSession, userdata: dict[str, Any]) -> N
                     session_id=str(userdata.get("session_id") or ""),
                 )
 
+        if role_l == "assistant":
+
+            async def _reconcile_claim() -> None:
+                await _reconcile_ticket_claim_if_needed(userdata, content)
+
+            _track_background_task(userdata, _reconcile_claim())
+
     @session.on("function_tools_executed")
     def _on_function_tools_executed(ev: Any) -> None:
         calls: list[dict[str, Any]] = []
@@ -1016,16 +1215,22 @@ def _wire_session_timeline(session: AgentSession, userdata: dict[str, Any]) -> N
         )
         for call in calls:
             tool_name = str(call.get("tool_name") or "").strip() or "unknown_tool"
+            result = call.get("tool_result")
+            if tool_name == "create_ticket" and not (
+                isinstance(result, dict) and str(result.get("status") or "").lower() == "failed"
+            ):
+                userdata["last_create_ticket_success_turn"] = int(userdata.get("turn_index", 0))
+                userdata["last_create_ticket_result"] = result
             _persist_session_event_async(
                 userdata,
                 event_type="tool_call",
                 role="tool",
                 title=tool_name,
-                body=_summarize_tool_output(call.get("tool_result")),
+                body=_summarize_tool_output(result),
                 payload={
                     "tool_name": tool_name,
                     "tool_arguments": call.get("tool_arguments"),
-                    "tool_result": call.get("tool_result"),
+                    "tool_result": result,
                     "last_user_transcript": userdata.get("last_user_transcript"),
                     "event_index": event_idx,
                     "turn_index": int(userdata.get("turn_index", 0)),
