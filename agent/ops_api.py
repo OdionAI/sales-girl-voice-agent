@@ -41,13 +41,22 @@ def _business_use_case(metadata: dict[str, Any] | None) -> str:
 
 
 def _uses_internal_business_ops(metadata: dict[str, Any] | None) -> bool:
-    return _business_use_case(metadata) in {"hotel", "restaurant", "fashion"}
+    return _business_use_case(metadata) in {
+        "hotel",
+        "restaurant",
+        "fashion",
+        "custom",
+        "generic",
+        "other",
+    }
 
 
 def _ops_base_url(metadata: dict[str, Any] | None) -> str:
     use_case = _business_use_case(metadata)
-    if use_case in {"hotel", "restaurant", "fashion", "custom", "generic"}:
+    if use_case in {"hotel", "restaurant", "fashion"}:
         return HOTEL_OPS_SERVICE_BASE_URL
+    if use_case in {"custom", "generic", "other"}:
+        return OPS_SERVICE_BASE_URL
     if use_case == "fidelity" and FIDELITY_OPS_SERVICE_BASE_URL:
         return FIDELITY_OPS_SERVICE_BASE_URL
     return OPS_SERVICE_BASE_URL
