@@ -276,9 +276,19 @@ def _assistant_claims_ticket_failed(message: str) -> bool:
         "couldn't create the ticket",
         "could not create the ticket",
         "could not create a ticket",
+        "unable to create the ticket",
+        "unable to create a ticket",
+        "there was an issue creating the ticket",
+        "there is an issue creating the ticket",
+        "issue creating the ticket",
+        "problem creating the ticket",
+        "sorry, there was an issue creating the ticket",
         "n'ai pas pu créer le ticket",
         "la création du ticket a échoué",
         "je suis désolé, la création du ticket a échoué",
+        "je n'ai pas pu créer le ticket",
+        "impossible de créer le ticket",
+        "un problème est survenu lors de la création du ticket",
     )
     return any(pattern in normalized for pattern in patterns)
 
