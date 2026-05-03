@@ -32,13 +32,41 @@ KNOWLEDGE_SERVICE_TIMEOUT_SECONDS = float(
 AGENT_CLIENT_ID = os.getenv("AGENT_CLIENT_ID", "sales-girl-internal")
 AGENT_NAME = os.getenv("AGENT_NAME", "sales-girl-agent-en")
 OPS_SHARED_OWNER_EMAIL = str(os.getenv("OPS_SHARED_OWNER_EMAIL") or "").strip().lower()
-# Dashboard tickets are stored in conversation-service; voice agent should prefer this
-# over demo CRM / fidelity-ops when the URL is configured (staging/prod).
-CONVERSATION_API_BASE_URL = os.getenv("CONVERSATION_API_BASE_URL", "").rstrip("/")
-CONVERSATION_SERVICE_TOKEN_FOR_OPS = os.getenv(
-    "CONVERSATION_SERVICE_TOKEN", OPS_SERVICE_TOKEN
-)
 logger = logging.getLogger(__name__)
+
+
+def _read_conversation_api_base_url() -> str:
+    """Resolve conversation-service base URL at call time (not import time).
+
+    Workers or alternate entrypoints may import this module before ``load_dotenv`` runs.
+    Values written as JSON-quoted strings in ``.env`` are normalized.
+    """
+    raw = (os.getenv("CONVERSATION_API_BASE_URL") or "").strip()
+    if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in "\"'":
+        raw = raw[1:-1].strip()
+    return _normalize_http_url(raw)
+
+
+def _read_conversation_service_token() -> str:
+    return (
+        os.getenv("CONVERSATION_SERVICE_TOKEN")
+        or os.getenv("OPS_SERVICE_TOKEN")
+        or "local-internal-service-token"
+    ).strip()
+
+
+def _internal_ticket_http_base_url(metadata: dict[str, Any] | None) -> str:
+    """Base URL for internal (dashboard-shaped) POST /v1/tickets.
+
+    Generic/custom agents historically used ``OPS_SERVICE_BASE_URL`` (demo CRM), which
+    expects ``customer_id`` and rejects conversation-style payloads. Prefer
+    ``HOTEL_OPS_SERVICE_BASE_URL`` when set (prod/staging usually point this at
+    conversation-service) before falling back to ``_ops_base_url``.
+    """
+    hotel = _normalize_http_url(os.getenv("HOTEL_OPS_SERVICE_BASE_URL", "") or "")
+    if hotel:
+        return hotel
+    return _ops_base_url(metadata)
 
 
 def _business_use_case(metadata: dict[str, Any] | None) -> str:
@@ -80,16 +108,12 @@ def _normalize_http_url(value: str | None) -> str:
     return parsed.geturl().rstrip("/")
 
 
-def _conversation_ticket_store_url() -> str:
-    return _normalize_http_url(CONVERSATION_API_BASE_URL or None)
-
-
 def _conversation_ticket_headers(metadata: dict[str, Any] | None) -> dict[str, str]:
     """Headers for conversation-service ticket APIs (always business-scoped)."""
     md = metadata or {}
     return {
         "Content-Type": "application/json",
-        "X-Service-Token": CONVERSATION_SERVICE_TOKEN_FOR_OPS,
+        "X-Service-Token": _read_conversation_service_token(),
         "X-Service-Name": AGENT_CLIENT_ID,
         "X-Business-ID": str(md.get("business_id") or "").strip(),
         "X-Client-ID": str(md.get("client_id") or AGENT_CLIENT_ID),
@@ -141,8 +165,10 @@ async def _request_json(
     *,
     json_body: dict[str, Any] | None = None,
     metadata: dict[str, Any] | None = None,
+    base_url: str | None = None,
 ) -> dict[str, Any]:
-    base_url = _ops_base_url(metadata)
+    resolved_override = str(base_url or "").strip()
+    base_url = resolved_override or _ops_base_url(metadata)
     if not str(base_url or "").strip():
         output = {"status": "failed", "message": "Hotel ops backend is not configured."}
         update_observation(output=output)
@@ -232,7 +258,7 @@ async def _request_conversation_service_json(
     json_body: dict[str, Any] | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    base_url = _conversation_ticket_store_url()
+    base_url = _read_conversation_api_base_url()
     if not base_url:
         output = {
             "status": "failed",
@@ -690,7 +716,7 @@ async def create_ticket(
     if agent_id:
         dashboard_body["agent_id"] = agent_id
 
-    if _conversation_ticket_store_url():
+    if _read_conversation_api_base_url():
         return await _request_conversation_service_json(
             "POST",
             "/v1/tickets",
@@ -699,8 +725,13 @@ async def create_ticket(
         )
 
     if _uses_internal_business_ops(metadata):
+        ticket_base = _internal_ticket_http_base_url(metadata)
         return await _request_json(
-            "POST", "/v1/tickets", json_body=dashboard_body, metadata=metadata
+            "POST",
+            "/v1/tickets",
+            json_body=dashboard_body,
+            metadata=metadata,
+            base_url=ticket_base,
         )
 
     resolved_customer_identifier = _resolve_customer_identifier(
