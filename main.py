@@ -40,6 +40,7 @@ from agent.ops_api import (
     get_tariff_profile as ops_get_tariff_profile,
     get_vending_history as ops_get_vending_history,
     lookup_customer_account as ops_lookup_customer_account,
+    search_business_knowledge as ops_search_business_knowledge,
 )
 from agent.odion_tts import OdionTTS
 from agent.observability import flush_traces, trace_conversation_event
@@ -1076,6 +1077,60 @@ async def _init_session_userdata(ctx: JobContext, language: str) -> dict[str, An
 
 
 def _wire_session_timeline(session: AgentSession, userdata: dict[str, Any]) -> None:
+    async def _refresh_dynamic_knowledge_context(transcript: str) -> None:
+        business_use_case = str(userdata.get("business_use_case") or "").strip().lower()
+        if business_use_case not in {"generic", "custom", "other"}:
+            return
+
+        query = str(transcript or "").strip()
+        base_instructions = str(userdata.get("base_instructions") or "").strip()
+        if not query or not base_instructions:
+            return
+
+        try:
+            result = await ops_search_business_knowledge(
+                query=query,
+                top_k=4,
+                metadata=_ops_tool_metadata_from_userdata(userdata),
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Dynamic knowledge prefetch failed for query=%s: %s", query, exc)
+            return
+
+        matches = result.get("matches") if isinstance(result, dict) else None
+        if not isinstance(matches, list) or not matches:
+            return
+
+        snippets: list[str] = []
+        for match in matches[:3]:
+            if not isinstance(match, dict):
+                continue
+            text = " ".join(str(match.get("text") or "").split()).strip()
+            if not text:
+                continue
+            source_name = str(match.get("source_name") or "Knowledge").strip()
+            snippets.append(f"- {source_name}: {text[:900]}")
+
+        if not snippets:
+            return
+
+        enriched_instructions = (
+            f"{base_instructions}\n\n"
+            "Dynamic knowledge context for the caller's latest request:\n"
+            "- The following snippets were retrieved from the business knowledge base for this turn.\n"
+            "- Use them first when answering the caller's current question.\n"
+            "- If the snippets are incomplete, call search_business_knowledge again before saying you do not know.\n"
+            f"{chr(10).join(snippets)}\n"
+        )
+        session.update_agent(SalonAgent(instructions=enriched_instructions))
+        userdata["last_dynamic_knowledge_query"] = query
+        logger.info(
+            "Dynamic knowledge context updated: turn=%s matches=%s query=%s",
+            int(userdata.get("turn_index", 0)),
+            len(snippets),
+            _short_text(query, 120),
+        )
+
     def _next_event_idx() -> int:
         userdata["timeline_event_index"] = (
             int(userdata.get("timeline_event_index", 0)) + 1
@@ -1090,6 +1145,7 @@ def _wire_session_timeline(session: AgentSession, userdata: dict[str, Any]) -> N
 
         userdata["turn_index"] = int(userdata.get("turn_index", 0)) + 1
         userdata["last_user_transcript"] = transcript
+        _track_background_task(userdata, _refresh_dynamic_knowledge_context(transcript))
         event_idx = _next_event_idx()
         trace_conversation_event(
             "user_input_transcribed",
@@ -2720,6 +2776,7 @@ async def entrypoint(ctx: JobContext):
             base_prompt, preloaded_context
         )
         instructions = await _instructions_with_context(instructions, userdata)
+        userdata["base_instructions"] = instructions
         started_at = conv_api_utcnow()
         business_id = str(userdata.get("business_id") or "")
         call_channel = (
@@ -2902,6 +2959,7 @@ async def entrypoint(ctx: JobContext):
             base_prompt, preloaded_context
         )
         instructions = await _instructions_with_context(instructions, userdata)
+        userdata["base_instructions"] = instructions
         started_at = conv_api_utcnow()
         business_id = str(userdata.get("business_id") or "")
         call_channel = (
