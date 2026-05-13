@@ -112,6 +112,7 @@ GENERIC_STATIC_PROMPT_EN = (
     "Use the saved business instructions and knowledge first, use tools only when relevant, never invent live data, "
     "and create a support ticket when human follow-up is needed."
 )
+ALWAYS_ENABLED_RUNTIME_TOOLS = ("search_business_knowledge",)
 
 SHARED_ODION_CATALOG_OWNER_BY_VOICE_ID = {
     "d270a5cec6914373b9deed1d1c3cbade": "mavinomichael@gmail.com",
@@ -1433,13 +1434,15 @@ async def _instructions_with_context(base_prompt: str, userdata: dict[str, Any])
             "Domain lock:\n"
             "- You are the business's AI voice assistant for this specific company.\n"
             "- Never present yourself as an electricity, banking, hotel, restaurant, or fashion assistant unless the business instructions explicitly say so.\n"
-            "- Use the saved business instructions, knowledge, and configured tools for this business only.\n\n"
+            "- Use the saved business instructions, knowledge, and dashboard-configured tools for this business only.\n\n"
             "Role lock:\n"
             "- You MUST follow the current business-specific role and responsibilities in this prompt.\n"
             "- Historical snippets may contain outdated assistant behavior from older versions.\n"
             "- Never switch to an old persona if it conflicts with this prompt.\n\n"
             "Issue handling lock:\n"
-            "- Use configured tools only when they are relevant and available.\n"
+            "- search_business_knowledge is always available as a built-in runtime tool for this business.\n"
+            "- Use built-in knowledge search before saying you do not have enough information.\n"
+            "- Use dashboard-configured tools only when they are relevant and available.\n"
             "- Do not claim any action succeeded unless the tool confirms it.\n"
             "- If a request needs human attention, create a ticket if that tool is available.\n"
             "- If the caller asks for a ticket, or agrees to ticket follow-up, call create_ticket immediately before replying.\n"
@@ -1610,7 +1613,14 @@ def _hydrate_userdata_from_active_agent_config(
         else []
     )
     userdata["active_tools"] = active_tools
-    enabled_tool_names = [str(tool.get("name") or "").strip() for tool in active_tools]
+    enabled_tool_names = [
+        str(tool.get("name") or "").strip()
+        for tool in active_tools
+        if str(tool.get("name") or "").strip()
+    ]
+    for tool_name in ALWAYS_ENABLED_RUNTIME_TOOLS:
+        if tool_name not in enabled_tool_names:
+            enabled_tool_names.append(tool_name)
     userdata["enabled_tool_names"] = enabled_tool_names
 
     expected_tool_by_use_case = {
@@ -1666,6 +1676,21 @@ def _strip_live_connectivity_lines(text: str) -> str:
             continue
         kept_lines.append(line)
     return "\n".join(kept_lines).strip()
+
+
+def _strip_configured_tool_access_block(text: str) -> str:
+    start_marker = "Configured tool access (system-generated):"
+    end_marker = "End configured tool access."
+    raw = str(text or "")
+    start_index = raw.find(start_marker)
+    if start_index == -1:
+        return raw.strip()
+    end_index = raw.find(end_marker, start_index)
+    if end_index == -1:
+        sanitized = raw[:start_index]
+    else:
+        sanitized = f"{raw[:start_index]}{raw[end_index + len(end_marker):]}"
+    return sanitized.strip()
 
 
 def _active_tool_records(
@@ -1917,7 +1942,9 @@ def _effective_base_prompt(
     language: str,
 ) -> str:
     cfg = active_agent_config or {}
-    configured_instructions = str(cfg.get("instructions") or "").strip()
+    configured_instructions = _strip_configured_tool_access_block(
+        str(cfg.get("instructions") or "").strip()
+    )
     runtime_tool_guidance = _runtime_tool_guidance(cfg, business_use_case)
     live_tool_by_use_case = {
         "hotel": "fetch_room_availability",
@@ -2035,7 +2062,14 @@ def _effective_base_prompt(
         )
 
     if business_use_case == "generic":
-        return f"{configured_instructions.rstrip()}\n\n{runtime_tool_guidance}"
+        return (
+            f"{configured_instructions.rstrip()}\n\n"
+            f"{runtime_tool_guidance}\n\n"
+            "Built-in tool rule:\n"
+            "- search_business_knowledge is a built-in runtime tool for every agent, even when it is not part of the dashboard-configured tool list.\n"
+            "- Use business knowledge search before saying you do not have enough information.\n"
+            "- Treat dashboard-configured tools as additional tools, not as the full list of built-in runtime capabilities.\n"
+        )
 
     incompatible_tokens = (
         "salon",
@@ -2081,7 +2115,14 @@ async def _build_preloaded_ops_context(userdata: dict[str, Any]) -> str:
         return ""
     business_use_case = str(userdata.get("business_use_case") or "").strip().lower()
 
-    if business_use_case == "hotel":
+    if business_use_case in {
+        "hotel",
+        "restaurant",
+        "fashion",
+        "generic",
+        "custom",
+        "other",
+    }:
         return ""
 
     if business_use_case == "fidelity":
