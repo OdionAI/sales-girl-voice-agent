@@ -1131,6 +1131,14 @@ def _wire_session_timeline(session: AgentSession, userdata: dict[str, Any]) -> N
             _short_text(query, 120),
         )
 
+    def _schedule_dynamic_knowledge_refresh(transcript: str) -> None:
+        query = str(transcript or "").strip()
+        if not query:
+            return
+        if query == str(userdata.get("last_dynamic_knowledge_query") or "").strip():
+            return
+        _track_background_task(userdata, _refresh_dynamic_knowledge_context(query))
+
     def _next_event_idx() -> int:
         userdata["timeline_event_index"] = (
             int(userdata.get("timeline_event_index", 0)) + 1
@@ -1145,7 +1153,7 @@ def _wire_session_timeline(session: AgentSession, userdata: dict[str, Any]) -> N
 
         userdata["turn_index"] = int(userdata.get("turn_index", 0)) + 1
         userdata["last_user_transcript"] = transcript
-        _track_background_task(userdata, _refresh_dynamic_knowledge_context(transcript))
+        _schedule_dynamic_knowledge_refresh(transcript)
         event_idx = _next_event_idx()
         trace_conversation_event(
             "user_input_transcribed",
@@ -1182,6 +1190,7 @@ def _wire_session_timeline(session: AgentSession, userdata: dict[str, Any]) -> N
                 userdata["turn_index"] = int(userdata.get("turn_index", 0)) + 1
             userdata["last_user_transcript"] = content
             _append_recent_user_message(userdata, content)
+            _schedule_dynamic_knowledge_refresh(content)
 
         event_idx = _next_event_idx()
         trace_conversation_event(
