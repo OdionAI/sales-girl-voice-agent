@@ -2392,6 +2392,58 @@ async def _build_preloaded_ops_context(userdata: dict[str, Any]) -> str:
         f"- Recent vending records found: {len(vend_items) if isinstance(vend_items, list) else 0}\n"
         f"{chr(10).join(vend_lines) if vend_lines else '- none'}\n"
         "- Use this preloaded context first. Do not ask for the customer's email or account number as your first move.\n"
+                    )
+
+
+async def _instructions_with_initial_knowledge_context(
+    instructions: str, userdata: dict[str, Any]
+) -> str:
+    business_use_case = str(userdata.get("business_use_case") or "").strip().lower()
+    if business_use_case not in {"generic", "custom", "other"}:
+        return instructions
+
+    query = (
+        "Summarize this business's services, products, qualification questions, "
+        "FAQs, and the main facts the voice assistant should know."
+    )
+    try:
+        result = await ops_search_business_knowledge(
+            query=query,
+            top_k=6,
+            metadata=_ops_tool_metadata_from_userdata(userdata),
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Initial knowledge preload failed: %s", exc)
+        return instructions
+
+    matches = result.get("matches") if isinstance(result, dict) else None
+    if not isinstance(matches, list) or not matches:
+        return instructions
+
+    snippets: list[str] = []
+    for match in matches[:4]:
+        if not isinstance(match, dict):
+            continue
+        text = " ".join(str(match.get("text") or "").split()).strip()
+        if not text:
+            continue
+        source_name = str(match.get("source_name") or "Knowledge").strip()
+        snippets.append(f"- {source_name}: {text[:900]}")
+
+    if not snippets:
+        return instructions
+
+    logger.info(
+        "Initial knowledge context loaded: business_id=%s matches=%s",
+        str(userdata.get("business_id") or ""),
+        len(snippets),
+    )
+    return (
+        f"{instructions}\n\n"
+        "Core business knowledge loaded at session start:\n"
+        "- Use these facts whenever they answer the caller's question.\n"
+        "- If the caller asks something more specific, use search_business_knowledge for a deeper lookup before saying you do not know.\n"
+        f"{chr(10).join(snippets)}\n"
     )
 
 
@@ -2785,6 +2837,9 @@ async def entrypoint(ctx: JobContext):
             base_prompt, preloaded_context
         )
         instructions = await _instructions_with_context(instructions, userdata)
+        instructions = await _instructions_with_initial_knowledge_context(
+            instructions, userdata
+        )
         userdata["base_instructions"] = instructions
         started_at = conv_api_utcnow()
         business_id = str(userdata.get("business_id") or "")
@@ -2968,6 +3023,9 @@ async def entrypoint(ctx: JobContext):
             base_prompt, preloaded_context
         )
         instructions = await _instructions_with_context(instructions, userdata)
+        instructions = await _instructions_with_initial_knowledge_context(
+            instructions, userdata
+        )
         userdata["base_instructions"] = instructions
         started_at = conv_api_utcnow()
         business_id = str(userdata.get("business_id") or "")
