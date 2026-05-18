@@ -589,6 +589,65 @@ async def _finalize_session_cleanup(
                 )
 
 
+async def _start_session_recording_capture(
+    *,
+    ctx: JobContext,
+    userdata: dict[str, Any],
+    business_id: str,
+    session_tracker_id: str,
+    started_at: Any,
+) -> None:
+    if not session_tracker_id or not is_recording_enabled():
+        return
+
+    logger.info(
+        "Attempting room recording start: session_id=%s room=%s",
+        session_tracker_id or str(userdata.get("session_id") or ""),
+        str(ctx.room.name or ""),
+    )
+    recording_started = await start_room_recording(
+        room_name=str(ctx.room.name or ""),
+        business_id=business_id,
+        session_id=session_tracker_id or str(userdata.get("session_id") or ""),
+        started_at=started_at,
+    )
+    userdata["recording_egress_id"] = recording_started.egress_id
+    userdata["recording_expected_url"] = recording_started.expected_url
+    userdata["recording_filepath"] = recording_started.filepath
+    initial_recording_status = "recording" if recording_started.egress_id else "failed"
+
+    await update_session_recording_remote(
+        session_id=session_tracker_id,
+        recording_status=initial_recording_status,
+        recording_url=recording_started.expected_url
+        if initial_recording_status == "recording"
+        else None,
+        business_id=business_id,
+    )
+    _persist_session_event_async(
+        userdata,
+        event_type="recording_started"
+        if recording_started.egress_id
+        else "recording_failed",
+        role="system",
+        title="Recording started"
+        if recording_started.egress_id
+        else "Recording failed",
+        body=(
+            f"Audio recording started for room {ctx.room.name}."
+            if recording_started.egress_id
+            else f"Audio recording could not start: {recording_started.detail or 'unknown error'}."
+        ),
+        payload={
+            "recording_status": initial_recording_status,
+            "egress_id": recording_started.egress_id,
+            "recording_url": recording_started.expected_url,
+            "filepath": recording_started.filepath,
+            "detail": recording_started.detail,
+        },
+    )
+
+
 REQUIRE_VERIFIED_PHONE = os.getenv("REQUIRE_VERIFIED_PHONE", "true").lower() == "true"
 CONVERSATION_SERVICE_REQUIRED = (
     os.getenv("CONVERSATION_SERVICE_REQUIRED", "true").lower() == "true"
@@ -2904,65 +2963,24 @@ async def entrypoint(ctx: JobContext):
                         "configured_agent_name": userdata.get("configured_name"),
                     },
                 )
-                if is_recording_enabled():
-                    logger.info(
-                        "Attempting room recording start: language=en session_id=%s room=%s",
-                        session_tracker_id or str(userdata.get("session_id") or ""),
-                        str(ctx.room.name or ""),
-                    )
-                    recording_started = await start_room_recording(
-                        room_name=str(ctx.room.name or ""),
-                        business_id=business_id,
-                        session_id=session_tracker_id
-                        or str(userdata.get("session_id") or ""),
-                        started_at=started_at,
-                    )
-                    userdata["recording_egress_id"] = recording_started.egress_id
-                    userdata["recording_expected_url"] = recording_started.expected_url
-                    userdata["recording_filepath"] = recording_started.filepath
-                    initial_recording_status = (
-                        "recording" if recording_started.egress_id else "failed"
-                    )
-                    await update_session_recording_remote(
-                        session_id=session_tracker_id,
-                        recording_status=initial_recording_status,
-                        recording_url=recording_started.expected_url
-                        if initial_recording_status == "recording"
-                        else None,
-                        business_id=business_id,
-                    )
-                    _persist_session_event_async(
-                        userdata,
-                        event_type="recording_started"
-                        if recording_started.egress_id
-                        else "recording_failed",
-                        role="system",
-                        title="Recording started"
-                        if recording_started.egress_id
-                        else "Recording failed",
-                        body=(
-                            f"Audio recording started for room {ctx.room.name}."
-                            if recording_started.egress_id
-                            else f"Audio recording could not start: {recording_started.detail or 'unknown error'}."
-                        ),
-                        payload={
-                            "recording_status": initial_recording_status,
-                            "egress_id": recording_started.egress_id,
-                            "recording_url": recording_started.expected_url,
-                            "filepath": recording_started.filepath,
-                            "detail": recording_started.detail,
-                        },
-                    )
-                else:
-                    logger.info(
-                        "Recording not enabled for this session: language=en business_id=%s",
-                        business_id,
-                    )
             await session.start(
                 agent=SalonAgent(instructions=instructions),
                 room=ctx.room,
                 room_options=room_io.RoomOptions(delete_room_on_close=True),
             )
+            if is_recording_enabled():
+                await _start_session_recording_capture(
+                    ctx=ctx,
+                    userdata=userdata,
+                    business_id=business_id,
+                    session_tracker_id=str(userdata.get("session_tracker_id") or ""),
+                    started_at=started_at,
+                )
+            else:
+                logger.info(
+                    "Recording not enabled for this session: language=en business_id=%s",
+                    business_id,
+                )
             _trigger_first_turn(
                 session, language="en", business_use_case=business_use_case
             )
@@ -3088,65 +3106,24 @@ async def entrypoint(ctx: JobContext):
                         "configured_agent_name": userdata.get("configured_name"),
                     },
                 )
-                if is_recording_enabled():
-                    logger.info(
-                        "Attempting room recording start: language=fr session_id=%s room=%s",
-                        session_tracker_id or str(userdata.get("session_id") or ""),
-                        str(ctx.room.name or ""),
-                    )
-                    recording_started = await start_room_recording(
-                        room_name=str(ctx.room.name or ""),
-                        business_id=business_id,
-                        session_id=session_tracker_id
-                        or str(userdata.get("session_id") or ""),
-                        started_at=started_at,
-                    )
-                    userdata["recording_egress_id"] = recording_started.egress_id
-                    userdata["recording_expected_url"] = recording_started.expected_url
-                    userdata["recording_filepath"] = recording_started.filepath
-                    initial_recording_status = (
-                        "recording" if recording_started.egress_id else "failed"
-                    )
-                    await update_session_recording_remote(
-                        session_id=session_tracker_id,
-                        recording_status=initial_recording_status,
-                        recording_url=recording_started.expected_url
-                        if initial_recording_status == "recording"
-                        else None,
-                        business_id=business_id,
-                    )
-                    _persist_session_event_async(
-                        userdata,
-                        event_type="recording_started"
-                        if recording_started.egress_id
-                        else "recording_failed",
-                        role="system",
-                        title="Recording started"
-                        if recording_started.egress_id
-                        else "Recording failed",
-                        body=(
-                            f"Audio recording started for room {ctx.room.name}."
-                            if recording_started.egress_id
-                            else f"Audio recording could not start: {recording_started.detail or 'unknown error'}."
-                        ),
-                        payload={
-                            "recording_status": initial_recording_status,
-                            "egress_id": recording_started.egress_id,
-                            "recording_url": recording_started.expected_url,
-                            "filepath": recording_started.filepath,
-                            "detail": recording_started.detail,
-                        },
-                    )
-                else:
-                    logger.info(
-                        "Recording not enabled for this session: language=fr business_id=%s",
-                        business_id,
-                    )
             await session.start(
                 agent=SalonAgent(instructions=instructions),
                 room=ctx.room,
                 room_options=room_io.RoomOptions(delete_room_on_close=True),
             )
+            if is_recording_enabled():
+                await _start_session_recording_capture(
+                    ctx=ctx,
+                    userdata=userdata,
+                    business_id=business_id,
+                    session_tracker_id=str(userdata.get("session_tracker_id") or ""),
+                    started_at=started_at,
+                )
+            else:
+                logger.info(
+                    "Recording not enabled for this session: language=fr business_id=%s",
+                    business_id,
+                )
             _trigger_first_turn(
                 session, language="fr", business_use_case=business_use_case
             )
