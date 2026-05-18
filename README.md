@@ -37,6 +37,8 @@ Current stable contract:
 - stable cascade runtime is the production-safe path
 - category-aware tools are supported for hotel, restaurant, fashion, and
   generic/custom agents
+- generic/custom sessions refresh per-turn knowledge by updating the active
+  agent instructions in-place instead of handing off to a new agent
 - Odion cloned TTS can be used for English sessions when configured
 - LiveKit room recording is the supported conversation-audio capture path when
   enabled for the environment

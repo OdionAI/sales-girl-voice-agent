@@ -83,10 +83,26 @@ def _serialize_credentials() -> str:
     raw = RECORDING_GCP_CREDENTIALS.strip()
     if not raw:
         return ""
-    if raw.startswith("{"):
-        return raw
+
+    # Staging/prod startup scripts can inject the secret as a JSON-encoded string,
+    # so normalize quoted JSON, raw JSON, or a filesystem path into one payload.
+    candidate = raw
+    for _ in range(3):
+        if not candidate:
+            return ""
+        try:
+            parsed = json.loads(candidate)
+        except Exception:
+            break
+        if isinstance(parsed, dict):
+            return json.dumps(parsed)
+        if isinstance(parsed, str):
+            candidate = parsed.strip()
+            continue
+        break
+
     try:
-        with open(raw, "r", encoding="utf-8") as handle:
+        with open(candidate, "r", encoding="utf-8") as handle:
             parsed = json.load(handle)
         return json.dumps(parsed)
     except Exception:

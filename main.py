@@ -1136,6 +1136,20 @@ async def _init_session_userdata(ctx: JobContext, language: str) -> dict[str, An
 
 
 def _wire_session_timeline(session: AgentSession, userdata: dict[str, Any]) -> None:
+    async def _update_live_agent_instructions(instructions: str) -> None:
+        current_agent = getattr(session, "current_agent", None)
+        if current_agent is None:
+            logger.warning("Skipping dynamic knowledge refresh because no active agent is attached to the session.")
+            return
+        update_instructions = getattr(current_agent, "update_instructions", None)
+        if not callable(update_instructions):
+            logger.warning(
+                "Skipping dynamic knowledge refresh because the active agent does not support update_instructions()."
+            )
+            return
+
+        await update_instructions(instructions)
+
     async def _refresh_dynamic_knowledge_context(transcript: str) -> None:
         business_use_case = str(userdata.get("business_use_case") or "").strip().lower()
         if business_use_case not in {"generic", "custom", "other"}:
@@ -1181,7 +1195,7 @@ def _wire_session_timeline(session: AgentSession, userdata: dict[str, Any]) -> N
             "- If the snippets are incomplete, call search_business_knowledge again before saying you do not know.\n"
             f"{chr(10).join(snippets)}\n"
         )
-        session.update_agent(SalonAgent(instructions=enriched_instructions))
+        await _update_live_agent_instructions(enriched_instructions)
         userdata["last_dynamic_knowledge_query"] = query
         logger.info(
             "Dynamic knowledge context updated: turn=%s matches=%s query=%s",
