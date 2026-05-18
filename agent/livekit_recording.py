@@ -83,15 +83,71 @@ def _serialize_credentials() -> str:
     raw = RECORDING_GCP_CREDENTIALS.strip()
     if not raw:
         return ""
-    if raw.startswith("{"):
-        return raw
+
+    # Startup scripts can inject the secret as raw JSON, a JSON-encoded string,
+    # or an escaped pretty JSON blob, so normalize those shapes first.
+    candidate = raw
+    for _ in range(3):
+        if not candidate:
+            return ""
+        try:
+            parsed = json.loads(candidate)
+        except Exception:
+            normalized_candidate = _strip_json_layout_escapes(candidate)
+            if normalized_candidate != candidate:
+                candidate = normalized_candidate
+                continue
+            break
+        if isinstance(parsed, dict):
+            return json.dumps(parsed)
+        if isinstance(parsed, str):
+            candidate = parsed.strip()
+            continue
+        break
     try:
-        with open(raw, "r", encoding="utf-8") as handle:
+        with open(candidate, "r", encoding="utf-8") as handle:
             parsed = json.load(handle)
         return json.dumps(parsed)
     except Exception:
         logger.warning("LIVEKIT_RECORDING_GCP_CREDENTIALS_JSON is not valid JSON or readable path.")
         return ""
+
+
+def _strip_json_layout_escapes(raw: str) -> str:
+    output: list[str] = []
+    in_string = False
+    escape = False
+    idx = 0
+
+    while idx < len(raw):
+        ch = raw[idx]
+        if in_string:
+            output.append(ch)
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            idx += 1
+            continue
+
+        if ch == '"':
+            in_string = True
+            output.append(ch)
+            idx += 1
+            continue
+
+        if ch == "\\" and idx + 1 < len(raw) and raw[idx + 1] in {"n", "r", "t"}:
+            if raw[idx + 1] == "t":
+                output.append(" ")
+            idx += 2
+            continue
+
+        output.append(ch)
+        idx += 1
+
+    return "".join(output)
 
 
 async def start_room_recording(
