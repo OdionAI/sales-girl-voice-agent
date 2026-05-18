@@ -93,6 +93,10 @@ def _serialize_credentials() -> str:
         try:
             parsed = json.loads(candidate)
         except Exception:
+            normalized_candidate = _strip_json_layout_escapes(candidate)
+            if normalized_candidate != candidate:
+                candidate = normalized_candidate
+                continue
             break
         if isinstance(parsed, dict):
             return json.dumps(parsed)
@@ -108,6 +112,43 @@ def _serialize_credentials() -> str:
     except Exception:
         logger.warning("LIVEKIT_RECORDING_GCP_CREDENTIALS_JSON is not valid JSON or readable path.")
         return ""
+
+
+def _strip_json_layout_escapes(raw: str) -> str:
+    output: list[str] = []
+    in_string = False
+    escape = False
+    idx = 0
+
+    while idx < len(raw):
+        ch = raw[idx]
+        if in_string:
+            output.append(ch)
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            idx += 1
+            continue
+
+        if ch == '"':
+            in_string = True
+            output.append(ch)
+            idx += 1
+            continue
+
+        if ch == "\\" and idx + 1 < len(raw) and raw[idx + 1] in {"n", "r", "t"}:
+            if raw[idx + 1] == "t":
+                output.append(" ")
+            idx += 2
+            continue
+
+        output.append(ch)
+        idx += 1
+
+    return "".join(output)
 
 
 async def start_room_recording(

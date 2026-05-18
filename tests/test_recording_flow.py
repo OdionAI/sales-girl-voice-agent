@@ -61,6 +61,19 @@ class RecordingCredentialSerializationTests(unittest.TestCase):
         self.assertEqual(parsed["type"], "service_account")
         self.assertEqual(parsed["project_id"], "sales-girl-staging-490417")
 
+    def test_normalizes_shell_sourced_pretty_json_secret(self) -> None:
+        shell_sourced = (
+            '{\\n  "type": "service_account",\\n  "project_id": "sales-girl-staging-490417",'
+            '\\n  "private_key": "-----BEGIN PRIVATE KEY-----\\\\nabc123\\\\n-----END PRIVATE KEY-----\\\\n"\\n}'
+        )
+        with patch.object(livekit_recording, "RECORDING_GCP_CREDENTIALS", shell_sourced):
+            payload = livekit_recording._serialize_credentials()
+
+        parsed = json.loads(payload)
+        self.assertEqual(parsed["type"], "service_account")
+        self.assertEqual(parsed["project_id"], "sales-girl-staging-490417")
+        self.assertIn("\\nabc123\\n", parsed["private_key"])
+
 
 class DynamicKnowledgeRefreshTests(unittest.IsolatedAsyncioTestCase):
     async def test_refresh_updates_active_agent_instructions_without_agent_handoff(self) -> None:
