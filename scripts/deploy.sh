@@ -6,10 +6,19 @@ set -e
 
 ENVIRONMENT="${ENVIRONMENT:-staging}"
 APP_BASE="/opt/sales-girl-voice-agent"
-APP_PATH="/opt/sales-girl-voice-agent/sales-girl-voice-agent"
+APP_PATH="/opt/sales-girl-voice-agent"
+LEGACY_APP_PATH="/opt/sales-girl-voice-agent/sales-girl-voice-agent"
 VM_USER="${VM_USER:-salesgirl}"
 
 echo "🚀 Deploying SalesGirl Voice Agent (${ENVIRONMENT})..."
+
+# Newer VMs run the service from the root checkout, while some older startup flows
+# expected a nested app directory. Deploy into whichever checkout actually exists.
+if [ ! -d "$APP_PATH/.git" ] && [ -d "$LEGACY_APP_PATH/.git" ]; then
+    APP_PATH="$LEGACY_APP_PATH"
+fi
+
+echo "📁 Using checkout at ${APP_PATH}"
 
 # Wait for startup script to complete (check if directory exists)
 if [ ! -d "$APP_PATH" ]; then
@@ -31,11 +40,6 @@ if [ ! -d "$APP_PATH" ]; then
             REPO_BRANCH="${REPO_BRANCH:-main}"
             if [ ! -d ".git" ]; then
                 sudo -u "$VM_USER" git clone -b "$REPO_BRANCH" "$REPO_URL" .
-            fi
-            if [ ! -d "sales-girl-voice-agent" ]; then
-                echo "❌ Repository cloned but sales-girl-voice-agent directory not found"
-                ls -la
-                exit 1
             fi
             break
         fi

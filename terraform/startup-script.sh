@@ -24,6 +24,22 @@ apt-get install -y \
     unzip \
     systemd
 
+# Install Google Cloud Ops Agent so VM journald logs are available in Cloud Logging.
+cd /tmp
+curl -fsSLO https://dl.google.com/cloudagents/add-google-cloud-ops-agent-repo.sh
+bash add-google-cloud-ops-agent-repo.sh --also-install
+cat > /etc/google-cloud-ops-agent/config.yaml <<'EOF'
+logging:
+  receivers:
+    systemd_voice:
+      type: systemd_journald
+  service:
+    pipelines:
+      default_pipeline:
+        receivers: [systemd_voice]
+EOF
+systemctl restart google-cloud-ops-agent
+
 # Create application user if it doesn't exist
 if ! id "$VM_USER" &>/dev/null; then
     useradd -m -s /bin/bash "$VM_USER"

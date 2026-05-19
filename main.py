@@ -33,12 +33,14 @@ from agent.conversation_service_api import (
 )
 from agent.agent_config_api import get_active_config as get_agent_active_config
 from agent.ops_api import (
+    create_ticket as ops_create_ticket,
     get_account_overview as ops_get_account_overview,
     get_payment_summary as ops_get_payment_summary,
     get_recent_transactions as ops_get_recent_transactions,
     get_tariff_profile as ops_get_tariff_profile,
     get_vending_history as ops_get_vending_history,
     lookup_customer_account as ops_lookup_customer_account,
+    search_business_knowledge as ops_search_business_knowledge,
 )
 from agent.odion_tts import OdionTTS
 from agent.observability import flush_traces, trace_conversation_event
@@ -111,6 +113,12 @@ GENERIC_STATIC_PROMPT_EN = (
     "Use the saved business instructions and knowledge first, use tools only when relevant, never invent live data, "
     "and create a support ticket when human follow-up is needed."
 )
+ALWAYS_ENABLED_RUNTIME_TOOLS = ("search_business_knowledge",)
+
+SHARED_ODION_CATALOG_OWNER_BY_VOICE_ID = {
+    "d270a5cec6914373b9deed1d1c3cbade": "mavinomichael@gmail.com",
+    "46f5ac744a504023b93c6dd8ddd46ac6": "mavinomichael@gmail.com",
+}
 
 
 def _is_en_agent_name(name: str) -> bool:
@@ -209,6 +217,206 @@ def _track_background_task(userdata: dict[str, Any], coro: Any) -> None:
             pass
 
     task.add_done_callback(_cleanup)
+
+
+def _append_recent_user_message(userdata: dict[str, Any], content: str) -> None:
+    recent = userdata.setdefault("recent_user_messages", [])
+    if not isinstance(recent, list):
+        recent = []
+        userdata["recent_user_messages"] = recent
+    cleaned = str(content or "").strip()
+    if not cleaned:
+        return
+    recent.append(cleaned)
+    if len(recent) > 8:
+        del recent[:-8]
+
+
+def _tool_metadata_from_userdata(userdata: dict[str, Any]) -> dict[str, Any]:
+    conversation_id = str(userdata.get("conversation_id") or "")
+    session_id = str(userdata.get("session_id") or conversation_id)
+    return {
+        "client_id": str(userdata.get("client_id") or "sales-girl-internal"),
+        "agent_id": str(
+            userdata.get("agent_config_id")
+            or userdata.get("agent_id")
+            or AGENT_NAME
+        ),
+        "business_id": str(userdata.get("business_id") or ""),
+        "business_use_case": str(userdata.get("business_use_case") or ""),
+        "live_data_endpoint": str(userdata.get("live_data_endpoint") or ""),
+        "conversation_id": conversation_id,
+        "session_id": session_id,
+        "end_user_id": str(userdata.get("end_user_id") or ""),
+        "end_user_name": str(userdata.get("end_user_name") or ""),
+        "caller_phone_e164": str(userdata.get("caller_phone_e164") or ""),
+        "enabled_tool_names": list(userdata.get("enabled_tool_names") or []),
+        "turn_index": int(userdata.get("turn_index", 0)),
+        "last_user_transcript": str(userdata.get("last_user_transcript") or ""),
+        "last_assistant_message": str(userdata.get("last_assistant_message") or ""),
+        "timeline_event_index": int(userdata.get("timeline_event_index", 0)),
+    }
+
+
+def _assistant_claims_ticket_created(message: str) -> bool:
+    normalized = str(message or "").strip().lower()
+    if not normalized:
+        return False
+    patterns = (
+        "i have created a ticket",
+        "i created a ticket",
+        "ticket has been created",
+        "j'ai créé un ticket",
+        "j’ai créé un ticket",
+        "le ticket a été créé",
+        "un ticket a été créé",
+    )
+    return any(pattern in normalized for pattern in patterns)
+
+
+def _assistant_claims_ticket_failed(message: str) -> bool:
+    normalized = str(message or "").strip().lower()
+    if not normalized:
+        return False
+    patterns = (
+        "ticket creation failed",
+        "couldn't create the ticket",
+        "could not create the ticket",
+        "could not create a ticket",
+        "unable to create the ticket",
+        "unable to create a ticket",
+        "there was an issue creating the ticket",
+        "there is an issue creating the ticket",
+        "issue creating the ticket",
+        "problem creating the ticket",
+        "sorry, there was an issue creating the ticket",
+        "n'ai pas pu créer le ticket",
+        "la création du ticket a échoué",
+        "je suis désolé, la création du ticket a échoué",
+        "je n'ai pas pu créer le ticket",
+        "impossible de créer le ticket",
+        "un problème est survenu lors de la création du ticket",
+    )
+    return any(pattern in normalized for pattern in patterns)
+
+
+def _is_non_informative_ticket_reply(text: str) -> bool:
+    normalized = str(text or "").strip().lower()
+    if not normalized:
+        return True
+    trivial = {
+        "ok",
+        "okay",
+        "no problem",
+        "oui",
+        "yes",
+        "d'accord",
+        "d’accord",
+        "or",
+        "dit",
+    }
+    return normalized in trivial or len(normalized) < 3
+
+
+def _fallback_ticket_summary(userdata: dict[str, Any]) -> tuple[str, str]:
+    recent = [
+        str(item).strip()
+        for item in list(userdata.get("recent_user_messages") or [])
+        if not _is_non_informative_ticket_reply(str(item))
+    ]
+    combined = " ".join(recent[-4:]).strip()
+    lowered = combined.lower()
+    if "alat" in lowered:
+        return (
+            "ALAT App Issues",
+            combined or "Customer reported issues while using the ALAT app.",
+        )
+    if "passeport" in lowered or "passport" in lowered:
+        return (
+            "Passport Support Request",
+            combined or "Customer requested help related to a passport issue.",
+        )
+    title_source = recent[0] if recent else "Support Request"
+    title = " ".join(title_source.replace('"', "").split()[:6]).strip() or "Support Request"
+    if len(title) < 2:
+        title = "Support Request"
+    description = combined or str(userdata.get("last_user_transcript") or "").strip() or "Customer requested human follow-up."
+    return title[:255], description
+
+
+async def _reconcile_ticket_claim_if_needed(userdata: dict[str, Any], assistant_message: str) -> None:
+    enabled = {
+        str(name or "").strip()
+        for name in list(userdata.get("enabled_tool_names") or [])
+        if str(name or "").strip()
+    }
+    if "create_ticket" not in enabled:
+        return
+
+    current_turn = int(userdata.get("turn_index", 0))
+    successful_turn = int(userdata.get("last_create_ticket_success_turn", -1))
+    if successful_turn == current_turn:
+        return
+
+    assistant_message = str(assistant_message or "").strip()
+    if not assistant_message:
+        return
+
+    should_reconcile = _assistant_claims_ticket_created(assistant_message)
+    if not should_reconcile and _assistant_claims_ticket_failed(assistant_message):
+        recent = " ".join(list(userdata.get("recent_user_messages") or [])[-4:]).lower()
+        should_reconcile = any(
+            phrase in recent
+            for phrase in (
+                "create a ticket",
+                "create ticket",
+                "créer un billet",
+                "créer un ticket",
+                "creer un ticket",
+            )
+        )
+    if not should_reconcile:
+        return
+
+    title, description = _fallback_ticket_summary(userdata)
+    logger.warning(
+        "Reconciling missing ticket tool execution: business_id=%s conversation_id=%s turn=%s title=%s",
+        userdata.get("business_id"),
+        userdata.get("conversation_id"),
+        current_turn,
+        title,
+    )
+    result = await ops_create_ticket(
+        title=title,
+        description=description,
+        issue_type="general",
+        priority="high",
+        requires_human=True,
+        metadata=_tool_metadata_from_userdata(userdata),
+    )
+    if str(result.get("status") or "").lower() != "failed":
+        userdata["last_create_ticket_success_turn"] = current_turn
+        userdata["last_create_ticket_result"] = result
+        _persist_session_event_async(
+            userdata,
+            event_type="tool_call",
+            role="tool",
+            title="create_ticket_fallback",
+            body=_summarize_tool_output(result),
+            payload={
+                "tool_name": "create_ticket_fallback",
+                "tool_result": result,
+                "event_index": int(userdata.get("timeline_event_index", 0)),
+                "turn_index": current_turn,
+            },
+        )
+    else:
+        logger.error(
+            "Fallback ticket reconciliation failed: business_id=%s conversation_id=%s detail=%s",
+            userdata.get("business_id"),
+            userdata.get("conversation_id"),
+            result.get("detail") or result.get("message"),
+        )
 
 
 async def _drain_background_tasks(userdata: dict[str, Any]) -> None:
@@ -447,11 +655,14 @@ CONVERSATION_SERVICE_REQUIRED = (
 ENABLE_ODION_TTS_EN = os.getenv("ENABLE_ODION_TTS_EN", "true").lower() == "true"
 ENABLE_ODION_TTS_FR = os.getenv("ENABLE_ODION_TTS_FR", "false").lower() == "true"
 ODION_TTS_EXPERIMENT_OWNER_ID = str(
-    os.getenv("ODION_TTS_EXPERIMENT_OWNER_ID") or "mavinomichael@gmail.com"
+    os.getenv("ODION_TTS_EXPERIMENT_OWNER_ID") or ""
 ).strip()
 ODION_TTS_EXPERIMENT_VOICE_ID = str(
-    os.getenv("ODION_TTS_EXPERIMENT_VOICE_ID") or "d270a5cec6914373b9deed1d1c3cbade"
+    os.getenv("ODION_TTS_EXPERIMENT_VOICE_ID") or ""
 ).strip()
+FORCE_ODION_TTS_EXPERIMENT_VOICE = (
+    os.getenv("FORCE_ODION_TTS_EXPERIMENT_VOICE", "false").lower() == "true"
+)
 ODION_TTS_EXPERIMENT_LANGUAGE_HINT = (
     str(os.getenv("ODION_TTS_EXPERIMENT_LANGUAGE_HINT") or "English").strip()
     or "English"
@@ -509,6 +720,19 @@ TURN_MIN_INTERRUPTION_DURATION = _float_env(
     "TURN_MIN_INTERRUPTION_DURATION",
     0.7,
     min_value=0.1,
+)
+
+GOOGLE_LLM_MODEL_DEFAULT = (
+    str(os.getenv("GOOGLE_LLM_MODEL_DEFAULT") or "gemini-2.0-flash").strip()
+    or "gemini-2.0-flash"
+)
+GOOGLE_LLM_MODEL_EN = (
+    str(os.getenv("GOOGLE_LLM_MODEL_EN") or GOOGLE_LLM_MODEL_DEFAULT).strip()
+    or GOOGLE_LLM_MODEL_DEFAULT
+)
+GOOGLE_LLM_MODEL_FR = (
+    str(os.getenv("GOOGLE_LLM_MODEL_FR") or GOOGLE_LLM_MODEL_DEFAULT).strip()
+    or GOOGLE_LLM_MODEL_DEFAULT
 )
 
 
@@ -675,7 +899,7 @@ def _decode_identity_email(identity: str) -> str:
 # Extract participant identity and related room context from the LiveKit job.
 def _participant_identity_from_ctx(
     ctx: JobContext,
-) -> tuple[str, str, str, str, str, str, str]:
+) -> tuple[str, str, str, str, str, str, str, dict[str, str]]:
     room = getattr(ctx, "room", None)
     room_name = _room_name_from_ctx(ctx)
     fallback_business_id = _normalize_business_id(
@@ -701,17 +925,35 @@ def _participant_identity_from_ctx(
             room_configured_name,
             room_end_user_name,
             "",
+            {},
         )
 
     # First preference: encoded phone in room name (always available at session bootstrap)
     phone_from_room = _phone_from_room_name(room_name)
     if phone_from_room:
-        return phone_from_room, "voice", fallback_business_id, "", "", "", ""
+        return phone_from_room, "voice", fallback_business_id, "", "", "", "", {}
 
     # Fallback: read remote participant metadata / identity
     participants = getattr(room, "remote_participants", None)
     if not participants:
-        return "", "voice", fallback_business_id, "", "", "", ""
+        return "", "voice", fallback_business_id, "", "", "", "", {}
+
+    def _normalize_runtime_overrides(payload: Any) -> dict[str, str]:
+        if not isinstance(payload, dict):
+            return {}
+        normalized: dict[str, str] = {}
+        for key in (
+            "stt_provider",
+            "stt_model",
+            "stt_base_url",
+            "tts_provider",
+            "tts_model",
+            "tts_base_url",
+        ):
+            value = str(payload.get(key) or "").strip()
+            if value:
+                normalized[key] = value
+        return normalized
 
     values = participants.values() if hasattr(participants, "values") else participants
     for participant in values:
@@ -719,6 +961,8 @@ def _participant_identity_from_ctx(
         metadata_config_agent_id = ""
         metadata_configured_agent_name = ""
         metadata_end_user_name = ""
+        metadata_tts_endpoint = ""
+        metadata_runtime_overrides: dict[str, str] = {}
         metadata_raw = str(getattr(participant, "metadata", "") or "").strip()
         if metadata_raw:
             try:
@@ -732,6 +976,9 @@ def _participant_identity_from_ctx(
                 ).strip()
                 metadata_end_user_name = str(payload.get("end_user_name") or "").strip()
                 metadata_tts_endpoint = str(payload.get("tts_endpoint") or "").strip()
+                metadata_runtime_overrides = _normalize_runtime_overrides(
+                    payload.get("runtime_overrides")
+                )
                 email_candidate = str(payload.get("end_user_email") or "").strip()
                 if email_candidate:
                     normalized_email = _normalize_end_user_id(email_candidate)
@@ -745,6 +992,7 @@ def _participant_identity_from_ctx(
                             metadata_configured_agent_name,
                             metadata_end_user_name,
                             metadata_tts_endpoint,
+                            metadata_runtime_overrides,
                         )
                 candidate = str(
                     payload.get("end_user_phone") or payload.get("end_user_id") or ""
@@ -762,6 +1010,8 @@ def _participant_identity_from_ctx(
                         metadata_config_agent_id,
                         metadata_configured_agent_name,
                         metadata_end_user_name,
+                        metadata_tts_endpoint,
+                        metadata_runtime_overrides,
                     )
             except json.JSONDecodeError:
                 pass
@@ -776,6 +1026,8 @@ def _participant_identity_from_ctx(
                 metadata_config_agent_id,
                 metadata_configured_agent_name,
                 metadata_end_user_name,
+                metadata_tts_endpoint,
+                metadata_runtime_overrides,
             )
         if "voice_assistant_user_" in identity:
             phone_from_identity = identity.split("voice_assistant_user_", 1)[1]
@@ -788,9 +1040,11 @@ def _participant_identity_from_ctx(
                     metadata_config_agent_id,
                     metadata_configured_agent_name,
                     metadata_end_user_name,
+                    metadata_tts_endpoint,
+                    metadata_runtime_overrides,
                 )
 
-    return "", "voice", fallback_business_id, "", "", "", ""
+    return "", "voice", fallback_business_id, "", "", "", "", {}
 
 
 async def _init_session_userdata(ctx: JobContext, language: str) -> dict[str, Any]:
@@ -803,6 +1057,8 @@ async def _init_session_userdata(ctx: JobContext, language: str) -> dict[str, An
         config_agent_id,
         configured_agent_name,
         end_user_name,
+        tts_endpoint,
+        runtime_overrides,
     ) = _participant_identity_from_ctx(ctx)
     if REQUIRE_VERIFIED_PHONE and not end_user_id:
         try:
@@ -815,9 +1071,11 @@ async def _init_session_userdata(ctx: JobContext, language: str) -> dict[str, An
                 config_agent_id,
                 configured_agent_name,
                 end_user_name,
+                tts_endpoint,
+                runtime_overrides,
             ) = _participant_identity_from_ctx(ctx)
             logger.info(
-                "Retried participant identity after join: end_user_id=%s type=%s business_id=%s config_agent_id=%s configured_name=%s end_user_name=%s tts_endpoint=%s",
+                "Retried participant identity after join: end_user_id=%s type=%s business_id=%s config_agent_id=%s configured_name=%s end_user_name=%s tts_endpoint=%s runtime_overrides=%s",
                 end_user_id,
                 identity_type,
                 business_id,
@@ -825,6 +1083,7 @@ async def _init_session_userdata(ctx: JobContext, language: str) -> dict[str, An
                 configured_agent_name,
                 end_user_name,
                 tts_endpoint,
+                runtime_overrides,
             )
         except RuntimeError as exc:
             # Some jobs can reach here before room connection is established.
@@ -861,6 +1120,7 @@ async def _init_session_userdata(ctx: JobContext, language: str) -> dict[str, An
         "configured_agent_name": configured_agent_name,
         "end_user_name": end_user_name,
         "tts_endpoint": tts_endpoint,
+        "runtime_overrides": runtime_overrides,
         "business_id": business_id,
         "conversation_id": conversation_id,
         "session_id": stable_session_id,
@@ -876,6 +1136,82 @@ async def _init_session_userdata(ctx: JobContext, language: str) -> dict[str, An
 
 
 def _wire_session_timeline(session: AgentSession, userdata: dict[str, Any]) -> None:
+    async def _update_live_agent_instructions(instructions: str) -> None:
+        current_agent = getattr(session, "current_agent", None)
+        if current_agent is None:
+            logger.warning("Skipping dynamic knowledge refresh because no active agent is attached to the session.")
+            return
+        update_instructions = getattr(current_agent, "update_instructions", None)
+        if not callable(update_instructions):
+            logger.warning(
+                "Skipping dynamic knowledge refresh because the active agent does not support update_instructions()."
+            )
+            return
+
+        await update_instructions(instructions)
+
+    async def _refresh_dynamic_knowledge_context(transcript: str) -> None:
+        business_use_case = str(userdata.get("business_use_case") or "").strip().lower()
+        if business_use_case not in {"generic", "custom", "other"}:
+            return
+
+        query = str(transcript or "").strip()
+        base_instructions = str(userdata.get("base_instructions") or "").strip()
+        if not query or not base_instructions:
+            return
+
+        try:
+            result = await ops_search_business_knowledge(
+                query=query,
+                top_k=4,
+                metadata=_ops_tool_metadata_from_userdata(userdata),
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Dynamic knowledge prefetch failed for query=%s: %s", query, exc)
+            return
+
+        matches = result.get("matches") if isinstance(result, dict) else None
+        if not isinstance(matches, list) or not matches:
+            return
+
+        snippets: list[str] = []
+        for match in matches[:3]:
+            if not isinstance(match, dict):
+                continue
+            text = " ".join(str(match.get("text") or "").split()).strip()
+            if not text:
+                continue
+            source_name = str(match.get("source_name") or "Knowledge").strip()
+            snippets.append(f"- {source_name}: {text[:900]}")
+
+        if not snippets:
+            return
+
+        enriched_instructions = (
+            f"{base_instructions}\n\n"
+            "Dynamic knowledge context for the caller's latest request:\n"
+            "- The following snippets were retrieved from the business knowledge base for this turn.\n"
+            "- Use them first when answering the caller's current question.\n"
+            "- If the snippets are incomplete, call search_business_knowledge again before saying you do not know.\n"
+            f"{chr(10).join(snippets)}\n"
+        )
+        await _update_live_agent_instructions(enriched_instructions)
+        userdata["last_dynamic_knowledge_query"] = query
+        logger.info(
+            "Dynamic knowledge context updated: turn=%s matches=%s query=%s",
+            int(userdata.get("turn_index", 0)),
+            len(snippets),
+            _short_text(query, 120),
+        )
+
+    def _schedule_dynamic_knowledge_refresh(transcript: str) -> None:
+        query = str(transcript or "").strip()
+        if not query:
+            return
+        if query == str(userdata.get("last_dynamic_knowledge_query") or "").strip():
+            return
+        _track_background_task(userdata, _refresh_dynamic_knowledge_context(query))
+
     def _next_event_idx() -> int:
         userdata["timeline_event_index"] = (
             int(userdata.get("timeline_event_index", 0)) + 1
@@ -890,6 +1226,7 @@ def _wire_session_timeline(session: AgentSession, userdata: dict[str, Any]) -> N
 
         userdata["turn_index"] = int(userdata.get("turn_index", 0)) + 1
         userdata["last_user_transcript"] = transcript
+        _schedule_dynamic_knowledge_refresh(transcript)
         event_idx = _next_event_idx()
         trace_conversation_event(
             "user_input_transcribed",
@@ -925,6 +1262,8 @@ def _wire_session_timeline(session: AgentSession, userdata: dict[str, Any]) -> N
             if content != userdata.get("last_user_transcript"):
                 userdata["turn_index"] = int(userdata.get("turn_index", 0)) + 1
             userdata["last_user_transcript"] = content
+            _append_recent_user_message(userdata, content)
+            _schedule_dynamic_knowledge_refresh(content)
 
         event_idx = _next_event_idx()
         trace_conversation_event(
@@ -988,6 +1327,13 @@ def _wire_session_timeline(session: AgentSession, userdata: dict[str, Any]) -> N
                     session_id=str(userdata.get("session_id") or ""),
                 )
 
+        if role_l == "assistant":
+
+            async def _reconcile_claim() -> None:
+                await _reconcile_ticket_claim_if_needed(userdata, content)
+
+            _track_background_task(userdata, _reconcile_claim())
+
     @session.on("function_tools_executed")
     def _on_function_tools_executed(ev: Any) -> None:
         calls: list[dict[str, Any]] = []
@@ -1023,16 +1369,22 @@ def _wire_session_timeline(session: AgentSession, userdata: dict[str, Any]) -> N
         )
         for call in calls:
             tool_name = str(call.get("tool_name") or "").strip() or "unknown_tool"
+            result = call.get("tool_result")
+            if tool_name == "create_ticket" and not (
+                isinstance(result, dict) and str(result.get("status") or "").lower() == "failed"
+            ):
+                userdata["last_create_ticket_success_turn"] = int(userdata.get("turn_index", 0))
+                userdata["last_create_ticket_result"] = result
             _persist_session_event_async(
                 userdata,
                 event_type="tool_call",
                 role="tool",
                 title=tool_name,
-                body=_summarize_tool_output(call.get("tool_result")),
+                body=_summarize_tool_output(result),
                 payload={
                     "tool_name": tool_name,
                     "tool_arguments": call.get("tool_arguments"),
-                    "tool_result": call.get("tool_result"),
+                    "tool_result": result,
                     "last_user_transcript": userdata.get("last_user_transcript"),
                     "event_index": event_idx,
                     "turn_index": int(userdata.get("turn_index", 0)),
@@ -1220,13 +1572,15 @@ async def _instructions_with_context(base_prompt: str, userdata: dict[str, Any])
             "Domain lock:\n"
             "- You are the business's AI voice assistant for this specific company.\n"
             "- Never present yourself as an electricity, banking, hotel, restaurant, or fashion assistant unless the business instructions explicitly say so.\n"
-            "- Use the saved business instructions, knowledge, and configured tools for this business only.\n\n"
+            "- Use the saved business instructions, knowledge, and dashboard-configured tools for this business only.\n\n"
             "Role lock:\n"
             "- You MUST follow the current business-specific role and responsibilities in this prompt.\n"
             "- Historical snippets may contain outdated assistant behavior from older versions.\n"
             "- Never switch to an old persona if it conflicts with this prompt.\n\n"
             "Issue handling lock:\n"
-            "- Use configured tools only when they are relevant and available.\n"
+            "- search_business_knowledge is always available as a built-in runtime tool for this business.\n"
+            "- Use built-in knowledge search before saying you do not have enough information.\n"
+            "- Use dashboard-configured tools only when they are relevant and available.\n"
             "- Do not claim any action succeeded unless the tool confirms it.\n"
             "- If a request needs human attention, create a ticket if that tool is available.\n"
             "- If the caller asks for a ticket, or agrees to ticket follow-up, call create_ticket immediately before replying.\n"
@@ -1397,7 +1751,14 @@ def _hydrate_userdata_from_active_agent_config(
         else []
     )
     userdata["active_tools"] = active_tools
-    enabled_tool_names = [str(tool.get("name") or "").strip() for tool in active_tools]
+    enabled_tool_names = [
+        str(tool.get("name") or "").strip()
+        for tool in active_tools
+        if str(tool.get("name") or "").strip()
+    ]
+    for tool_name in ALWAYS_ENABLED_RUNTIME_TOOLS:
+        if tool_name not in enabled_tool_names:
+            enabled_tool_names.append(tool_name)
     userdata["enabled_tool_names"] = enabled_tool_names
 
     expected_tool_by_use_case = {
@@ -1453,6 +1814,21 @@ def _strip_live_connectivity_lines(text: str) -> str:
             continue
         kept_lines.append(line)
     return "\n".join(kept_lines).strip()
+
+
+def _strip_configured_tool_access_block(text: str) -> str:
+    start_marker = "Configured tool access (system-generated):"
+    end_marker = "End configured tool access."
+    raw = str(text or "")
+    start_index = raw.find(start_marker)
+    if start_index == -1:
+        return raw.strip()
+    end_index = raw.find(end_marker, start_index)
+    if end_index == -1:
+        sanitized = raw[:start_index]
+    else:
+        sanitized = f"{raw[:start_index]}{raw[end_index + len(end_marker):]}"
+    return sanitized.strip()
 
 
 def _active_tool_records(
@@ -1637,6 +2013,8 @@ def _detect_business_use_case(
         return "restaurant"
     if "fetch_product_availability" in tool_names:
         return "fashion"
+    if tool_names and tool_names <= {"create_ticket", "send_email"}:
+        return "generic"
 
     text = " ".join(
         [
@@ -1676,50 +2054,6 @@ def _detect_business_use_case(
     if any(
         token in text
         for token in (
-            "restaurant",
-            "menu",
-            "order tool",
-            "create_order",
-            "dining",
-            "host stand",
-            "reservation request",
-            "pickup",
-            "delivery",
-        )
-    ):
-        return "restaurant"
-    if any(
-        token in text
-        for token in (
-            "fashion",
-            "size",
-            "sizes",
-            "style",
-            "styles",
-            "product availability",
-            "catalog",
-            "boutique",
-            "apparel",
-        )
-    ):
-        return "fashion"
-    if any(
-        token in text
-        for token in (
-            "hotel",
-            "guest support",
-            "room availability",
-            "check-in",
-            "check out",
-            "accommodation",
-            "concierge",
-            "room reservation",
-        )
-    ):
-        return "hotel"
-    if any(
-        token in text
-        for token in (
             "ekedc",
             "electricity",
             "tariff",
@@ -1746,7 +2080,9 @@ def _effective_base_prompt(
     language: str,
 ) -> str:
     cfg = active_agent_config or {}
-    configured_instructions = str(cfg.get("instructions") or "").strip()
+    configured_instructions = _strip_configured_tool_access_block(
+        str(cfg.get("instructions") or "").strip()
+    )
     runtime_tool_guidance = _runtime_tool_guidance(cfg, business_use_case)
     live_tool_by_use_case = {
         "hotel": "fetch_room_availability",
@@ -1864,7 +2200,14 @@ def _effective_base_prompt(
         )
 
     if business_use_case == "generic":
-        return f"{configured_instructions.rstrip()}\n\n{runtime_tool_guidance}"
+        return (
+            f"{configured_instructions.rstrip()}\n\n"
+            f"{runtime_tool_guidance}\n\n"
+            "Built-in tool rule:\n"
+            "- search_business_knowledge is a built-in runtime tool for every agent, even when it is not part of the dashboard-configured tool list.\n"
+            "- Use business knowledge search before saying you do not have enough information.\n"
+            "- Treat dashboard-configured tools as additional tools, not as the full list of built-in runtime capabilities.\n"
+        )
 
     incompatible_tokens = (
         "salon",
@@ -1910,7 +2253,14 @@ async def _build_preloaded_ops_context(userdata: dict[str, Any]) -> str:
         return ""
     business_use_case = str(userdata.get("business_use_case") or "").strip().lower()
 
-    if business_use_case == "hotel":
+    if business_use_case in {
+        "hotel",
+        "restaurant",
+        "fashion",
+        "generic",
+        "custom",
+        "other",
+    }:
         return ""
 
     if business_use_case == "fidelity":
@@ -2115,6 +2465,58 @@ async def _build_preloaded_ops_context(userdata: dict[str, Any]) -> str:
         f"- Recent vending records found: {len(vend_items) if isinstance(vend_items, list) else 0}\n"
         f"{chr(10).join(vend_lines) if vend_lines else '- none'}\n"
         "- Use this preloaded context first. Do not ask for the customer's email or account number as your first move.\n"
+                    )
+
+
+async def _instructions_with_initial_knowledge_context(
+    instructions: str, userdata: dict[str, Any]
+) -> str:
+    business_use_case = str(userdata.get("business_use_case") or "").strip().lower()
+    if business_use_case not in {"generic", "custom", "other"}:
+        return instructions
+
+    query = (
+        "Summarize this business's services, products, qualification questions, "
+        "FAQs, and the main facts the voice assistant should know."
+    )
+    try:
+        result = await ops_search_business_knowledge(
+            query=query,
+            top_k=6,
+            metadata=_ops_tool_metadata_from_userdata(userdata),
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Initial knowledge preload failed: %s", exc)
+        return instructions
+
+    matches = result.get("matches") if isinstance(result, dict) else None
+    if not isinstance(matches, list) or not matches:
+        return instructions
+
+    snippets: list[str] = []
+    for match in matches[:4]:
+        if not isinstance(match, dict):
+            continue
+        text = " ".join(str(match.get("text") or "").split()).strip()
+        if not text:
+            continue
+        source_name = str(match.get("source_name") or "Knowledge").strip()
+        snippets.append(f"- {source_name}: {text[:900]}")
+
+    if not snippets:
+        return instructions
+
+    logger.info(
+        "Initial knowledge context loaded: business_id=%s matches=%s",
+        str(userdata.get("business_id") or ""),
+        len(snippets),
+    )
+    return (
+        f"{instructions}\n\n"
+        "Core business knowledge loaded at session start:\n"
+        "- Use these facts whenever they answer the caller's question.\n"
+        "- If the caller asks something more specific, use search_business_knowledge for a deeper lookup before saying you do not know.\n"
+        f"{chr(10).join(snippets)}\n"
     )
 
 
@@ -2147,11 +2549,12 @@ def _build_session_for_language(
     userdata: dict[str, Any],
     tts_engine: Any | None = None,
 ) -> AgentSession:
+    stt_engine = _build_stt_engine_for_language(language=language, userdata=userdata)
     if language == "fr":
         return AgentSession(
-            stt=deepgram.STT(language="fr"),
+            stt=stt_engine,
             tts=tts_engine or deepgram.TTS(model="aura-2-agathe-fr"),
-            llm=google.LLM(model="gemini-2.0-flash"),
+            llm=google.LLM(model=GOOGLE_LLM_MODEL_FR),
             userdata=userdata,
             min_endpointing_delay=TURN_MIN_ENDPOINTING_DELAY,
             max_endpointing_delay=TURN_MAX_ENDPOINTING_DELAY,
@@ -2159,9 +2562,9 @@ def _build_session_for_language(
         )
 
     return AgentSession(
-        stt=deepgram.STT(language="en"),
+        stt=stt_engine,
         tts=tts_engine,
-        llm=google.LLM(model="gemini-2.0-flash"),
+        llm=google.LLM(model=GOOGLE_LLM_MODEL_EN),
         userdata=userdata,
         min_endpointing_delay=TURN_MIN_ENDPOINTING_DELAY,
         max_endpointing_delay=TURN_MAX_ENDPOINTING_DELAY,
@@ -2191,6 +2594,25 @@ def _should_use_odion_tts_for_language(config: dict[str, Any], language: str) ->
         return True
     language = str(language or "").strip().lower()
     return scope == language
+
+
+def _resolve_saved_odion_owner_id(
+    *,
+    tts_voice_id: str,
+    explicit_owner_id: str,
+    business_id: str,
+) -> str:
+    normalized_explicit_owner_id = str(explicit_owner_id or "").strip()
+    if normalized_explicit_owner_id:
+        return normalized_explicit_owner_id
+
+    normalized_voice_id = str(tts_voice_id or "").strip()
+    if normalized_voice_id:
+        mapped_owner = SHARED_ODION_CATALOG_OWNER_BY_VOICE_ID.get(normalized_voice_id)
+        if mapped_owner:
+            return mapped_owner
+
+    return str(business_id or "").strip()
 
 
 def _normalized_language_code(value: str) -> str:
@@ -2267,6 +2689,8 @@ def _build_stt_engine_for_language(*, language: str, userdata: dict[str, Any]) -
         )
 
     return deepgram.STT(**stt_kwargs)
+
+
 def _build_tts_engine_for_language(
     *,
     language: str,
@@ -2284,9 +2708,12 @@ def _build_tts_engine_for_language(
         or _deepgram_tts_model_for_language(lang)
     )
     override_base_url = str(runtime_overrides.get("tts_base_url") or "").strip()
-    fallback_tts: Any = deepgram.TTS(model=_deepgram_tts_model_for_language(lang))
+    fallback_tts: Any = (
+        deepgram.TTS(model=_deepgram_tts_model_for_language(lang))
+    )
     odion_enabled = ENABLE_ODION_TTS_FR if is_fr else ENABLE_ODION_TTS_EN
     fallback_label = "French" if is_fr else "English"
+
     if override_provider in {"deepgram", "custom"}:
         resolved_override_model = _strict_language_aware_deepgram_model(
             override_model, lang
@@ -2310,10 +2737,11 @@ def _build_tts_engine_for_language(
         else:
             logger.info(
                 "Using Deepgram TTS override: model=%s language=%s",
-                resolved_override_model,
+                override_model,
                 lang,
             )
         return deepgram.TTS(**tts_kwargs)
+
     if saved_provider == "deepgram":
         saved_model = _strict_language_aware_deepgram_model(
             str(active_agent_config.get("tts_voice_id") or "").strip()
@@ -2327,7 +2755,10 @@ def _build_tts_engine_for_language(
             userdata.get("agent_config_id"),
         )
         return deepgram.TTS(model=saved_model)
-    use_experiment_clone = bool(ODION_TTS_EXPERIMENT_OWNER_ID) and bool(
+
+    use_experiment_clone = FORCE_ODION_TTS_EXPERIMENT_VOICE and bool(
+        ODION_TTS_EXPERIMENT_OWNER_ID
+    ) and bool(
         ODION_TTS_EXPERIMENT_VOICE_ID
     )
     tts_voice_id = (
@@ -2338,7 +2769,11 @@ def _build_tts_engine_for_language(
     tts_owner_id = (
         ODION_TTS_EXPERIMENT_OWNER_ID
         if use_experiment_clone
-        else str(active_agent_config.get("tts_owner_id") or "").strip() or business_id
+        else _resolve_saved_odion_owner_id(
+            tts_voice_id=tts_voice_id,
+            explicit_owner_id=str(active_agent_config.get("tts_owner_id") or "").strip(),
+            business_id=business_id,
+        )
     )
     tts_language_hint = (
         ("French" if is_fr else "English")
@@ -2475,6 +2910,10 @@ async def entrypoint(ctx: JobContext):
             base_prompt, preloaded_context
         )
         instructions = await _instructions_with_context(instructions, userdata)
+        instructions = await _instructions_with_initial_knowledge_context(
+            instructions, userdata
+        )
+        userdata["base_instructions"] = instructions
         started_at = conv_api_utcnow()
         business_id = str(userdata.get("business_id") or "")
         call_channel = (
@@ -2616,6 +3055,10 @@ async def entrypoint(ctx: JobContext):
             base_prompt, preloaded_context
         )
         instructions = await _instructions_with_context(instructions, userdata)
+        instructions = await _instructions_with_initial_knowledge_context(
+            instructions, userdata
+        )
+        userdata["base_instructions"] = instructions
         started_at = conv_api_utcnow()
         business_id = str(userdata.get("business_id") or "")
         call_channel = (

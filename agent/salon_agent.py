@@ -35,6 +35,7 @@ from .ops_api import (
 logger = logging.getLogger(__name__)
 AGENT_CLIENT_ID = os.getenv("AGENT_CLIENT_ID", "sales-girl-internal")
 AGENT_NAME = os.getenv("AGENT_NAME", "sales-girl-agent-en")
+ALWAYS_ENABLED_RUNTIME_TOOLS = {"search_business_knowledge"}
 
 
 def _tool_metadata(ctx: RunContext) -> dict:
@@ -69,6 +70,9 @@ def _tool_metadata(ctx: RunContext) -> dict:
 
 
 def _is_tool_enabled(ctx: RunContext, tool_name: str) -> bool:
+    normalized_tool_name = str(tool_name or "").strip()
+    if normalized_tool_name in ALWAYS_ENABLED_RUNTIME_TOOLS:
+        return True
     session_userdata = getattr(getattr(ctx, "session", None), "userdata", None)
     if not isinstance(session_userdata, dict):
         return True
@@ -82,7 +86,7 @@ def _is_tool_enabled(ctx: RunContext, tool_name: str) -> bool:
     }
     if not normalized_enabled:
         return False
-    return str(tool_name or "").strip() in normalized_enabled
+    return normalized_tool_name in normalized_enabled
 
 
 class SalonAgent(Agent):

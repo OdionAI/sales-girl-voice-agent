@@ -13,6 +13,7 @@ Shared platform reference:
 This service owns the realtime voice runtime:
 
 - joining LiveKit rooms
+- starting room recording only after the runtime has joined when recording is enabled
 - building runtime instructions/prompts for the active session
 - running the stable voice pipeline
 - selecting and invoking tools
@@ -36,7 +37,11 @@ Current stable contract:
 - stable cascade runtime is the production-safe path
 - category-aware tools are supported for hotel, restaurant, fashion, and
   generic/custom agents
+- generic/custom sessions refresh per-turn knowledge by updating the active
+  agent instructions in-place instead of handing off to a new agent
 - Odion cloned TTS can be used for English sessions when configured
+- LiveKit room recording is the supported conversation-audio capture path when
+  enabled for the environment
 - Gemini Live is experimental and not the current stable production path
 
 ## Live-data contract
@@ -86,8 +91,13 @@ Create `.env` from `.env.example` before running locally.
 
 ## CI and deployment
 
-- dependency install/build sanity checks on `dev`, `staging`, and `main`
-- Docker image build in CI
+- dependency install/build sanity checks run on `dev`, `staging`, and `main`
+- pushes to `staging` deploy the staging VM runtime through GitHub Actions
+- pushes to `main` deploy the production VM runtime through GitHub Actions
+- GitHub Actions can publish a release image to Artifact Registry for parity,
+  but the active runtime still deploys onto the managed VM
+- the VM deploy flow should pull the target branch and restart the systemd
+  services instead of relying on local manual SSH deploy habits
 
 Branch convention:
 

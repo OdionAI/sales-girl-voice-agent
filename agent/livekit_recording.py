@@ -84,8 +84,8 @@ def _serialize_credentials() -> str:
     if not raw:
         return ""
 
-    # Startup scripts can inject the secret as raw JSON, a JSON-encoded string,
-    # or an escaped pretty JSON blob, so normalize those shapes first.
+    # Staging/prod startup scripts can inject the secret as a JSON-encoded string,
+    # so normalize quoted JSON, raw JSON, or a filesystem path into one payload.
     candidate = raw
     for _ in range(3):
         if not candidate:
@@ -104,6 +104,7 @@ def _serialize_credentials() -> str:
             candidate = parsed.strip()
             continue
         break
+
     try:
         with open(candidate, "r", encoding="utf-8") as handle:
             parsed = json.load(handle)
