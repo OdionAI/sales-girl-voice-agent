@@ -42,6 +42,7 @@ from agent.ops_api import (
     lookup_customer_account as ops_lookup_customer_account,
 )
 from agent.odion_tts import OdionTTS
+from agent.odion_stt import DEFAULT_ODION_STT_BASE_URL, OdionSTT
 from agent.observability import flush_traces, trace_conversation_event
 from agent.livekit_recording import (
     finalize_room_recording,
@@ -2199,6 +2200,87 @@ def _normalized_language_code(value: str) -> str:
     return "en"
 
 
+def _deepgram_tts_model_for_language(language: str) -> str:
+    return "aura-2-agathe-fr" if str(language or "").strip().lower() == "fr" else "aura-asteria-en"
+
+
+def _strict_language_aware_deepgram_model(model: str, language: str) -> str:
+    selected_model = str(model or "").strip()
+    if not selected_model:
+        return _deepgram_tts_model_for_language(language)
+    lowered_model = selected_model.lower()
+    normalized_lang = str(language or "").strip().lower()
+    if normalized_lang == "fr" and lowered_model.endswith("-en"):
+        return _deepgram_tts_model_for_language("fr")
+    if normalized_lang != "fr" and lowered_model.endswith("-fr"):
+        return _deepgram_tts_model_for_language("en")
+    return selected_model
+
+
+def _deepgram_stt_language_for_language(language: str) -> str:
+    return "fr" if str(language or "").strip().lower() == "fr" else "en"
+
+
+def _runtime_overrides_from_userdata(userdata: dict[str, Any]) -> dict[str, str]:
+    raw = userdata.get("runtime_overrides")
+    if not isinstance(raw, dict):
+        return {}
+    normalized: dict[str, str] = {}
+    for key in (
+        "stt_provider",
+        "stt_model",
+        "stt_base_url",
+        "tts_provider",
+        "tts_model",
+        "tts_base_url",
+    ):
+        value = str(raw.get(key) or "").strip()
+        if value:
+            normalized[key] = value
+    return normalized
+
+
+def _build_stt_engine_for_language(*, language: str, userdata: dict[str, Any]) -> Any:
+    lang = str(language or "").strip().lower()
+    overrides = _runtime_overrides_from_userdata(userdata)
+    provider = str(overrides.get("stt_provider") or "deepgram").strip().lower()
+    model = str(overrides.get("stt_model") or "nova-3").strip() or "nova-3"
+    base_url = str(overrides.get("stt_base_url") or "").strip()
+
+    if provider == "odion_stt":
+        resolved_base_url = base_url or DEFAULT_ODION_STT_BASE_URL
+        logger.info(
+            "Using Odion STT override: base_url=%s model=%s language=%s",
+            resolved_base_url,
+            model,
+            lang,
+        )
+        return OdionSTT(
+            language=lang,
+            model=model,
+            base_url=resolved_base_url,
+        )
+
+    stt_kwargs: dict[str, Any] = {
+        "language": _deepgram_stt_language_for_language(lang),
+        "model": model,
+    }
+    if provider == "custom" and base_url:
+        stt_kwargs["base_url"] = base_url
+        logger.info(
+            "Using custom Deepgram-compatible STT override: base_url=%s model=%s language=%s",
+            base_url,
+            model,
+            lang,
+        )
+    elif model != "nova-3":
+        logger.info(
+            "Using Deepgram STT override: model=%s language=%s",
+            model,
+            lang,
+        )
+
+    return deepgram.STT(**stt_kwargs)
 def _build_tts_engine_for_language(
     *,
     language: str,

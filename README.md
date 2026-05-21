@@ -41,6 +41,11 @@ Current stable contract:
 - category-aware tools are supported for hotel, restaurant, fashion, and
   generic/custom agents
 - Odion cloned TTS can be used for English sessions when configured
+- staging Voice Lab sessions can apply temporary per-call STT/TTS overrides,
+  including the Odion STT adapter for `eu-stt.odion.ai`, without changing
+  saved agent configuration
+- LiveKit room recording is the supported conversation-audio capture path when
+  enabled for the environment
 - Gemini Live is experimental and not the current stable production path
 
 ## Live-data contract
