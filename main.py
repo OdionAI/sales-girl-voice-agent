@@ -3069,22 +3069,33 @@ async def entrypoint(ctx: JobContext):
                 room=ctx.room,
                 room_options=room_io.RoomOptions(delete_room_on_close=True),
             )
+            _trigger_first_turn(
+                session, language="en", business_use_case=business_use_case
+            )
             if is_recording_enabled():
-                await _start_session_recording_capture(
-                    ctx=ctx,
-                    userdata=userdata,
-                    business_id=business_id,
-                    session_tracker_id=str(userdata.get("session_tracker_id") or ""),
-                    started_at=started_at,
-                )
+                async def _start_recording_after_join_en() -> None:
+                    try:
+                        await _start_session_recording_capture(
+                            ctx=ctx,
+                            userdata=userdata,
+                            business_id=business_id,
+                            session_tracker_id=str(userdata.get("session_tracker_id") or ""),
+                            started_at=started_at,
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        logger.exception(
+                            "Recording startup failed after English session join: business_id=%s session_id=%s error=%s",
+                            business_id,
+                            str(userdata.get("session_id") or ""),
+                            exc,
+                        )
+
+                _track_background_task(userdata, _start_recording_after_join_en())
             else:
                 logger.info(
                     "Recording not enabled for this session: language=en business_id=%s",
                     business_id,
                 )
-            _trigger_first_turn(
-                session, language="en", business_use_case=business_use_case
-            )
             shutdown_reason = await _wait_for_job_shutdown(ctx)
             logger.info(
                 "Session shutdown received (en): reason=%s",
@@ -3212,22 +3223,33 @@ async def entrypoint(ctx: JobContext):
                 room=ctx.room,
                 room_options=room_io.RoomOptions(delete_room_on_close=True),
             )
+            _trigger_first_turn(
+                session, language="fr", business_use_case=business_use_case
+            )
             if is_recording_enabled():
-                await _start_session_recording_capture(
-                    ctx=ctx,
-                    userdata=userdata,
-                    business_id=business_id,
-                    session_tracker_id=str(userdata.get("session_tracker_id") or ""),
-                    started_at=started_at,
-                )
+                async def _start_recording_after_join_fr() -> None:
+                    try:
+                        await _start_session_recording_capture(
+                            ctx=ctx,
+                            userdata=userdata,
+                            business_id=business_id,
+                            session_tracker_id=str(userdata.get("session_tracker_id") or ""),
+                            started_at=started_at,
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        logger.exception(
+                            "Recording startup failed after French session join: business_id=%s session_id=%s error=%s",
+                            business_id,
+                            str(userdata.get("session_id") or ""),
+                            exc,
+                        )
+
+                _track_background_task(userdata, _start_recording_after_join_fr())
             else:
                 logger.info(
                     "Recording not enabled for this session: language=fr business_id=%s",
                     business_id,
                 )
-            _trigger_first_turn(
-                session, language="fr", business_use_case=business_use_case
-            )
             shutdown_reason = await _wait_for_job_shutdown(ctx)
             logger.info(
                 "Session shutdown received (fr): reason=%s",
