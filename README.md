@@ -2,6 +2,8 @@
 
 The LiveKit worker/runtime layer for SalesGirl voice sessions.
 
+<!-- no-op dev sync marker for staging deployment trigger -->
+
 ## Read this first
 
 Shared platform reference:
@@ -35,11 +37,16 @@ This worker talks to:
 Current stable contract:
 
 - stable cascade runtime is the production-safe path
+- public URL sessions must load the requested agent config even when that
+  agent is not the widget-active agent
 - category-aware tools are supported for hotel, restaurant, fashion, and
   generic/custom agents
 - generic/custom sessions refresh per-turn knowledge by updating the active
   agent instructions in-place instead of handing off to a new agent
 - Odion cloned TTS can be used for English sessions when configured
+- staging Voice Lab sessions can apply temporary per-call STT/TTS overrides,
+  including the Odion STT adapter for `eu-stt.odion.ai`, without changing
+  saved agent configuration
 - LiveKit room recording is the supported conversation-audio capture path when
   enabled for the environment
 - Gemini Live is experimental and not the current stable production path
