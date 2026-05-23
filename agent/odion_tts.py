@@ -5,6 +5,7 @@ import logging
 import os
 import uuid
 from dataclasses import dataclass, replace
+from urllib.parse import urlparse
 
 import aiohttp
 from livekit.agents import APIConnectOptions, tts
@@ -12,15 +13,39 @@ from livekit.agents._exceptions import APIConnectionError, APIStatusError, APITi
 
 logger = logging.getLogger("salesgirl.odion_tts")
 
+DEFAULT_ODION_TTS_BASE_URL = "https://eu-tts.odion.ai"
+DEFAULT_ODION_TTS_STREAM_PATH = "/api/v1/tts/stream"
+
 
 @dataclass
 class _TTSOptions:
-    base_url: str
+    endpoint_url: str
     owner_id: str
     voice_id: str | None
     language: str
     seed: int | None
     mode: str
+
+
+def _is_full_endpoint_url(value: str) -> bool:
+    try:
+        parsed = urlparse(value)
+    except Exception:
+        return False
+    return (
+        parsed.scheme in {"http", "https"}
+        and bool(parsed.netloc)
+        and parsed.path not in {"", "/"}
+    )
+
+
+def _resolve_tts_endpoint_url(value: str | None) -> str:
+    endpoint_or_base = str(
+        value or os.getenv("ODION_TTS_BASE_URL", DEFAULT_ODION_TTS_BASE_URL)
+    ).strip().rstrip("/")
+    if _is_full_endpoint_url(endpoint_or_base):
+        return endpoint_or_base
+    return f"{endpoint_or_base}{DEFAULT_ODION_TTS_STREAM_PATH}"
 
 
 class OdionTTS(tts.TTS):
@@ -41,7 +66,7 @@ class OdionTTS(tts.TTS):
             num_channels=1,
         )
         self._opts = _TTSOptions(
-            base_url=(base_url or os.getenv("ODION_TTS_BASE_URL", "https://eu-tts.odion.ai")).rstrip("/"),
+            endpoint_url=_resolve_tts_endpoint_url(base_url),
             owner_id=str(owner_id or "").strip(),
             voice_id=(str(voice_id or "").strip() or None),
             language=str(language or "Auto").strip() or "Auto",
@@ -93,8 +118,8 @@ class ChunkedStream(tts.ChunkedStream):
         if self._opts.seed is not None:
             payload["seed"] = self._opts.seed
         logger.info(
-            "TTS request -> base_url=%s endpoint=/api/v1/tts/stream owner_id=%s voice_id=%s seed=%s language=%s mode=%s",
-            self._opts.base_url,
+            "TTS request -> endpoint_url=%s owner_id=%s voice_id=%s seed=%s language=%s mode=%s",
+            self._opts.endpoint_url,
             self._opts.owner_id,
             self._opts.voice_id,
             self._opts.seed,
@@ -103,7 +128,7 @@ class ChunkedStream(tts.ChunkedStream):
         )
         try:
             async with self._tts._ensure_session().post(
-                f"{self._opts.base_url}/api/v1/tts/stream",
+                self._opts.endpoint_url,
                 headers={"Content-Type": "application/json"},
                 json=payload,
                 timeout=aiohttp.ClientTimeout(total=120, sock_connect=self._conn_options.timeout),

@@ -884,6 +884,27 @@ def _normalize_tts_endpoint(value: str) -> str:
     return endpoint.rstrip("/")
 
 
+_RUNTIME_OVERRIDE_KEYS = (
+    "stt_provider",
+    "stt_model",
+    "stt_base_url",
+    "tts_provider",
+    "tts_model",
+    "tts_base_url",
+)
+
+
+def _normalize_runtime_overrides(raw: Any) -> dict[str, str]:
+    if not isinstance(raw, dict):
+        return {}
+    normalized: dict[str, str] = {}
+    for key in _RUNTIME_OVERRIDE_KEYS:
+        value = str(raw.get(key) or "").strip()
+        if value:
+            normalized[key] = value
+    return normalized
+
+
 def _extract_tts_overrides_from_ctx(ctx: JobContext) -> dict[str, Any]:
     room = getattr(ctx, "room", None)
     participants = getattr(room, "remote_participants", None)
@@ -899,7 +920,7 @@ def _extract_tts_overrides_from_ctx(ctx: JobContext) -> dict[str, Any]:
             payload = json.loads(metadata_raw)
         except json.JSONDecodeError:
             continue
-        return {
+        overrides: dict[str, Any] = {
             "tts_endpoint": _normalize_tts_endpoint(payload.get("tts_endpoint") or ""),
             "tts_mode": _normalize_tts_mode(payload.get("tts_mode") or ""),
             "tts_owner_id": str(payload.get("tts_owner_id") or "").strip(),
@@ -907,6 +928,10 @@ def _extract_tts_overrides_from_ctx(ctx: JobContext) -> dict[str, Any]:
             "tts_language_hint": str(payload.get("tts_language_hint") or "").strip(),
             "tts_seed": str(payload.get("tts_seed") or "").strip(),
         }
+        runtime_overrides = _normalize_runtime_overrides(payload.get("runtime_overrides"))
+        if runtime_overrides:
+            overrides["runtime_overrides"] = runtime_overrides
+        return overrides
     return {}
 
 
@@ -2471,22 +2496,7 @@ def _deepgram_stt_language_for_language(language: str) -> str:
 
 
 def _runtime_overrides_from_userdata(userdata: dict[str, Any]) -> dict[str, str]:
-    raw = userdata.get("runtime_overrides")
-    if not isinstance(raw, dict):
-        return {}
-    normalized: dict[str, str] = {}
-    for key in (
-        "stt_provider",
-        "stt_model",
-        "stt_base_url",
-        "tts_provider",
-        "tts_model",
-        "tts_base_url",
-    ):
-        value = str(raw.get(key) or "").strip()
-        if value:
-            normalized[key] = value
-    return normalized
+    return _normalize_runtime_overrides(userdata.get("runtime_overrides"))
 
 
 def _build_stt_engine_for_language(*, language: str, userdata: dict[str, Any]) -> Any:
@@ -2569,7 +2579,10 @@ def _build_tts_engine_for_language(
         ).strip()
         or ("French" if is_fr else "English")
     )
-    tts_endpoint_override = _normalize_tts_endpoint(userdata.get("tts_endpoint") or "")
+    overrides = _runtime_overrides_from_userdata(userdata)
+    tts_endpoint_override = _normalize_tts_endpoint(
+        userdata.get("tts_endpoint") or ""
+    ) or _normalize_tts_endpoint(overrides.get("tts_base_url") or "")
     tts_mode_override = _normalize_tts_mode(userdata.get("tts_mode") or "")
     tts_owner_id_override = str(userdata.get("tts_owner_id") or "").strip()
     tts_voice_id_override = str(userdata.get("tts_voice_id") or "").strip()

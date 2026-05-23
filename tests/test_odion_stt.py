@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 import unittest
-from types import SimpleNamespace
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
 import main
-from agent.odion_stt import DEFAULT_ODION_STT_BASE_URL, OdionSTT
+from agent.odion_stt import DEFAULT_ODION_STT_BASE_URL, DEFAULT_ODION_STT_PATH, OdionSTT
 
 
 class _FakeAudioBuffer:
@@ -47,6 +46,25 @@ class _FakeSession:
 
 
 class OdionSTTTests(unittest.IsolatedAsyncioTestCase):
+    def test_endpoint_appends_default_path_for_host_only_base_url(self) -> None:
+        engine = OdionSTT(
+            language="en",
+            base_url="https://eu-stt.odion.ai",
+        )
+
+        self.assertEqual(
+            engine.endpoint,
+            f"https://eu-stt.odion.ai{DEFAULT_ODION_STT_PATH}",
+        )
+
+    def test_endpoint_uses_full_endpoint_url_exactly(self) -> None:
+        engine = OdionSTT(
+            language="en",
+            base_url="http://34.122.84.20/stt/v1/stt",
+        )
+
+        self.assertEqual(engine.endpoint, "http://34.122.84.20/stt/v1/stt")
+
     async def test_recognize_posts_audio_to_odion_endpoint(self) -> None:
         fake_session = _FakeSession(
             _FakeResponse(
@@ -83,6 +101,20 @@ class OdionSTTTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsInstance(engine, OdionSTT)
         self.assertEqual(engine.endpoint, f"{DEFAULT_ODION_STT_BASE_URL}/api/v1/stt/transcribe-file")
+
+    def test_main_builds_odion_stt_with_full_endpoint_override(self) -> None:
+        userdata = {
+            "runtime_overrides": {
+                "stt_provider": "odion_stt",
+                "stt_model": "Qwen/Qwen3-ASR-1.7B",
+                "stt_base_url": "http://34.122.84.20/stt/v1/stt",
+            }
+        }
+
+        engine = main._build_stt_engine_for_language(language="en", userdata=userdata)
+
+        self.assertIsInstance(engine, OdionSTT)
+        self.assertEqual(engine.endpoint, "http://34.122.84.20/stt/v1/stt")
 
 
 if __name__ == "__main__":

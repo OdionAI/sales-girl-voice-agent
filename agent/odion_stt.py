@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
+from urllib.parse import urlparse
 
 import aiohttp
 from livekit import rtc
@@ -14,6 +15,25 @@ from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConn
 
 DEFAULT_ODION_STT_BASE_URL = "https://eu-stt.odion.ai"
 DEFAULT_ODION_STT_PATH = "/api/v1/stt/transcribe-file"
+
+
+def _is_full_endpoint_url(value: str) -> bool:
+    try:
+        parsed = urlparse(value)
+    except Exception:
+        return False
+    return (
+        parsed.scheme in {"http", "https"}
+        and bool(parsed.netloc)
+        and parsed.path not in {"", "/"}
+    )
+
+
+def _resolve_stt_endpoint_url(base_url: str, api_path: str) -> str:
+    resolved_base_url = str(base_url or DEFAULT_ODION_STT_BASE_URL).strip().rstrip("/")
+    if _is_full_endpoint_url(resolved_base_url):
+        return resolved_base_url
+    return f"{resolved_base_url}{api_path}"
 
 
 def _display_language(language: str) -> str:
@@ -44,6 +64,7 @@ class OdionSTT(stt.STT):
         self._model = str(model or "").strip() or "Qwen/Qwen3-ASR-1.7B"
         self._base_url = str(base_url or DEFAULT_ODION_STT_BASE_URL).strip().rstrip("/")
         self._api_path = str(api_path or DEFAULT_ODION_STT_PATH).strip() or DEFAULT_ODION_STT_PATH
+        self._endpoint = _resolve_stt_endpoint_url(self._base_url, self._api_path)
         self._session = http_session
         self._owns_session = http_session is None
 
@@ -57,7 +78,7 @@ class OdionSTT(stt.STT):
 
     @property
     def endpoint(self) -> str:
-        return f"{self._base_url}{self._api_path}"
+        return self._endpoint
 
     def _ensure_session(self) -> aiohttp.ClientSession:
         if not self._session:
