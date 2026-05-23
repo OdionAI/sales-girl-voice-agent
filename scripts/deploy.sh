@@ -58,7 +58,7 @@ cd "$APP_PATH" || {
 }
 
 # Repair mixed ownership from earlier manual/root-managed deploys before Git updates.
-chown -R "$VM_USER:$VM_USER" "$APP_PATH"
+sudo chown -R "$VM_USER:$VM_USER" "$APP_PATH"
 sudo -u "$VM_USER" git config --global --add safe.directory "$APP_PATH"
 
 # Pull latest code from the requested branch.
