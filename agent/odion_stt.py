@@ -36,8 +36,17 @@ def _resolve_stt_endpoint_url(base_url: str, api_path: str) -> str:
     return f"{resolved_base_url}{api_path}"
 
 
-def _display_language(language: str) -> str:
+def _looks_like_pidgin_model(model: str) -> bool:
+    normalized = str(model or "").strip().lower()
+    return any(token in normalized for token in ("pidgin", "pijin", "naija", "pcm"))
+
+
+def _display_language(language: str, *, model: str = "") -> str:
     normalized = str(language or "").strip().lower()
+    if normalized in {"pidgin", "pijin", "naija", "nigerian pidgin", "pcm"}:
+        return "Pidgin"
+    if _looks_like_pidgin_model(model):
+        return "Pidgin"
     if normalized in {"fr", "french", "francais", "français"}:
         return "French"
     return "English"
@@ -105,7 +114,9 @@ class OdionSTT(stt.STT):
             filename="audio.wav",
             content_type="audio/wav",
         )
-        form.add_field("language", _display_language(resolved_language))
+        form.add_field("language", _display_language(resolved_language, model=self._model))
+        if self._model:
+            form.add_field("model", self._model)
 
         try:
             async with self._ensure_session().post(
