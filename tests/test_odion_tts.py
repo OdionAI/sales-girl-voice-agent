@@ -70,7 +70,7 @@ class OdionTTSTests(unittest.TestCase):
             {
                 "runtime_overrides": {
                     "stt_provider": "odion_stt",
-                    "stt_base_url": "http://34.122.84.20/stt/v1/stt",
+                    "stt_base_url": "http://34.122.84.20/stt/v1/stt/stream",
                     "tts_base_url": "http://34.122.84.20/api/v1/tts/stream",
                     "ignored": "not copied",
                 }
@@ -90,7 +90,7 @@ class OdionTTSTests(unittest.TestCase):
             overrides["runtime_overrides"],
             {
                 "stt_provider": "odion_stt",
-                "stt_base_url": "http://34.122.84.20/stt/v1/stt",
+                "stt_base_url": "http://34.122.84.20/stt/v1/stt/stream",
                 "tts_base_url": "http://34.122.84.20/api/v1/tts/stream",
             },
         )
