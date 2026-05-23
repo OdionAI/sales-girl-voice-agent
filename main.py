@@ -932,6 +932,15 @@ def _normalize_runtime_overrides(raw: Any) -> dict[str, str]:
     return normalized
 
 
+WEB_METADATA_WAIT_SECONDS = 3
+
+
+def _has_remote_participants(ctx: JobContext) -> bool:
+    room = getattr(ctx, "room", None)
+    participants = getattr(room, "remote_participants", None)
+    return bool(participants)
+
+
 def _extract_tts_overrides_from_ctx(ctx: JobContext) -> dict[str, Any]:
     room = getattr(ctx, "room", None)
     participants = getattr(room, "remote_participants", None)
@@ -1098,10 +1107,20 @@ async def _init_session_userdata(ctx: JobContext, language: str) -> dict[str, An
         end_user_name,
         tts_endpoint,
     ) = _participant_identity_from_ctx(ctx)
-    if REQUIRE_VERIFIED_PHONE and not end_user_id:
+    participant_overrides = _extract_tts_overrides_from_ctx(ctx)
+    runtime_overrides = participant_overrides.get("runtime_overrides") or {}
+
+    needs_identity = REQUIRE_VERIFIED_PHONE and not end_user_id
+    needs_web_metadata = (
+        identity_type == "web"
+        and not runtime_overrides
+        and not _has_remote_participants(ctx)
+    )
+    if needs_identity or needs_web_metadata:
         try:
             # In web flows, participant metadata/identity can arrive slightly after job start.
-            await asyncio.wait_for(ctx.wait_for_participant(), timeout=12)
+            wait_timeout = 12 if needs_identity else WEB_METADATA_WAIT_SECONDS
+            await asyncio.wait_for(ctx.wait_for_participant(), timeout=wait_timeout)
             (
                 end_user_id,
                 identity_type,
@@ -1111,8 +1130,12 @@ async def _init_session_userdata(ctx: JobContext, language: str) -> dict[str, An
                 end_user_name,
                 tts_endpoint,
             ) = _participant_identity_from_ctx(ctx)
+            participant_overrides = _extract_tts_overrides_from_ctx(ctx)
+            runtime_overrides = (
+                participant_overrides.get("runtime_overrides") or runtime_overrides
+            )
             logger.info(
-                "Retried participant identity after join: end_user_id=%s type=%s business_id=%s config_agent_id=%s configured_name=%s end_user_name=%s tts_endpoint=%s",
+                "Retried participant identity after join: end_user_id=%s type=%s business_id=%s config_agent_id=%s configured_name=%s end_user_name=%s tts_endpoint=%s runtime_overrides=%s",
                 end_user_id,
                 identity_type,
                 business_id,
@@ -1120,13 +1143,14 @@ async def _init_session_userdata(ctx: JobContext, language: str) -> dict[str, An
                 configured_agent_name,
                 end_user_name,
                 tts_endpoint,
+                runtime_overrides,
             )
         except RuntimeError as exc:
             # Some jobs can reach here before room connection is established.
             logger.warning("Could not wait for participant yet: %s", exc)
         except asyncio.TimeoutError:
             logger.warning(
-                "Timed out waiting for participant before identity extraction."
+                "Timed out waiting for participant before metadata extraction."
             )
     if REQUIRE_VERIFIED_PHONE and not end_user_id:
         raise RuntimeError(
@@ -1156,6 +1180,7 @@ async def _init_session_userdata(ctx: JobContext, language: str) -> dict[str, An
         "configured_agent_name": configured_agent_name,
         "end_user_name": end_user_name,
         "tts_endpoint": tts_endpoint,
+        "runtime_overrides": runtime_overrides,
         "tts_mode": "auto",
         "tts_owner_id": "",
         "tts_voice_id": "",
@@ -1173,7 +1198,7 @@ async def _init_session_userdata(ctx: JobContext, language: str) -> dict[str, An
         "last_user_transcript": "",
         "last_assistant_message": "",
         "usage_meter": UsageMeter(),
-    } | _extract_tts_overrides_from_ctx(ctx)
+    } | participant_overrides
 
 
 def _wire_session_timeline(session: AgentSession, userdata: dict[str, Any]) -> None:
