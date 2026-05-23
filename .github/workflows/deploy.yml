@@ -88,6 +88,13 @@ jobs:
             export REPO_URL='${REPO_URL}' && \
             export REPO_BRANCH='${REPO_BRANCH}' && \
             export GITHUB_TOKEN='${REPO_TOKEN}' && \
+            sudo mkdir -p /opt/sales-girl-voice-agent && \
+            sudo chown -R ${VM_USER}:${VM_USER} /opt/sales-girl-voice-agent && \
+            sudo -u ${VM_USER} git config --global --add safe.directory /opt/sales-girl-voice-agent && \
+            cd /opt/sales-girl-voice-agent && \
+            sudo -u ${VM_USER} git fetch origin && \
+            sudo -u ${VM_USER} git checkout ${REPO_BRANCH} && \
+            sudo -u ${VM_USER} git pull origin ${REPO_BRANCH} && \
             if [ -x /opt/sales-girl-voice-agent/scripts/deploy.sh ]; then \
               /opt/sales-girl-voice-agent/scripts/deploy.sh; \
             else \
