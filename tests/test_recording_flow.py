@@ -22,6 +22,7 @@ class StartSessionRecordingCaptureTests(unittest.IsolatedAsyncioTestCase):
         )
 
         with (
+            patch.object(main, "is_recording_enabled", return_value=True),
             patch.object(main, "start_room_recording", AsyncMock(return_value=started)) as start_mock,
             patch.object(main, "update_session_recording_remote", AsyncMock()) as update_mock,
             patch.object(main, "_persist_session_event_async") as event_mock,
