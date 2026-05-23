@@ -4,6 +4,9 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from livekit import rtc
+from livekit.agents import stt
+
 import main
 from agent.odion_stt import DEFAULT_ODION_STT_BASE_URL, DEFAULT_ODION_STT_PATH, OdionSTT
 
@@ -30,13 +33,18 @@ class _FakeResponse:
         *,
         status: int = 200,
         body: str | None = None,
+        stream_lines: list[str] | None = None,
         payload: dict | list | None = None,
         headers: dict | None = None,
     ) -> None:
         self.status = status
         self._payload = payload or {}
         self._body = body
+        self._stream_lines = stream_lines or []
         self.headers = headers or {}
+        self.request_data = None
+        self.streamed_chunks: list[bytes] = []
+        self.content = _FakeStreamContent(self)
 
     async def json(self, content_type=None):  # noqa: ANN001
         return self._payload
@@ -55,6 +63,18 @@ class _FakeResponse:
         return None
 
 
+class _FakeStreamContent:
+    def __init__(self, response: _FakeResponse) -> None:
+        self._response = response
+
+    async def iter_any(self):  # noqa: ANN201
+        if self._response.request_data is not None:
+            async for chunk in self._response.request_data:
+                self._response.streamed_chunks.append(chunk)
+        for line in self._response._stream_lines:
+            yield line.encode("utf-8")
+
+
 class _FakeSession:
     def __init__(self, response: _FakeResponse) -> None:
         self.response = response
@@ -62,6 +82,7 @@ class _FakeSession:
 
     def post(self, url, **kwargs):  # noqa: ANN001
         self.calls.append({"url": url, **kwargs})
+        self.response.request_data = kwargs.get("data")
         return self.response
 
     async def close(self) -> None:
@@ -69,6 +90,12 @@ class _FakeSession:
 
 
 class OdionSTTTests(unittest.IsolatedAsyncioTestCase):
+    def test_odion_stt_advertises_streaming_capability(self) -> None:
+        engine = OdionSTT(language="en")
+
+        self.assertTrue(engine.capabilities.streaming)
+        self.assertTrue(engine.capabilities.interim_results)
+
     def test_endpoint_appends_default_path_for_host_only_base_url(self) -> None:
         engine = OdionSTT(
             language="en",
@@ -143,6 +170,49 @@ class OdionSTTTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(fake_session.calls[0]["headers"]["X-Model"], "odion-pidgin-asr")
         self.assertEqual(event.request_id, "req-pidgin")
         self.assertEqual(event.alternatives[0].text, "How far")
+
+    async def test_stream_posts_pcm_frames_to_odion_stream_endpoint(self) -> None:
+        fake_response = _FakeResponse(
+            stream_lines=[
+                '{"type":"partial","request_id":"req-stream","text":"How"}\n',
+                '{"type":"final","request_id":"req-stream","text":"How far"}\n',
+            ]
+        )
+        fake_session = _FakeSession(fake_response)
+        engine = OdionSTT(
+            language="en",
+            model="odion-pidgin-asr",
+            base_url="http://34.122.84.20/stt/v1/stt/stream",
+            http_session=fake_session,
+        )
+        frame = rtc.AudioFrame(
+            data=b"\1\0" * 160,
+            sample_rate=16000,
+            num_channels=1,
+            samples_per_channel=160,
+        )
+
+        stream = engine.stream()
+        stream.push_frame(frame)
+        stream.end_input()
+        events = [event async for event in stream]
+
+        self.assertEqual(fake_session.calls[0]["url"], "http://34.122.84.20/stt/v1/stt/stream")
+        self.assertEqual(fake_response.streamed_chunks, [frame.data.tobytes()])
+        self.assertEqual(fake_session.calls[0]["headers"]["Content-Type"], "audio/pcm")
+        self.assertEqual(fake_session.calls[0]["headers"]["X-Sample-Rate"], "16000")
+        self.assertEqual(fake_session.calls[0]["headers"]["X-Channels"], "1")
+        self.assertEqual(fake_session.calls[0]["headers"]["X-Language"], "Pidgin")
+        self.assertEqual(fake_session.calls[0]["headers"]["X-Model"], "odion-pidgin-asr")
+        self.assertIn(stt.SpeechEventType.START_OF_SPEECH, [event.type for event in events])
+        self.assertIn(stt.SpeechEventType.END_OF_SPEECH, [event.type for event in events])
+        final_events = [
+            event
+            for event in events
+            if event.type == stt.SpeechEventType.FINAL_TRANSCRIPT
+        ]
+        self.assertEqual(final_events[0].request_id, "req-stream")
+        self.assertEqual(final_events[0].alternatives[0].text, "How far")
 
     def test_main_builds_odion_stt_from_runtime_overrides(self) -> None:
         userdata = {

@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+import logging
+from typing import Any, AsyncIterator
 from urllib.parse import urlparse
 
 import aiohttp
@@ -17,6 +18,8 @@ from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConn
 DEFAULT_ODION_STT_BASE_URL = "https://eu-stt.odion.ai"
 DEFAULT_ODION_STT_STREAM_PATH = "/stt/v1/stt/stream"
 DEFAULT_ODION_STT_PATH = DEFAULT_ODION_STT_STREAM_PATH
+
+logger = logging.getLogger("salesgirl.odion_stt")
 
 
 def _is_full_endpoint_url(value: str) -> bool:
@@ -68,6 +71,82 @@ def _display_language(language: str, *, model: str = "") -> str:
     return "English"
 
 
+def _audio_frame_bytes(frame: Any) -> bytes:
+    data = getattr(frame, "data", b"")
+    if hasattr(data, "tobytes"):
+        return data.tobytes()
+    return bytes(data)
+
+
+def _audio_duration(frame: Any) -> float:
+    try:
+        return float(getattr(frame, "duration", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _stream_event_type(payload: dict[str, Any]) -> stt.SpeechEventType | None:
+    event_type = str(
+        payload.get("type")
+        or payload.get("event")
+        or payload.get("message_type")
+        or ""
+    ).strip().lower()
+    is_final = bool(
+        payload.get("is_final")
+        or payload.get("final")
+        or payload.get("speech_final")
+    )
+    if event_type in {"partial", "interim", "interim_transcript"} and not is_final:
+        return stt.SpeechEventType.INTERIM_TRANSCRIPT
+    if event_type in {"final", "final_transcript"} or is_final:
+        return stt.SpeechEventType.FINAL_TRANSCRIPT
+    if event_type in {"speech_start", "start_of_speech"}:
+        return stt.SpeechEventType.START_OF_SPEECH
+    if event_type in {"speech_end", "end_of_speech"}:
+        return stt.SpeechEventType.END_OF_SPEECH
+    if str(payload.get("text") or "").strip():
+        return stt.SpeechEventType.INTERIM_TRANSCRIPT
+    return None
+
+
+def _speech_event_from_payload(
+    payload: dict[str, Any],
+    *,
+    language: str,
+) -> stt.SpeechEvent | None:
+    event_type = _stream_event_type(payload)
+    if event_type is None:
+        return None
+
+    request_id = str(
+        payload.get("request_id")
+        or payload.get("id")
+        or ""
+    ).strip()
+
+    if event_type in {
+        stt.SpeechEventType.START_OF_SPEECH,
+        stt.SpeechEventType.END_OF_SPEECH,
+    }:
+        return stt.SpeechEvent(type=event_type, request_id=request_id)
+
+    transcript = str(payload.get("text") or payload.get("transcript") or "").strip()
+    if not transcript:
+        return None
+
+    return stt.SpeechEvent(
+        type=event_type,
+        request_id=request_id,
+        alternatives=[
+            stt.SpeechData(
+                language=language,
+                text=transcript,
+            )
+        ],
+    )
+
+
 class OdionSTT(stt.STT):
     def __init__(
         self,
@@ -80,8 +159,8 @@ class OdionSTT(stt.STT):
     ) -> None:
         super().__init__(
             capabilities=stt.STTCapabilities(
-                streaming=False,
-                interim_results=False,
+                streaming=True,
+                interim_results=True,
                 diarization=False,
             )
         )
@@ -111,6 +190,35 @@ class OdionSTT(stt.STT):
             self._owns_session = True
         return self._session
 
+    def _headers(self, *, language: str, sample_rate: int, num_channels: int) -> dict[str, str]:
+        headers = {
+            "Content-Type": "audio/pcm",
+            "Accept": "application/x-ndjson, application/json",
+            "X-Sample-Rate": str(sample_rate),
+            "X-Channels": str(num_channels),
+            "X-Language": _display_language(language, model=self._model),
+        }
+        if self._model:
+            headers["X-Model"] = self._model
+        return headers
+
+    def stream(
+        self,
+        *,
+        language: NotGivenOr[str] = NOT_GIVEN,
+        conn_options: APIConnectOptions = DEFAULT_API_CONNECT_OPTIONS,
+    ) -> stt.RecognizeStream:
+        resolved_language = (
+            str(language).strip().lower()
+            if language is not NOT_GIVEN and str(language or "").strip()
+            else self._language
+        )
+        return _OdionSTTStream(
+            stt=self,
+            language=resolved_language,
+            conn_options=conn_options,
+        )
+
     async def _recognize_impl(
         self,
         buffer: Any,
@@ -127,15 +235,11 @@ class OdionSTT(stt.STT):
         audio_bytes = combined.data.tobytes()
         sample_rate = int(combined.sample_rate)
         num_channels = int(combined.num_channels)
-        headers = {
-            "Content-Type": "audio/pcm",
-            "Accept": "application/x-ndjson, application/json",
-            "X-Sample-Rate": str(sample_rate),
-            "X-Channels": str(num_channels),
-            "X-Language": _display_language(resolved_language, model=self._model),
-        }
-        if self._model:
-            headers["X-Model"] = self._model
+        headers = self._headers(
+            language=resolved_language,
+            sample_rate=sample_rate,
+            num_channels=num_channels,
+        )
 
         try:
             async with self._ensure_session().post(
@@ -203,3 +307,159 @@ class OdionSTT(stt.STT):
     async def aclose(self) -> None:
         if self._session and self._owns_session:
             await self._session.close()
+
+
+class _OdionSTTStream(stt.RecognizeStream):
+    def __init__(
+        self,
+        *,
+        stt: OdionSTT,
+        language: str,
+        conn_options: APIConnectOptions,
+    ) -> None:
+        super().__init__(stt=stt, conn_options=conn_options)
+        self._odion_stt = stt
+        self._language = language
+        self._audio_duration = 0.0
+        self._speaking = False
+
+    async def _next_audio_frame(self) -> Any | None:
+        async for item in self._input_ch:
+            if isinstance(item, self._FlushSentinel):
+                continue
+            return item
+        return None
+
+    async def _run(self) -> None:
+        first_frame = await self._next_audio_frame()
+        if first_frame is None:
+            return
+
+        sample_rate = int(getattr(first_frame, "sample_rate", 16000) or 16000)
+        num_channels = int(getattr(first_frame, "num_channels", 1) or 1)
+        headers = self._odion_stt._headers(
+            language=self._language,
+            sample_rate=sample_rate,
+            num_channels=num_channels,
+        )
+
+        async def audio_chunks() -> AsyncIterator[bytes]:
+            yield self._track_audio_frame(first_frame)
+            async for item in self._input_ch:
+                if isinstance(item, self._FlushSentinel):
+                    continue
+                yield self._track_audio_frame(item)
+
+        logger.info(
+            "STT stream request -> endpoint_url=%s model=%s language=%s",
+            self._odion_stt.endpoint,
+            self._odion_stt.model,
+            _display_language(self._language, model=self._odion_stt.model),
+        )
+        try:
+            async with self._odion_stt._ensure_session().post(
+                self._odion_stt.endpoint,
+                data=audio_chunks(),
+                headers=headers,
+                timeout=aiohttp.ClientTimeout(
+                    total=None,
+                    sock_connect=self._conn_options.timeout,
+                    sock_read=None,
+                ),
+            ) as response:
+                if response.status >= 400:
+                    await self._raise_stream_response_error(response)
+                await self._read_stream_response(response)
+        except TimeoutError as exc:
+            raise APITimeoutError() from exc
+        except aiohttp.ClientError as exc:
+            raise APIConnectionError("failed to reach Odion STT service") from exc
+        finally:
+            self._emit_usage()
+
+    def _track_audio_frame(self, frame: Any) -> bytes:
+        self._audio_duration += _audio_duration(frame)
+        return _audio_frame_bytes(frame)
+
+    async def _raise_stream_response_error(self, response: aiohttp.ClientResponse) -> None:
+        body = await response.text()
+        try:
+            payload: Any = json.loads(body)
+        except json.JSONDecodeError:
+            payload = body
+        detail = ""
+        if isinstance(payload, dict):
+            detail = str(payload.get("detail") or payload.get("message") or "")
+        raise create_api_error_from_http(
+            message=detail or "Odion STT stream request failed.",
+            status=response.status,
+            request_id=str(response.headers.get("x-request-id") or ""),
+            body=payload,
+        )
+
+    async def _read_stream_response(self, response: aiohttp.ClientResponse) -> None:
+        pending = ""
+        async for chunk in response.content.iter_any():
+            if not chunk:
+                continue
+            pending += chunk.decode("utf-8", errors="ignore")
+            while "\n" in pending:
+                line, pending = pending.split("\n", 1)
+                self._process_stream_line(line)
+        if pending.strip():
+            self._process_stream_line(pending)
+
+    def _process_stream_line(self, line: str) -> None:
+        line = line.strip()
+        if not line:
+            return
+        if line.startswith("data:"):
+            line = line[5:].strip()
+        if line == "[DONE]":
+            return
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            logger.debug("Ignoring non-JSON Odion STT stream line: %s", line)
+            return
+        if not isinstance(payload, dict):
+            return
+        event = _speech_event_from_payload(payload, language=self._language)
+        if event is None:
+            return
+        if event.type == stt.SpeechEventType.START_OF_SPEECH:
+            self._speaking = True
+        if (
+            event.type
+            in {
+                stt.SpeechEventType.INTERIM_TRANSCRIPT,
+                stt.SpeechEventType.FINAL_TRANSCRIPT,
+            }
+            and event.alternatives
+            and event.alternatives[0].text
+            and not self._speaking
+        ):
+            self._speaking = True
+            self._event_ch.send_nowait(
+                stt.SpeechEvent(type=stt.SpeechEventType.START_OF_SPEECH)
+            )
+        self._event_ch.send_nowait(event)
+        if event.type == stt.SpeechEventType.END_OF_SPEECH:
+            self._speaking = False
+        elif event.type == stt.SpeechEventType.FINAL_TRANSCRIPT and self._speaking:
+            self._speaking = False
+            self._event_ch.send_nowait(
+                stt.SpeechEvent(type=stt.SpeechEventType.END_OF_SPEECH)
+            )
+
+    def _emit_usage(self) -> None:
+        if self._audio_duration <= 0:
+            return
+        self._event_ch.send_nowait(
+            stt.SpeechEvent(
+                type=stt.SpeechEventType.RECOGNITION_USAGE,
+                recognition_usage=stt.RecognitionUsage(
+                    audio_duration=self._audio_duration
+                ),
+            )
+        )
