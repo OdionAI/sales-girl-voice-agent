@@ -469,12 +469,35 @@ def _billing_session_id(userdata: dict[str, Any]) -> str:
     return str(userdata.get("session_tracker_id") or userdata.get("session_id") or "")
 
 
+def _billing_bypass_reason(userdata: dict[str, Any], call_channel: str) -> str:
+    runtime_overrides = userdata.get("runtime_overrides")
+    if (
+        call_channel == "web"
+        and isinstance(runtime_overrides, dict)
+        and bool(runtime_overrides)
+    ):
+        return "voice_lab_runtime_overrides"
+    return ""
+
+
 async def _authorize_billing_start_or_raise(
     *,
     userdata: dict[str, Any],
     business_id: str,
     call_channel: str,
 ) -> None:
+    billing_bypass_reason = _billing_bypass_reason(userdata, call_channel)
+    if billing_bypass_reason:
+        userdata["billing_bypassed"] = True
+        userdata["billing_bypass_reason"] = billing_bypass_reason
+        logger.info(
+            "Billing authorization bypassed: reason=%s business_id=%s conversation_id=%s",
+            billing_bypass_reason,
+            business_id,
+            userdata.get("conversation_id"),
+        )
+        return
+
     if not billing_hooks_enabled(business_id):
         if BILLING_FAIL_CLOSED:
             raise RuntimeError("Billing hooks are not configured.")
@@ -611,6 +634,8 @@ def _start_billing_heartbeat(
     started_at: Any,
     call_channel: str,
 ) -> None:
+    if userdata.get("billing_bypassed"):
+        return
     if not billing_hooks_enabled(business_id):
         return
     if userdata.get("billing_heartbeat_task"):
@@ -650,6 +675,8 @@ async def _report_billing_final_usage(
     if userdata.get("billing_final_reported"):
         return
     userdata["billing_final_reported"] = True
+    if userdata.get("billing_bypassed"):
+        return
     if not billing_hooks_enabled(business_id):
         return
     result = await report_billing_call_usage(
