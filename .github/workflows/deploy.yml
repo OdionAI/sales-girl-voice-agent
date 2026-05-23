@@ -22,7 +22,7 @@ jobs:
       GCP_REGION: ${{ vars.GCP_REGION || 'europe-west1' }}
       GCP_ZONE: ${{ github.ref_name == 'main' && vars.GCP_ZONE_PROD || vars.GCP_ZONE_STAGING }}
       ARTIFACT_REGISTRY_REPOSITORY: ${{ vars.ARTIFACT_REGISTRY_REPOSITORY || 'backend' }}
-      VM_USER: ${{ vars.VOICE_AGENT_VM_USER || 'salesgirl' }}
+      VM_USER: ${{ vars.VOICE_AGENT_VM_USER || 'ubuntu' }}
 
     steps:
       - name: Checkout
@@ -71,23 +71,16 @@ jobs:
           VM_NAME="sales-girl-voice-agent-${DEPLOY_ENV}"
           echo "VM_NAME=${VM_NAME}" >> "${GITHUB_ENV}"
 
-      - name: Setup SSH key
-        run: |
-          mkdir -p ~/.ssh
-          printf '%s\n' "${{ github.ref_name == 'main' && secrets.VOICE_AGENT_SSH_PRIVATE_KEY_PROD || secrets.VOICE_AGENT_SSH_PRIVATE_KEY_STAGING }}" > ~/.ssh/id_rsa
-          chmod 600 ~/.ssh/id_rsa
-
       - name: Deploy on VM
         env:
           REPO_URL: https://github.com/${{ github.repository }}.git
           REPO_BRANCH: ${{ github.ref_name }}
-          REPO_TOKEN: ${{ github.ref_name == 'main' && secrets.VOICE_AGENT_REPO_TOKEN_PROD || secrets.VOICE_AGENT_REPO_TOKEN_STAGING }}
+          REPO_TOKEN: ${{ github.token }}
         run: |
           gcloud compute ssh "${VM_NAME}" \
             --project "${GCP_PROJECT_ID}" \
             --zone "${GCP_ZONE}" \
             --tunnel-through-iap \
-            --ssh-key-file ~/.ssh/id_rsa \
             --ssh-flag="-o StrictHostKeyChecking=no" \
             --command "\
             export ENVIRONMENT='${DEPLOY_ENV}' && \
