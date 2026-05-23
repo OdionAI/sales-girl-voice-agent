@@ -11,6 +11,8 @@ SERVICE_TOKEN = os.getenv("BILLING_HOOK_SERVICE_TOKEN", "")
 BUSINESS_ID = os.getenv("CONVERSATION_BUSINESS_ID", "")
 TIMEOUT_SECONDS = float(os.getenv("BILLING_HOOK_TIMEOUT_SECONDS", "5"))
 FAIL_CLOSED = os.getenv("BILLING_FAIL_CLOSED", "false").lower() == "true"
+HEARTBEAT_INTERVAL_SECONDS = max(1, int(float(os.getenv("BILLING_HEARTBEAT_INTERVAL_SECONDS", "10"))))
+HEARTBEAT_MAX_FAILURES = max(1, int(float(os.getenv("BILLING_HEARTBEAT_MAX_FAILURES", "3"))))
 
 
 def is_enabled(business_id: str | None = None) -> bool:
@@ -81,14 +83,42 @@ async def report_call_usage(
     duration_seconds: int,
     channel: str,
     business_id: str | None = None,
+    usage: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "conversation_id": conversation_id,
+        "session_id": session_id,
+        "end_user_id": end_user_id,
+        "duration_seconds": max(0, int(duration_seconds)),
+        "channel": channel,
+    }
+    if usage is not None:
+        payload["usage"] = usage
     return await _post(
         "/v1/internal/credits/report-usage",
+        payload,
+        business_id=business_id,
+    )
+
+
+async def send_call_heartbeat(
+    *,
+    conversation_id: str,
+    session_id: str,
+    end_user_id: str,
+    duration_seconds: int,
+    idempotency_key: str,
+    channel: str,
+    business_id: str | None = None,
+) -> dict[str, Any]:
+    return await _post(
+        "/v1/internal/credits/heartbeat",
         {
             "conversation_id": conversation_id,
             "session_id": session_id,
             "end_user_id": end_user_id,
             "duration_seconds": max(0, int(duration_seconds)),
+            "idempotency_key": str(idempotency_key or "").strip(),
             "channel": channel,
         },
         business_id=business_id,
