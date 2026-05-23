@@ -32,6 +32,15 @@ from agent.conversation_service_api import (
     update_session_recording as update_session_recording_remote,
     utcnow as conv_api_utcnow,
 )
+from agent.billing_hooks import (
+    FAIL_CLOSED as BILLING_FAIL_CLOSED,
+    HEARTBEAT_INTERVAL_SECONDS as BILLING_HEARTBEAT_INTERVAL_SECONDS,
+    HEARTBEAT_MAX_FAILURES as BILLING_HEARTBEAT_MAX_FAILURES,
+    authorize_call_start as authorize_billing_call_start,
+    is_enabled as billing_hooks_enabled,
+    report_call_usage as report_billing_call_usage,
+    send_call_heartbeat as send_billing_call_heartbeat,
+)
 from agent.agent_config_api import get_runtime_config as get_agent_runtime_config
 from agent.ops_api import (
     create_ticket as ops_create_ticket,
@@ -151,6 +160,11 @@ server = AgentServer(
     port=AGENT_PORT,
 )
 init_store()
+
+
+class UsageMeter:
+    def snapshot(self) -> dict[str, Any] | None:
+        return None
 
 
 def _short_text(value: Any, limit: int = 320) -> str:
@@ -431,6 +445,233 @@ async def _drain_background_tasks(userdata: dict[str, Any]) -> None:
             logger.error("Background persistence task failed: %s", result)
 
 
+def _billing_idempotency_key(*, session_id: str, duration_seconds: int) -> str:
+    digest = hashlib.sha256(
+        f"{session_id}:{max(0, int(duration_seconds))}".encode("utf-8")
+    ).hexdigest()[:16]
+    return f"hb-{max(0, int(duration_seconds))}-{digest}"
+
+
+def _billing_usage_payload(userdata: dict[str, Any]) -> dict[str, Any] | None:
+    meter = userdata.get("usage_meter")
+    snapshot = getattr(meter, "snapshot", None)
+    if not callable(snapshot):
+        return None
+    try:
+        value = snapshot()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Billing usage meter snapshot failed: %s", exc)
+        return None
+    return value if isinstance(value, dict) and value else None
+
+
+def _billing_session_id(userdata: dict[str, Any]) -> str:
+    return str(userdata.get("session_tracker_id") or userdata.get("session_id") or "")
+
+
+async def _authorize_billing_start_or_raise(
+    *,
+    userdata: dict[str, Any],
+    business_id: str,
+    call_channel: str,
+) -> None:
+    if not billing_hooks_enabled(business_id):
+        if BILLING_FAIL_CLOSED:
+            raise RuntimeError("Billing hooks are not configured.")
+        logger.info("Billing hooks disabled for this session.")
+        return
+
+    result = await authorize_billing_call_start(
+        conversation_id=str(userdata.get("conversation_id") or ""),
+        end_user_id=str(userdata.get("end_user_id") or ""),
+        channel=call_channel,
+        business_id=business_id,
+    )
+    status = str(result.get("status") or "").lower()
+    if status in {"disabled", "failed"}:
+        detail = str(result.get("detail") or status or "billing authorization failed")
+        if BILLING_FAIL_CLOSED:
+            raise RuntimeError(detail)
+        logger.warning("Billing authorization degraded open: %s", detail)
+        return
+    if not bool(result.get("authorized")):
+        raise RuntimeError("Insufficient wallet balance to start this call.")
+    userdata["billing_authorized"] = True
+
+
+async def _shutdown_session_for_billing(
+    *,
+    session: AgentSession,
+    ctx: JobContext,
+    userdata: dict[str, Any],
+    reason: str,
+    result: dict[str, Any] | None = None,
+) -> None:
+    if userdata.get("billing_shutdown_requested"):
+        return
+    userdata["billing_shutdown_requested"] = True
+    logger.warning(
+        "Ending session due to billing: reason=%s session_id=%s result=%s",
+        reason,
+        _billing_session_id(userdata),
+        result or {},
+    )
+    _persist_session_event_async(
+        userdata,
+        event_type="billing_exhausted",
+        role="system",
+        title="Billing balance exhausted",
+        body="The call ended because the wallet balance reached zero.",
+        payload=result or {},
+    )
+    try:
+        session.shutdown(drain=True)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Billing shutdown could not drain session: %s", exc)
+    try:
+        ctx.shutdown(reason)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Billing shutdown could not signal job shutdown: %s", exc)
+    try:
+        deleted = ctx.delete_room()
+        if hasattr(deleted, "__await__"):
+            await deleted
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Billing shutdown room delete fallback failed: %s", exc)
+
+
+async def _billing_heartbeat_loop(
+    *,
+    session: AgentSession,
+    ctx: JobContext,
+    userdata: dict[str, Any],
+    business_id: str,
+    started_at: Any,
+    call_channel: str,
+) -> None:
+    failures = 0
+    while True:
+        await asyncio.sleep(BILLING_HEARTBEAT_INTERVAL_SECONDS)
+        duration = int(max(0, (conv_api_utcnow() - started_at).total_seconds()))
+        if duration <= 0:
+            continue
+        billing_session_id = _billing_session_id(userdata)
+        result = await send_billing_call_heartbeat(
+            conversation_id=str(userdata.get("conversation_id") or ""),
+            session_id=billing_session_id,
+            end_user_id=str(userdata.get("end_user_id") or ""),
+            duration_seconds=duration,
+            idempotency_key=_billing_idempotency_key(
+                session_id=billing_session_id,
+                duration_seconds=duration,
+            ),
+            channel=call_channel,
+            business_id=business_id,
+        )
+        status = str(result.get("status") or "").lower()
+        if status in {"disabled", "failed"}:
+            failures += 1
+            logger.warning(
+                "Billing heartbeat failed: failures=%s/%s session_id=%s detail=%s",
+                failures,
+                BILLING_HEARTBEAT_MAX_FAILURES,
+                billing_session_id,
+                result.get("detail"),
+            )
+            if BILLING_FAIL_CLOSED and failures >= BILLING_HEARTBEAT_MAX_FAILURES:
+                await _shutdown_session_for_billing(
+                    session=session,
+                    ctx=ctx,
+                    userdata=userdata,
+                    reason="billing_heartbeat_failed",
+                    result=result,
+                )
+                return
+            continue
+
+        failures = 0
+        userdata["last_billing_heartbeat"] = result
+        if bool(result.get("should_end_call")):
+            await _shutdown_session_for_billing(
+                session=session,
+                ctx=ctx,
+                userdata=userdata,
+                reason="billing_exhausted",
+                result=result,
+            )
+            return
+
+
+def _start_billing_heartbeat(
+    *,
+    session: AgentSession,
+    ctx: JobContext,
+    userdata: dict[str, Any],
+    business_id: str,
+    started_at: Any,
+    call_channel: str,
+) -> None:
+    if not billing_hooks_enabled(business_id):
+        return
+    if userdata.get("billing_heartbeat_task"):
+        return
+    userdata["billing_heartbeat_task"] = asyncio.create_task(
+        _billing_heartbeat_loop(
+            session=session,
+            ctx=ctx,
+            userdata=userdata,
+            business_id=business_id,
+            started_at=started_at,
+            call_channel=call_channel,
+        )
+    )
+
+
+async def _stop_billing_heartbeat(userdata: dict[str, Any]) -> None:
+    task = userdata.pop("billing_heartbeat_task", None)
+    if not task or task.done():
+        return
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Billing heartbeat task ended with error: %s", exc)
+
+
+async def _report_billing_final_usage(
+    *,
+    userdata: dict[str, Any],
+    business_id: str,
+    duration_seconds: int,
+    call_channel: str,
+) -> None:
+    if userdata.get("billing_final_reported"):
+        return
+    userdata["billing_final_reported"] = True
+    if not billing_hooks_enabled(business_id):
+        return
+    result = await report_billing_call_usage(
+        conversation_id=str(userdata.get("conversation_id") or ""),
+        session_id=_billing_session_id(userdata),
+        end_user_id=str(userdata.get("end_user_id") or ""),
+        duration_seconds=max(0, int(duration_seconds)),
+        channel=call_channel,
+        business_id=business_id,
+        usage=_billing_usage_payload(userdata),
+    )
+    if str(result.get("status") or "").lower() == "failed":
+        logger.error(
+            "Final billing report failed: session_id=%s detail=%s http_status=%s",
+            _billing_session_id(userdata),
+            result.get("detail"),
+            result.get("http_status"),
+        )
+    else:
+        userdata["last_billing_report"] = result
+
+
 async def _finalize_session_cleanup(
     *,
     userdata: dict[str, Any],
@@ -456,6 +697,14 @@ async def _finalize_session_cleanup(
             duration,
             shutdown_reason or "",
             is_recording_enabled(),
+        )
+
+        await _stop_billing_heartbeat(userdata)
+        await _report_billing_final_usage(
+            userdata=userdata,
+            business_id=business_id,
+            duration_seconds=duration,
+            call_channel=call_channel,
         )
 
         try:
@@ -917,6 +1166,27 @@ def _normalize_tts_endpoint(value: str) -> str:
     return endpoint.rstrip("/")
 
 
+_RUNTIME_OVERRIDE_KEYS = (
+    "stt_provider",
+    "stt_model",
+    "stt_base_url",
+    "tts_provider",
+    "tts_model",
+    "tts_base_url",
+)
+
+
+def _normalize_runtime_overrides(raw: Any) -> dict[str, str]:
+    if not isinstance(raw, dict):
+        return {}
+    normalized: dict[str, str] = {}
+    for key in _RUNTIME_OVERRIDE_KEYS:
+        value = str(raw.get(key) or "").strip()
+        if value:
+            normalized[key] = value
+    return normalized
+
+
 def _extract_tts_overrides_from_ctx(ctx: JobContext) -> dict[str, Any]:
     room = getattr(ctx, "room", None)
     participants = getattr(room, "remote_participants", None)
@@ -932,7 +1202,7 @@ def _extract_tts_overrides_from_ctx(ctx: JobContext) -> dict[str, Any]:
             payload = json.loads(metadata_raw)
         except json.JSONDecodeError:
             continue
-        return {
+        overrides: dict[str, Any] = {
             "tts_endpoint": _normalize_tts_endpoint(payload.get("tts_endpoint") or ""),
             "tts_mode": _normalize_tts_mode(payload.get("tts_mode") or ""),
             "tts_owner_id": str(payload.get("tts_owner_id") or "").strip(),
@@ -940,6 +1210,10 @@ def _extract_tts_overrides_from_ctx(ctx: JobContext) -> dict[str, Any]:
             "tts_language_hint": str(payload.get("tts_language_hint") or "").strip(),
             "tts_seed": str(payload.get("tts_seed") or "").strip(),
         }
+        runtime_overrides = _normalize_runtime_overrides(payload.get("runtime_overrides"))
+        if runtime_overrides:
+            overrides["runtime_overrides"] = runtime_overrides
+        return overrides
     return {}
 
 
@@ -2697,22 +2971,7 @@ def _deepgram_stt_language_for_language(language: str) -> str:
 
 
 def _runtime_overrides_from_userdata(userdata: dict[str, Any]) -> dict[str, str]:
-    raw = userdata.get("runtime_overrides")
-    if not isinstance(raw, dict):
-        return {}
-    normalized: dict[str, str] = {}
-    for key in (
-        "stt_provider",
-        "stt_model",
-        "stt_base_url",
-        "tts_provider",
-        "tts_model",
-        "tts_base_url",
-    ):
-        value = str(raw.get(key) or "").strip()
-        if value:
-            normalized[key] = value
-    return normalized
+    return _normalize_runtime_overrides(userdata.get("runtime_overrides"))
 
 
 def _build_stt_engine_for_language(*, language: str, userdata: dict[str, Any]) -> Any:
@@ -2848,7 +3107,10 @@ def _build_tts_engine_for_language(
         ).strip()
         or ("French" if is_fr else "English")
     )
-    tts_endpoint_override = _normalize_tts_endpoint(userdata.get("tts_endpoint") or "")
+    overrides = _runtime_overrides_from_userdata(userdata)
+    tts_endpoint_override = _normalize_tts_endpoint(
+        userdata.get("tts_endpoint") or ""
+    ) or _normalize_tts_endpoint(overrides.get("tts_base_url") or "")
     tts_mode_override = _normalize_tts_mode(userdata.get("tts_mode") or "")
     tts_owner_id_override = str(userdata.get("tts_owner_id") or "").strip()
     tts_voice_id_override = str(userdata.get("tts_voice_id") or "").strip()
@@ -3008,6 +3270,11 @@ async def entrypoint(ctx: JobContext):
             if str(userdata.get("identity_type") or "").lower() == "web"
             else "voice"
         )
+        await _authorize_billing_start_or_raise(
+            userdata=userdata,
+            business_id=business_id,
+            call_channel=call_channel,
+        )
 
         async def _cleanup_en(reason: str = "") -> None:
             await asyncio.shield(
@@ -3068,6 +3335,14 @@ async def entrypoint(ctx: JobContext):
                 agent=SalonAgent(instructions=instructions),
                 room=ctx.room,
                 room_options=room_io.RoomOptions(delete_room_on_close=True),
+            )
+            _start_billing_heartbeat(
+                session=session,
+                ctx=ctx,
+                userdata=userdata,
+                business_id=business_id,
+                started_at=started_at,
+                call_channel=call_channel,
             )
             _trigger_first_turn(
                 session, language="en", business_use_case=business_use_case
@@ -3164,6 +3439,11 @@ async def entrypoint(ctx: JobContext):
             if str(userdata.get("identity_type") or "").lower() == "web"
             else "voice"
         )
+        await _authorize_billing_start_or_raise(
+            userdata=userdata,
+            business_id=business_id,
+            call_channel=call_channel,
+        )
 
         async def _cleanup_fr(reason: str = "") -> None:
             await asyncio.shield(
@@ -3222,6 +3502,14 @@ async def entrypoint(ctx: JobContext):
                 agent=SalonAgent(instructions=instructions),
                 room=ctx.room,
                 room_options=room_io.RoomOptions(delete_room_on_close=True),
+            )
+            _start_billing_heartbeat(
+                session=session,
+                ctx=ctx,
+                userdata=userdata,
+                business_id=business_id,
+                started_at=started_at,
+                call_channel=call_channel,
             )
             _trigger_first_turn(
                 session, language="fr", business_use_case=business_use_case
