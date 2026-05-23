@@ -57,6 +57,10 @@ cd "$APP_PATH" || {
     exit 1
 }
 
+# Repair mixed ownership from earlier manual/root-managed deploys before Git updates.
+chown -R "$VM_USER:$VM_USER" "$APP_PATH"
+sudo -u "$VM_USER" git config --global --add safe.directory "$APP_PATH"
+
 # Pull latest code from the requested branch.
 TARGET_BRANCH="${REPO_BRANCH:-$(git rev-parse --abbrev-ref HEAD)}"
 sudo -u "$VM_USER" git fetch origin
