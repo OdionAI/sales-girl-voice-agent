@@ -2419,11 +2419,12 @@ def _build_session_for_language(
     language: str,
     instructions: str,
     userdata: dict[str, Any],
+    stt_engine: Any | None = None,
     tts_engine: Any | None = None,
 ) -> AgentSession:
     if language == "fr":
         return AgentSession(
-            stt=deepgram.STT(language="fr"),
+            stt=stt_engine or deepgram.STT(language="fr"),
             tts=tts_engine or deepgram.TTS(model="aura-2-agathe-fr"),
             llm=google.LLM(model="gemini-2.0-flash"),
             userdata=userdata,
@@ -2433,7 +2434,7 @@ def _build_session_for_language(
         )
 
     return AgentSession(
-        stt=deepgram.STT(language="en"),
+        stt=stt_engine or deepgram.STT(language="en"),
         tts=tts_engine,
         llm=google.LLM(model="gemini-2.0-flash"),
         userdata=userdata,
@@ -2495,6 +2496,13 @@ def _deepgram_stt_language_for_language(language: str) -> str:
     return "fr" if str(language or "").strip().lower() == "fr" else "en"
 
 
+def _runtime_model_language_hint(model: str) -> str:
+    lowered = str(model or "").strip().lower()
+    if any(token in lowered for token in ("pidgin", "pijin", "naija", "pcm")):
+        return "Pidgin"
+    return ""
+
+
 def _runtime_overrides_from_userdata(userdata: dict[str, Any]) -> dict[str, str]:
     return _normalize_runtime_overrides(userdata.get("runtime_overrides"))
 
@@ -2540,6 +2548,8 @@ def _build_stt_engine_for_language(*, language: str, userdata: dict[str, Any]) -
         )
 
     return deepgram.STT(**stt_kwargs)
+
+
 def _build_tts_engine_for_language(
     *,
     language: str,
@@ -2557,8 +2567,22 @@ def _build_tts_engine_for_language(
     odion_enabled = ENABLE_ODION_TTS_FR if is_fr else ENABLE_ODION_TTS_EN
     fallback_label = "French" if is_fr else "English"
 
-    use_experiment_clone = bool(ODION_TTS_EXPERIMENT_OWNER_ID) and bool(
-        ODION_TTS_EXPERIMENT_VOICE_ID
+    overrides = _runtime_overrides_from_userdata(userdata)
+    tts_provider_override = str(overrides.get("tts_provider") or "").strip().lower()
+    tts_model_override = str(overrides.get("tts_model") or "").strip()
+    tts_endpoint_override = _normalize_tts_endpoint(
+        userdata.get("tts_endpoint") or ""
+    ) or _normalize_tts_endpoint(overrides.get("tts_base_url") or "")
+    runtime_odion_tts_requested = bool(tts_endpoint_override) or tts_provider_override in {
+        "custom",
+        "odion_tts",
+        "odion",
+    }
+
+    use_experiment_clone = (
+        not runtime_odion_tts_requested
+        and bool(ODION_TTS_EXPERIMENT_OWNER_ID)
+        and bool(ODION_TTS_EXPERIMENT_VOICE_ID)
     )
     tts_voice_id = (
         ODION_TTS_EXPERIMENT_VOICE_ID
@@ -2571,7 +2595,7 @@ def _build_tts_engine_for_language(
         else str(active_agent_config.get("tts_owner_id") or "").strip() or business_id
     )
     tts_language_hint = (
-        ("French" if is_fr else "English")
+        ODION_TTS_EXPERIMENT_LANGUAGE_HINT
         if use_experiment_clone
         else str(
             active_agent_config.get("tts_language_hint")
@@ -2579,10 +2603,6 @@ def _build_tts_engine_for_language(
         ).strip()
         or ("French" if is_fr else "English")
     )
-    overrides = _runtime_overrides_from_userdata(userdata)
-    tts_endpoint_override = _normalize_tts_endpoint(
-        userdata.get("tts_endpoint") or ""
-    ) or _normalize_tts_endpoint(overrides.get("tts_base_url") or "")
     tts_mode_override = _normalize_tts_mode(userdata.get("tts_mode") or "")
     tts_owner_id_override = str(userdata.get("tts_owner_id") or "").strip()
     tts_voice_id_override = str(userdata.get("tts_voice_id") or "").strip()
@@ -2597,6 +2617,10 @@ def _build_tts_engine_for_language(
         tts_voice_id = tts_voice_id_override
     if tts_language_hint_override:
         tts_language_hint = tts_language_hint_override
+    elif runtime_odion_tts_requested:
+        tts_language_hint = (
+            _runtime_model_language_hint(tts_model_override) or tts_language_hint
+        )
     use_configured_clone = use_experiment_clone or _should_use_odion_tts_for_language(
         active_agent_config, lang
     )
@@ -2606,13 +2630,23 @@ def _build_tts_engine_for_language(
         use_configured_clone = False
     use_odion_default = not use_configured_clone
 
-    if not odion_enabled:
+    if runtime_odion_tts_requested:
+        use_configured_clone = bool(tts_voice_id) and tts_mode_override == "cloned_voice"
+        use_odion_default = not use_configured_clone
+
+    if not odion_enabled and not runtime_odion_tts_requested:
         logger.info(
             "ENABLE_ODION_TTS_%s=false; using Deepgram TTS for %s session.",
             "FR" if is_fr else "EN",
             fallback_label,
         )
         return fallback_tts
+    if not odion_enabled and runtime_odion_tts_requested:
+        logger.info(
+            "Using runtime Odion TTS override for %s session even though ENABLE_ODION_TTS_%s=false.",
+            fallback_label,
+            "FR" if is_fr else "EN",
+        )
 
     try:
         if use_configured_clone:
@@ -2620,6 +2654,7 @@ def _build_tts_engine_for_language(
                 owner_id=tts_owner_id,
                 voice_id=tts_voice_id,
                 language=tts_language_hint,
+                model=tts_model_override,
                 seed=tts_seed_override
                 if tts_seed_override is not None
                 else ODION_TTS_CLONE_SEED,
@@ -2627,11 +2662,12 @@ def _build_tts_engine_for_language(
                 base_url=tts_endpoint_override or None,
             )
             logger.info(
-                "Using Odion cloned TTS for %s session: agent_config_id=%s voice_id=%s owner_id=%s seed=%s",
+                "Using Odion cloned TTS for %s session: agent_config_id=%s voice_id=%s owner_id=%s model=%s seed=%s",
                 fallback_label,
                 userdata.get("agent_config_id"),
                 tts_voice_id,
                 tts_owner_id,
+                tts_model_override,
                 ODION_TTS_CLONE_SEED,
             )
             return tts_engine
@@ -2640,15 +2676,17 @@ def _build_tts_engine_for_language(
                 owner_id=tts_owner_id or business_id,
                 voice_id=None,
                 language=tts_language_hint,
+                model=tts_model_override,
                 seed=tts_seed_override,
                 mode="default_voice",
                 base_url=tts_endpoint_override or None,
             )
             logger.info(
-                "Using Odion default TTS for %s session: agent_config_id=%s owner_id=%s language_hint=%s",
+                "Using Odion default TTS for %s session: agent_config_id=%s owner_id=%s model=%s language_hint=%s",
                 fallback_label,
                 userdata.get("agent_config_id"),
                 tts_owner_id or business_id,
+                tts_model_override,
                 tts_language_hint,
             )
             return tts_engine
@@ -2661,6 +2699,13 @@ def _build_tts_engine_for_language(
                 tts_voice_id,
                 tts_owner_id,
                 ODION_TTS_CLONE_SEED,
+                exc,
+            )
+            raise
+        if runtime_odion_tts_requested:
+            logger.error(
+                "Failed to initialize runtime Odion TTS override for %s session; refusing to fall back to Deepgram: %s",
+                fallback_label,
                 exc,
             )
             raise
@@ -2765,11 +2810,13 @@ async def entrypoint(ctx: JobContext):
             userdata=userdata,
             business_id=business_id,
         )
+        stt_engine = _build_stt_engine_for_language(language="en", userdata=userdata)
 
         session = _build_session_for_language(
             language="en",
             instructions=instructions,
             userdata=userdata,
+            stt_engine=stt_engine,
             tts_engine=tts_engine,
         )
         _wire_session_timeline(session, session.userdata)
@@ -2959,10 +3006,12 @@ async def entrypoint(ctx: JobContext):
             userdata=userdata,
             business_id=business_id,
         )
+        stt_engine = _build_stt_engine_for_language(language="fr", userdata=userdata)
         session = _build_session_for_language(
             language="fr",
             instructions=instructions,
             userdata=userdata,
+            stt_engine=stt_engine,
             tts_engine=tts_engine,
         )
         _wire_session_timeline(session, session.userdata)

@@ -22,6 +22,7 @@ class _TTSOptions:
     endpoint_url: str
     owner_id: str
     voice_id: str | None
+    model: str
     language: str
     seed: int | None
     mode: str
@@ -57,6 +58,7 @@ class OdionTTS(tts.TTS):
         language: str = "Auto",
         seed: int | None = None,
         mode: str = "default_voice",
+        model: str = "",
         base_url: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
@@ -69,6 +71,7 @@ class OdionTTS(tts.TTS):
             endpoint_url=_resolve_tts_endpoint_url(base_url),
             owner_id=str(owner_id or "").strip(),
             voice_id=(str(voice_id or "").strip() or None),
+            model=str(model or "").strip(),
             language=str(language or "Auto").strip() or "Auto",
             seed=seed if isinstance(seed, int) and seed >= 0 else None,
             mode=str(mode or "default_voice").strip() or "default_voice",
@@ -79,7 +82,7 @@ class OdionTTS(tts.TTS):
 
     @property
     def model(self) -> str:
-        return "odion-tts"
+        return self._opts.model or "odion-tts"
 
     @property
     def provider(self) -> str:
@@ -113,15 +116,18 @@ class ChunkedStream(tts.ChunkedStream):
             "language": self._opts.language,
             "owner_id": self._opts.owner_id,
         }
+        if self._opts.model:
+            payload["model"] = self._opts.model
         if self._opts.voice_id:
             payload["voice_id"] = self._opts.voice_id
         if self._opts.seed is not None:
             payload["seed"] = self._opts.seed
         logger.info(
-            "TTS request -> endpoint_url=%s owner_id=%s voice_id=%s seed=%s language=%s mode=%s",
+            "TTS request -> endpoint_url=%s owner_id=%s voice_id=%s model=%s seed=%s language=%s mode=%s",
             self._opts.endpoint_url,
             self._opts.owner_id,
             self._opts.voice_id,
+            self._opts.model,
             self._opts.seed,
             self._opts.language,
             self._opts.mode,
