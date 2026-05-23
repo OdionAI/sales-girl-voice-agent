@@ -8,7 +8,7 @@ ENVIRONMENT="${ENVIRONMENT:-staging}"
 APP_BASE="/opt/sales-girl-voice-agent"
 APP_PATH="/opt/sales-girl-voice-agent"
 LEGACY_APP_PATH="/opt/sales-girl-voice-agent/sales-girl-voice-agent"
-VM_USER="${VM_USER:-salesgirl}"
+VM_USER="${VM_USER:-ubuntu}"
 
 echo "🚀 Deploying SalesGirl Voice Agent (${ENVIRONMENT})..."
 
@@ -57,10 +57,11 @@ cd "$APP_PATH" || {
     exit 1
 }
 
-# Pull latest code (if not already done by startup script)
+# Pull latest code from the requested branch.
+TARGET_BRANCH="${REPO_BRANCH:-$(git rev-parse --abbrev-ref HEAD)}"
 sudo -u "$VM_USER" git fetch origin
-sudo -u "$VM_USER" git checkout "$(git rev-parse --abbrev-ref HEAD)"
-sudo -u "$VM_USER" git pull origin "$(git rev-parse --abbrev-ref HEAD)"
+sudo -u "$VM_USER" git checkout "${TARGET_BRANCH}"
+sudo -u "$VM_USER" git pull origin "${TARGET_BRANCH}"
 
 # Ensure data directory exists
 sudo -u "$VM_USER" mkdir -p data
