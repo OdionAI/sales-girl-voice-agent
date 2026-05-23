@@ -122,6 +122,65 @@ class BillingHookTests(unittest.IsolatedAsyncioTestCase):
 
         authorize.assert_awaited_once()
 
+    async def test_voice_lab_runtime_overrides_bypass_billing_authorization(self) -> None:
+        userdata = {
+            "conversation_id": "conv-1",
+            "session_id": "local-session",
+            "end_user_id": "research@odion.ai",
+            "runtime_overrides": {
+                "stt_base_url": "http://34.122.84.20/stt/v1/stt/stream",
+                "tts_base_url": "http://34.122.84.20/api/v1/tts/stream",
+            },
+        }
+
+        with (
+            patch("main.BILLING_FAIL_CLOSED", True),
+            patch("main.billing_hooks_enabled", return_value=True),
+            patch(
+                "main.authorize_billing_call_start",
+                new=AsyncMock(
+                    return_value={
+                        "status": "failed",
+                        "detail": "billing authorization unavailable",
+                    }
+                ),
+            ) as authorize,
+        ):
+            await main._authorize_billing_start_or_raise(
+                userdata=userdata,
+                business_id="biz-1",
+                call_channel="web",
+            )
+
+        authorize.assert_not_awaited()
+        self.assertTrue(userdata["billing_bypassed"])
+        self.assertEqual(
+            userdata["billing_bypass_reason"], "voice_lab_runtime_overrides"
+        )
+
+    async def test_billing_heartbeat_skips_bypassed_sessions(self) -> None:
+        userdata = {
+            "billing_bypassed": True,
+            "conversation_id": "conv-1",
+            "session_id": "local-session",
+            "end_user_id": "research@odion.ai",
+        }
+
+        with (
+            patch("main.billing_hooks_enabled", return_value=True),
+            patch("main.asyncio.create_task") as create_task,
+        ):
+            main._start_billing_heartbeat(
+                session=object(),
+                ctx=object(),
+                userdata=userdata,
+                business_id="biz-1",
+                started_at=main.conv_api_utcnow(),
+                call_channel="web",
+            )
+
+        create_task.assert_not_called()
+
     async def test_final_billing_report_runs_once(self) -> None:
         userdata = {
             "business_id": "biz-1",
@@ -151,6 +210,32 @@ class BillingHookTests(unittest.IsolatedAsyncioTestCase):
         report.assert_awaited_once()
         self.assertEqual(report.await_args.kwargs["session_id"], "tracked-session")
         self.assertEqual(report.await_args.kwargs["duration_seconds"], 42)
+
+    async def test_final_billing_report_skips_bypassed_sessions(self) -> None:
+        userdata = {
+            "billing_bypassed": True,
+            "business_id": "biz-1",
+            "conversation_id": "conv-1",
+            "session_id": "local-session",
+            "end_user_id": "research@odion.ai",
+        }
+
+        with (
+            patch("main.billing_hooks_enabled", return_value=True),
+            patch(
+                "main.report_billing_call_usage",
+                new=AsyncMock(return_value={"status": "success"}),
+            ) as report,
+        ):
+            await main._report_billing_final_usage(
+                userdata=userdata,
+                business_id="biz-1",
+                duration_seconds=42,
+                call_channel="web",
+            )
+
+        report.assert_not_awaited()
+        self.assertTrue(userdata["billing_final_reported"])
 
 
 if __name__ == "__main__":
