@@ -81,24 +81,24 @@ if [ ! -f ".env" ]; then
 fi
 
 # Reload systemd daemon
-systemctl daemon-reload
+sudo systemctl daemon-reload
 
 # Restart services
 echo "🔄 Restarting services..."
-systemctl restart sales-girl-backend || echo "⚠️  Backend service not found (will be created)"
-systemctl restart sales-girl-agent-en || echo "⚠️  English agent service not found (will be created)"
-systemctl restart sales-girl-agent-fr || echo "⚠️  French agent service not found (will be created)"
+sudo systemctl restart sales-girl-backend || echo "⚠️  Backend service not found (will be created)"
+sudo systemctl restart sales-girl-agent-en || echo "⚠️  English agent service not found (will be created)"
+sudo systemctl restart sales-girl-agent-fr || echo "⚠️  French agent service not found (will be created)"
 
 # Enable services if not already enabled
-systemctl enable sales-girl-backend sales-girl-agent-en sales-girl-agent-fr 2>/dev/null || true
+sudo systemctl enable sales-girl-backend sales-girl-agent-en sales-girl-agent-fr 2>/dev/null || true
 
 # Wait a moment for services to start
 sleep 3
 
 # Check service status
 echo "📊 Service status:"
-systemctl status sales-girl-backend --no-pager -l || true
-systemctl status sales-girl-agent-en --no-pager -l || true
-systemctl status sales-girl-agent-fr --no-pager -l || true
+sudo systemctl status sales-girl-backend --no-pager -l || true
+sudo systemctl status sales-girl-agent-en --no-pager -l || true
+sudo systemctl status sales-girl-agent-fr --no-pager -l || true
 
 echo "✅ Deployment completed for ${ENVIRONMENT}"
