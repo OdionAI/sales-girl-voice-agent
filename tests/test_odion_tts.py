@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import unittest
 from types import SimpleNamespace
@@ -11,6 +12,10 @@ from agent.odion_tts import (
     DEFAULT_ODION_TTS_STREAM_PATH,
     OdionTTS,
 )
+
+
+def _room_token(value: str) -> str:
+    return base64.urlsafe_b64encode(value.encode("utf-8")).decode("utf-8").rstrip("=")
 
 
 class OdionTTSTests(unittest.TestCase):
@@ -117,6 +122,58 @@ class OdionTTSTests(unittest.TestCase):
         self.assertEqual(
             engine._opts.endpoint_url,
             "http://34.122.84.20/api/v1/tts/stream",
+        )
+
+
+class _FakeVoiceLabContext:
+    def __init__(self, *, room_name: str, metadata: str) -> None:
+        self.job = SimpleNamespace(room=SimpleNamespace(name=room_name))
+        self.room = SimpleNamespace(name=room_name, remote_participants={})
+        self._metadata = metadata
+        self.wait_count = 0
+
+    async def wait_for_participant(self):  # noqa: ANN201
+        self.wait_count += 1
+        participant = SimpleNamespace(metadata=self._metadata)
+        self.room.remote_participants["voice-lab-user"] = participant
+        return participant
+
+
+class VoiceLabMetadataHydrationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_web_room_waits_for_runtime_overrides_before_billing(self) -> None:
+        endpoint = "http://34.122.84.20/api/v1/tts/stream"
+        runtime_overrides = {
+            "stt_provider": "odion_stt",
+            "stt_model": "odion-pidgin-asr",
+            "stt_base_url": "http://34.122.84.20/stt/v1/stt/stream",
+            "tts_provider": "custom",
+            "tts_model": "odion-pidgin-tts",
+            "tts_base_url": endpoint,
+        }
+        metadata = json.dumps(
+            {
+                "end_user_email": "research@odion.ai",
+                "identity_type": "web",
+                "tts_endpoint": endpoint,
+                "runtime_overrides": runtime_overrides,
+            }
+        )
+        room_name = (
+            f"voice_assistant_room_eid{_room_token('research@odion.ai')}"
+            f"_bid{_room_token('business-123')}"
+            f"_aid{_room_token('agent-123')}"
+            f"_nid{_room_token('Sharon')}_1234"
+        )
+        ctx = _FakeVoiceLabContext(room_name=room_name, metadata=metadata)
+
+        userdata = await main._init_session_userdata(ctx, language="en")
+
+        self.assertEqual(ctx.wait_count, 1)
+        self.assertEqual(userdata["runtime_overrides"], runtime_overrides)
+        self.assertEqual(userdata["tts_endpoint"], endpoint)
+        self.assertEqual(
+            main._billing_bypass_reason(userdata, "web"),
+            "voice_lab_runtime_overrides",
         )
 
 
