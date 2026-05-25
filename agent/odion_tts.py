@@ -5,6 +5,7 @@ import logging
 import os
 import uuid
 from dataclasses import dataclass, replace
+from urllib.parse import urlparse
 
 import aiohttp
 from livekit.agents import APIConnectOptions, tts
@@ -12,15 +13,40 @@ from livekit.agents._exceptions import APIConnectionError, APIStatusError, APITi
 
 logger = logging.getLogger("salesgirl.odion_tts")
 
+DEFAULT_ODION_TTS_BASE_URL = "https://eu-tts.odion.ai"
+DEFAULT_ODION_TTS_STREAM_PATH = "/api/v1/tts/stream"
+
 
 @dataclass
 class _TTSOptions:
-    base_url: str
+    endpoint_url: str
     owner_id: str
     voice_id: str | None
+    model: str
     language: str
     seed: int | None
     mode: str
+
+
+def _is_full_endpoint_url(value: str) -> bool:
+    try:
+        parsed = urlparse(value)
+    except Exception:
+        return False
+    return (
+        parsed.scheme in {"http", "https"}
+        and bool(parsed.netloc)
+        and parsed.path not in {"", "/"}
+    )
+
+
+def _resolve_tts_endpoint_url(value: str | None) -> str:
+    endpoint_or_base = str(
+        value or os.getenv("ODION_TTS_BASE_URL", DEFAULT_ODION_TTS_BASE_URL)
+    ).strip().rstrip("/")
+    if _is_full_endpoint_url(endpoint_or_base):
+        return endpoint_or_base
+    return f"{endpoint_or_base}{DEFAULT_ODION_TTS_STREAM_PATH}"
 
 
 class OdionTTS(tts.TTS):
@@ -32,6 +58,7 @@ class OdionTTS(tts.TTS):
         language: str = "Auto",
         seed: int | None = None,
         mode: str = "default_voice",
+        model: str = "",
         base_url: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
@@ -41,9 +68,10 @@ class OdionTTS(tts.TTS):
             num_channels=1,
         )
         self._opts = _TTSOptions(
-            base_url=(base_url or os.getenv("ODION_TTS_BASE_URL", "https://eu-tts.odion.ai")).rstrip("/"),
+            endpoint_url=_resolve_tts_endpoint_url(base_url),
             owner_id=str(owner_id or "").strip(),
             voice_id=(str(voice_id or "").strip() or None),
+            model=str(model or "").strip(),
             language=str(language or "Auto").strip() or "Auto",
             seed=seed if isinstance(seed, int) and seed >= 0 else None,
             mode=str(mode or "default_voice").strip() or "default_voice",
@@ -54,7 +82,7 @@ class OdionTTS(tts.TTS):
 
     @property
     def model(self) -> str:
-        return "odion-tts"
+        return self._opts.model or "odion-tts"
 
     @property
     def provider(self) -> str:
@@ -112,22 +140,25 @@ class ChunkedStream(tts.ChunkedStream):
             "language": opts.language,
             "owner_id": opts.owner_id,
         }
+        if opts.model:
+            payload["model"] = opts.model
         if opts.voice_id:
             payload["voice_id"] = opts.voice_id
         if opts.seed is not None:
             payload["seed"] = opts.seed
         logger.info(
-            "TTS request -> base_url=%s endpoint=/api/v1/tts/stream owner_id=%s voice_id=%s seed=%s language=%s mode=%s",
-            opts.base_url,
+            "TTS request -> endpoint_url=%s owner_id=%s voice_id=%s model=%s seed=%s language=%s mode=%s",
+            opts.endpoint_url,
             opts.owner_id,
             opts.voice_id,
+            opts.model,
             opts.seed,
             opts.language,
             opts.mode,
         )
         try:
             async with self._tts._ensure_session().post(
-                f"{opts.base_url}/api/v1/tts/stream",
+                opts.endpoint_url,
                 headers={"Content-Type": "application/json"},
                 json=payload,
                 timeout=aiohttp.ClientTimeout(total=120, sock_connect=self._conn_options.timeout),

@@ -7,6 +7,7 @@ import base64
 import hashlib
 from typing import Any
 import uuid
+from urllib.parse import urlparse
 from dotenv import load_dotenv
 
 # Load env immediately so API clients can read the correct base URLs
@@ -31,7 +32,16 @@ from agent.conversation_service_api import (
     update_session_recording as update_session_recording_remote,
     utcnow as conv_api_utcnow,
 )
-from agent.agent_config_api import get_active_config as get_agent_active_config
+from agent.billing_hooks import (
+    FAIL_CLOSED as BILLING_FAIL_CLOSED,
+    HEARTBEAT_INTERVAL_SECONDS as BILLING_HEARTBEAT_INTERVAL_SECONDS,
+    HEARTBEAT_MAX_FAILURES as BILLING_HEARTBEAT_MAX_FAILURES,
+    authorize_call_start as authorize_billing_call_start,
+    is_enabled as billing_hooks_enabled,
+    report_call_usage as report_billing_call_usage,
+    send_call_heartbeat as send_billing_call_heartbeat,
+)
+from agent.agent_config_api import get_runtime_config as get_agent_runtime_config
 from agent.ops_api import (
     create_ticket as ops_create_ticket,
     get_account_overview as ops_get_account_overview,
@@ -43,6 +53,7 @@ from agent.ops_api import (
     search_business_knowledge as ops_search_business_knowledge,
 )
 from agent.odion_tts import OdionTTS
+from agent.odion_stt import DEFAULT_ODION_STT_BASE_URL, OdionSTT
 from agent.observability import flush_traces, trace_conversation_event
 from agent.livekit_recording import (
     finalize_room_recording,
@@ -149,6 +160,11 @@ server = AgentServer(
     port=AGENT_PORT,
 )
 init_store()
+
+
+class UsageMeter:
+    def snapshot(self) -> dict[str, Any] | None:
+        return None
 
 
 def _short_text(value: Any, limit: int = 320) -> str:
@@ -471,6 +487,260 @@ async def _drain_background_tasks(userdata: dict[str, Any]) -> None:
             logger.error("Background persistence task failed: %s", result)
 
 
+def _billing_idempotency_key(*, session_id: str, duration_seconds: int) -> str:
+    digest = hashlib.sha256(
+        f"{session_id}:{max(0, int(duration_seconds))}".encode("utf-8")
+    ).hexdigest()[:16]
+    return f"hb-{max(0, int(duration_seconds))}-{digest}"
+
+
+def _billing_usage_payload(userdata: dict[str, Any]) -> dict[str, Any] | None:
+    meter = userdata.get("usage_meter")
+    snapshot = getattr(meter, "snapshot", None)
+    if not callable(snapshot):
+        return None
+    try:
+        value = snapshot()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Billing usage meter snapshot failed: %s", exc)
+        return None
+    return value if isinstance(value, dict) and value else None
+
+
+def _billing_session_id(userdata: dict[str, Any]) -> str:
+    return str(userdata.get("session_tracker_id") or userdata.get("session_id") or "")
+
+
+def _billing_bypass_reason(userdata: dict[str, Any], call_channel: str) -> str:
+    runtime_overrides = userdata.get("runtime_overrides")
+    if (
+        call_channel == "web"
+        and isinstance(runtime_overrides, dict)
+        and bool(runtime_overrides)
+    ):
+        return "voice_lab_runtime_overrides"
+    return ""
+
+
+async def _authorize_billing_start_or_raise(
+    *,
+    userdata: dict[str, Any],
+    business_id: str,
+    call_channel: str,
+) -> None:
+    billing_bypass_reason = _billing_bypass_reason(userdata, call_channel)
+    if billing_bypass_reason:
+        userdata["billing_bypassed"] = True
+        userdata["billing_bypass_reason"] = billing_bypass_reason
+        logger.info(
+            "Billing authorization bypassed: reason=%s business_id=%s conversation_id=%s",
+            billing_bypass_reason,
+            business_id,
+            userdata.get("conversation_id"),
+        )
+        return
+
+    if not billing_hooks_enabled(business_id):
+        if BILLING_FAIL_CLOSED:
+            raise RuntimeError("Billing hooks are not configured.")
+        logger.info("Billing hooks disabled for this session.")
+        return
+
+    result = await authorize_billing_call_start(
+        conversation_id=str(userdata.get("conversation_id") or ""),
+        end_user_id=str(userdata.get("end_user_id") or ""),
+        channel=call_channel,
+        business_id=business_id,
+    )
+    status = str(result.get("status") or "").lower()
+    if status in {"disabled", "failed"}:
+        detail = str(result.get("detail") or status or "billing authorization failed")
+        if BILLING_FAIL_CLOSED:
+            raise RuntimeError(detail)
+        logger.warning("Billing authorization degraded open: %s", detail)
+        return
+    if not bool(result.get("authorized")):
+        raise RuntimeError("Insufficient wallet balance to start this call.")
+    userdata["billing_authorized"] = True
+
+
+async def _shutdown_session_for_billing(
+    *,
+    session: AgentSession,
+    ctx: JobContext,
+    userdata: dict[str, Any],
+    reason: str,
+    result: dict[str, Any] | None = None,
+) -> None:
+    if userdata.get("billing_shutdown_requested"):
+        return
+    userdata["billing_shutdown_requested"] = True
+    logger.warning(
+        "Ending session due to billing: reason=%s session_id=%s result=%s",
+        reason,
+        _billing_session_id(userdata),
+        result or {},
+    )
+    _persist_session_event_async(
+        userdata,
+        event_type="billing_exhausted",
+        role="system",
+        title="Billing balance exhausted",
+        body="The call ended because the wallet balance reached zero.",
+        payload=result or {},
+    )
+    try:
+        session.shutdown(drain=True)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Billing shutdown could not drain session: %s", exc)
+    try:
+        ctx.shutdown(reason)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Billing shutdown could not signal job shutdown: %s", exc)
+    try:
+        deleted = ctx.delete_room()
+        if hasattr(deleted, "__await__"):
+            await deleted
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Billing shutdown room delete fallback failed: %s", exc)
+
+
+async def _billing_heartbeat_loop(
+    *,
+    session: AgentSession,
+    ctx: JobContext,
+    userdata: dict[str, Any],
+    business_id: str,
+    started_at: Any,
+    call_channel: str,
+) -> None:
+    failures = 0
+    while True:
+        await asyncio.sleep(BILLING_HEARTBEAT_INTERVAL_SECONDS)
+        duration = int(max(0, (conv_api_utcnow() - started_at).total_seconds()))
+        if duration <= 0:
+            continue
+        billing_session_id = _billing_session_id(userdata)
+        result = await send_billing_call_heartbeat(
+            conversation_id=str(userdata.get("conversation_id") or ""),
+            session_id=billing_session_id,
+            end_user_id=str(userdata.get("end_user_id") or ""),
+            duration_seconds=duration,
+            idempotency_key=_billing_idempotency_key(
+                session_id=billing_session_id,
+                duration_seconds=duration,
+            ),
+            channel=call_channel,
+            business_id=business_id,
+        )
+        status = str(result.get("status") or "").lower()
+        if status in {"disabled", "failed"}:
+            failures += 1
+            logger.warning(
+                "Billing heartbeat failed: failures=%s/%s session_id=%s detail=%s",
+                failures,
+                BILLING_HEARTBEAT_MAX_FAILURES,
+                billing_session_id,
+                result.get("detail"),
+            )
+            if BILLING_FAIL_CLOSED and failures >= BILLING_HEARTBEAT_MAX_FAILURES:
+                await _shutdown_session_for_billing(
+                    session=session,
+                    ctx=ctx,
+                    userdata=userdata,
+                    reason="billing_heartbeat_failed",
+                    result=result,
+                )
+                return
+            continue
+
+        failures = 0
+        userdata["last_billing_heartbeat"] = result
+        if bool(result.get("should_end_call")):
+            await _shutdown_session_for_billing(
+                session=session,
+                ctx=ctx,
+                userdata=userdata,
+                reason="billing_exhausted",
+                result=result,
+            )
+            return
+
+
+def _start_billing_heartbeat(
+    *,
+    session: AgentSession,
+    ctx: JobContext,
+    userdata: dict[str, Any],
+    business_id: str,
+    started_at: Any,
+    call_channel: str,
+) -> None:
+    if userdata.get("billing_bypassed"):
+        return
+    if not billing_hooks_enabled(business_id):
+        return
+    if userdata.get("billing_heartbeat_task"):
+        return
+    userdata["billing_heartbeat_task"] = asyncio.create_task(
+        _billing_heartbeat_loop(
+            session=session,
+            ctx=ctx,
+            userdata=userdata,
+            business_id=business_id,
+            started_at=started_at,
+            call_channel=call_channel,
+        )
+    )
+
+
+async def _stop_billing_heartbeat(userdata: dict[str, Any]) -> None:
+    task = userdata.pop("billing_heartbeat_task", None)
+    if not task or task.done():
+        return
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Billing heartbeat task ended with error: %s", exc)
+
+
+async def _report_billing_final_usage(
+    *,
+    userdata: dict[str, Any],
+    business_id: str,
+    duration_seconds: int,
+    call_channel: str,
+) -> None:
+    if userdata.get("billing_final_reported"):
+        return
+    userdata["billing_final_reported"] = True
+    if userdata.get("billing_bypassed"):
+        return
+    if not billing_hooks_enabled(business_id):
+        return
+    result = await report_billing_call_usage(
+        conversation_id=str(userdata.get("conversation_id") or ""),
+        session_id=_billing_session_id(userdata),
+        end_user_id=str(userdata.get("end_user_id") or ""),
+        duration_seconds=max(0, int(duration_seconds)),
+        channel=call_channel,
+        business_id=business_id,
+        usage=_billing_usage_payload(userdata),
+    )
+    if str(result.get("status") or "").lower() == "failed":
+        logger.error(
+            "Final billing report failed: session_id=%s detail=%s http_status=%s",
+            _billing_session_id(userdata),
+            result.get("detail"),
+            result.get("http_status"),
+        )
+    else:
+        userdata["last_billing_report"] = result
+
+
 async def _finalize_session_cleanup(
     *,
     userdata: dict[str, Any],
@@ -496,6 +766,14 @@ async def _finalize_session_cleanup(
             duration,
             shutdown_reason or "",
             is_recording_enabled(),
+        )
+
+        await _stop_billing_heartbeat(userdata)
+        await _report_billing_final_usage(
+            userdata=userdata,
+            business_id=business_id,
+            duration_seconds=duration,
+            call_channel=call_channel,
         )
 
         try:
@@ -777,7 +1055,6 @@ GOOGLE_LLM_MODEL_FR = (
     or GOOGLE_LLM_MODEL_DEFAULT
 )
 
-
 def _normalize_business_id(value: str | None) -> str:
     raw = str(value or "").strip()
     if not raw:
@@ -936,6 +1213,86 @@ def _decode_identity_email(identity: str) -> str:
     except Exception:
         return ""
     return _normalize_end_user_id(decoded)
+
+
+def _normalize_tts_mode(value: str) -> str:
+    mode = str(value or "").strip().lower()
+    if mode in {"default_voice", "cloned_voice", "auto"}:
+        return mode
+    return "auto"
+
+
+def _normalize_tts_endpoint(value: str) -> str:
+    endpoint = str(value or "").strip()
+    if not endpoint:
+        return ""
+    try:
+        parsed = urlparse(endpoint)
+    except Exception:
+        return ""
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return ""
+    return endpoint.rstrip("/")
+
+
+_RUNTIME_OVERRIDE_KEYS = (
+    "stt_provider",
+    "stt_model",
+    "stt_base_url",
+    "tts_provider",
+    "tts_model",
+    "tts_base_url",
+)
+
+
+def _normalize_runtime_overrides(raw: Any) -> dict[str, str]:
+    if not isinstance(raw, dict):
+        return {}
+    normalized: dict[str, str] = {}
+    for key in _RUNTIME_OVERRIDE_KEYS:
+        value = str(raw.get(key) or "").strip()
+        if value:
+            normalized[key] = value
+    return normalized
+
+
+WEB_METADATA_WAIT_SECONDS = 3
+
+
+def _has_remote_participants(ctx: JobContext) -> bool:
+    room = getattr(ctx, "room", None)
+    participants = getattr(room, "remote_participants", None)
+    return bool(participants)
+
+
+def _extract_tts_overrides_from_ctx(ctx: JobContext) -> dict[str, Any]:
+    room = getattr(ctx, "room", None)
+    participants = getattr(room, "remote_participants", None)
+    if not participants:
+        return {}
+
+    values = participants.values() if hasattr(participants, "values") else participants
+    for participant in values:
+        metadata_raw = str(getattr(participant, "metadata", "") or "").strip()
+        if not metadata_raw:
+            continue
+        try:
+            payload = json.loads(metadata_raw)
+        except json.JSONDecodeError:
+            continue
+        overrides: dict[str, Any] = {
+            "tts_endpoint": _normalize_tts_endpoint(payload.get("tts_endpoint") or ""),
+            "tts_mode": _normalize_tts_mode(payload.get("tts_mode") or ""),
+            "tts_owner_id": str(payload.get("tts_owner_id") or "").strip(),
+            "tts_voice_id": str(payload.get("tts_voice_id") or "").strip(),
+            "tts_language_hint": str(payload.get("tts_language_hint") or "").strip(),
+            "tts_seed": str(payload.get("tts_seed") or "").strip(),
+        }
+        runtime_overrides = _normalize_runtime_overrides(payload.get("runtime_overrides"))
+        if runtime_overrides:
+            overrides["runtime_overrides"] = runtime_overrides
+        return overrides
+    return {}
 
 
 # Extract participant identity and related room context from the LiveKit job.
@@ -1102,10 +1459,20 @@ async def _init_session_userdata(ctx: JobContext, language: str) -> dict[str, An
         tts_endpoint,
         runtime_overrides,
     ) = _participant_identity_from_ctx(ctx)
-    if REQUIRE_VERIFIED_PHONE and not end_user_id:
+    participant_overrides = _extract_tts_overrides_from_ctx(ctx)
+    runtime_overrides = participant_overrides.get("runtime_overrides") or {}
+
+    needs_identity = REQUIRE_VERIFIED_PHONE and not end_user_id
+    needs_web_metadata = (
+        identity_type == "web"
+        and not runtime_overrides
+        and not _has_remote_participants(ctx)
+    )
+    if needs_identity or needs_web_metadata:
         try:
             # In web flows, participant metadata/identity can arrive slightly after job start.
-            await asyncio.wait_for(ctx.wait_for_participant(), timeout=12)
+            wait_timeout = 12 if needs_identity else WEB_METADATA_WAIT_SECONDS
+            await asyncio.wait_for(ctx.wait_for_participant(), timeout=wait_timeout)
             (
                 end_user_id,
                 identity_type,
@@ -1116,6 +1483,10 @@ async def _init_session_userdata(ctx: JobContext, language: str) -> dict[str, An
                 tts_endpoint,
                 runtime_overrides,
             ) = _participant_identity_from_ctx(ctx)
+            participant_overrides = _extract_tts_overrides_from_ctx(ctx)
+            runtime_overrides = (
+                participant_overrides.get("runtime_overrides") or runtime_overrides
+            )
             logger.info(
                 "Retried participant identity after join: end_user_id=%s type=%s business_id=%s config_agent_id=%s configured_name=%s end_user_name=%s tts_endpoint=%s runtime_overrides=%s",
                 end_user_id,
@@ -1132,7 +1503,7 @@ async def _init_session_userdata(ctx: JobContext, language: str) -> dict[str, An
             logger.warning("Could not wait for participant yet: %s", exc)
         except asyncio.TimeoutError:
             logger.warning(
-                "Timed out waiting for participant before identity extraction."
+                "Timed out waiting for participant before metadata extraction."
             )
     if REQUIRE_VERIFIED_PHONE and not end_user_id:
         raise RuntimeError(
@@ -1163,6 +1534,11 @@ async def _init_session_userdata(ctx: JobContext, language: str) -> dict[str, An
         "end_user_name": end_user_name,
         "tts_endpoint": tts_endpoint,
         "runtime_overrides": runtime_overrides,
+        "tts_mode": "auto",
+        "tts_owner_id": "",
+        "tts_voice_id": "",
+        "tts_language_hint": "",
+        "tts_seed": "",
         "business_id": business_id,
         "conversation_id": conversation_id,
         "session_id": stable_session_id,
@@ -1174,7 +1550,8 @@ async def _init_session_userdata(ctx: JobContext, language: str) -> dict[str, An
         "timeline_event_index": 0,
         "last_user_transcript": "",
         "last_assistant_message": "",
-    }
+        "usage_meter": UsageMeter(),
+    } | participant_overrides
 
 
 def _wire_session_timeline(session: AgentSession, userdata: dict[str, Any]) -> None:
@@ -1740,19 +2117,19 @@ def _validate_runtime_requirements() -> None:
         )
 
 
-async def _fetch_active_agent_runtime_config(
+async def _fetch_agent_runtime_config(
     userdata: dict[str, Any],
 ) -> dict[str, Any]:
     business_id = _normalize_business_id(str(userdata.get("business_id") or ""))
     config_agent_id = str(userdata.get("agent_config_id") or "").strip()
     if not business_id or not config_agent_id:
         return {}
-    payload = await get_agent_active_config(
+    payload = await get_agent_runtime_config(
         agent_id=config_agent_id, business_id=business_id
     )
     if str(payload.get("status") or "") == "failed":
         logger.error(
-            "Agent config fetch failed: business_id=%s agent_id=%s detail=%s http_status=%s",
+            "Agent runtime config fetch failed: business_id=%s agent_id=%s detail=%s http_status=%s",
             business_id,
             config_agent_id,
             payload.get("detail"),
@@ -2596,9 +2973,11 @@ def _build_session_for_language(
     language: str,
     instructions: str,
     userdata: dict[str, Any],
+    stt_engine: Any | None = None,
     tts_engine: Any | None = None,
 ) -> AgentSession:
-    stt_engine = _build_stt_engine_for_language(language=language, userdata=userdata)
+    if stt_engine is None:
+        stt_engine = _build_stt_engine_for_language(language=language, userdata=userdata)
     if language == "fr":
         return AgentSession(
             stt=stt_engine,
@@ -2692,23 +3071,15 @@ def _deepgram_stt_language_for_language(language: str) -> str:
     return "fr" if str(language or "").strip().lower() == "fr" else "en"
 
 
+def _runtime_model_language_hint(model: str) -> str:
+    lowered = str(model or "").strip().lower()
+    if any(token in lowered for token in ("pidgin", "pijin", "naija", "pcm")):
+        return "Pidgin"
+    return ""
+
+
 def _runtime_overrides_from_userdata(userdata: dict[str, Any]) -> dict[str, str]:
-    raw = userdata.get("runtime_overrides")
-    if not isinstance(raw, dict):
-        return {}
-    normalized: dict[str, str] = {}
-    for key in (
-        "stt_provider",
-        "stt_model",
-        "stt_base_url",
-        "tts_provider",
-        "tts_model",
-        "tts_base_url",
-    ):
-        value = str(raw.get(key) or "").strip()
-        if value:
-            normalized[key] = value
-    return normalized
+    return _normalize_runtime_overrides(userdata.get("runtime_overrides"))
 
 
 def _build_stt_engine_for_language(*, language: str, userdata: dict[str, Any]) -> Any:
@@ -2718,6 +3089,19 @@ def _build_stt_engine_for_language(*, language: str, userdata: dict[str, Any]) -
     model = str(overrides.get("stt_model") or "nova-3").strip() or "nova-3"
     base_url = str(overrides.get("stt_base_url") or "").strip()
 
+    if provider == "odion_stt":
+        resolved_base_url = base_url or DEFAULT_ODION_STT_BASE_URL
+        logger.info(
+            "Using Odion STT override: base_url=%s model=%s language=%s",
+            resolved_base_url,
+            model,
+            lang,
+        )
+        return OdionSTT(
+            language=lang,
+            model=model,
+            base_url=resolved_base_url,
+        )
     stt_kwargs: dict[str, Any] = {
         "language": _deepgram_stt_language_for_language(lang),
         "model": model,
@@ -2763,7 +3147,18 @@ def _build_tts_engine_for_language(
     odion_enabled = ENABLE_ODION_TTS_FR if is_fr else ENABLE_ODION_TTS_EN
     fallback_label = "French" if is_fr else "English"
 
-    if override_provider in {"deepgram", "custom"}:
+    tts_model_override = str(runtime_overrides.get("tts_model") or "").strip()
+    tts_endpoint_override = _normalize_tts_endpoint(
+        userdata.get("tts_endpoint") or ""
+    ) or _normalize_tts_endpoint(override_base_url)
+    runtime_odion_tts_requested = bool(tts_endpoint_override) or override_provider in {
+        "odion_tts",
+        "odion",
+    }
+
+    if override_provider == "deepgram" or (
+        override_provider == "custom" and not runtime_odion_tts_requested
+    ):
         resolved_override_model = _strict_language_aware_deepgram_model(
             override_model, lang
         )
@@ -2791,7 +3186,7 @@ def _build_tts_engine_for_language(
             )
         return deepgram.TTS(**tts_kwargs)
 
-    if saved_provider == "deepgram":
+    if saved_provider == "deepgram" and not runtime_odion_tts_requested:
         saved_model = _strict_language_aware_deepgram_model(
             str(active_agent_config.get("tts_voice_id") or "").strip()
             or _deepgram_tts_model_for_language(lang),
@@ -2805,10 +3200,11 @@ def _build_tts_engine_for_language(
         )
         return deepgram.TTS(model=saved_model)
 
-    use_experiment_clone = FORCE_ODION_TTS_EXPERIMENT_VOICE and bool(
-        ODION_TTS_EXPERIMENT_OWNER_ID
-    ) and bool(
-        ODION_TTS_EXPERIMENT_VOICE_ID
+    use_experiment_clone = (
+        not runtime_odion_tts_requested
+        and FORCE_ODION_TTS_EXPERIMENT_VOICE
+        and bool(ODION_TTS_EXPERIMENT_OWNER_ID)
+        and bool(ODION_TTS_EXPERIMENT_VOICE_ID)
     )
     tts_voice_id = (
         ODION_TTS_EXPERIMENT_VOICE_ID
@@ -2825,7 +3221,7 @@ def _build_tts_engine_for_language(
         )
     )
     tts_language_hint = (
-        ("French" if is_fr else "English")
+        ODION_TTS_EXPERIMENT_LANGUAGE_HINT
         if use_experiment_clone
         else str(
             active_agent_config.get("tts_language_hint")
@@ -2833,18 +3229,50 @@ def _build_tts_engine_for_language(
         ).strip()
         or ("French" if is_fr else "English")
     )
+    tts_mode_override = _normalize_tts_mode(userdata.get("tts_mode") or "")
+    tts_owner_id_override = str(userdata.get("tts_owner_id") or "").strip()
+    tts_voice_id_override = str(userdata.get("tts_voice_id") or "").strip()
+    tts_language_hint_override = str(userdata.get("tts_language_hint") or "").strip()
+    tts_seed_raw = str(userdata.get("tts_seed") or "").strip()
+    tts_seed_override = (
+        int(tts_seed_raw) if tts_seed_raw.isdigit() and int(tts_seed_raw) >= 0 else None
+    )
+    if tts_owner_id_override:
+        tts_owner_id = tts_owner_id_override
+    if tts_voice_id_override:
+        tts_voice_id = tts_voice_id_override
+    if tts_language_hint_override:
+        tts_language_hint = tts_language_hint_override
+    elif runtime_odion_tts_requested:
+        tts_language_hint = (
+            _runtime_model_language_hint(tts_model_override) or tts_language_hint
+        )
     use_configured_clone = use_experiment_clone or _should_use_odion_tts_for_language(
         active_agent_config, lang
     )
+    if tts_mode_override == "cloned_voice":
+        use_configured_clone = True
+    elif tts_mode_override == "default_voice":
+        use_configured_clone = False
     use_odion_default = not use_configured_clone
 
-    if not odion_enabled:
+    if runtime_odion_tts_requested:
+        use_configured_clone = bool(tts_voice_id) and tts_mode_override == "cloned_voice"
+        use_odion_default = not use_configured_clone
+
+    if not odion_enabled and not runtime_odion_tts_requested:
         logger.info(
             "ENABLE_ODION_TTS_%s=false; using Deepgram TTS for %s session.",
             "FR" if is_fr else "EN",
             fallback_label,
         )
         return fallback_tts
+    if not odion_enabled and runtime_odion_tts_requested:
+        logger.info(
+            "Using runtime Odion TTS override for %s session even though ENABLE_ODION_TTS_%s=false.",
+            fallback_label,
+            "FR" if is_fr else "EN",
+        )
 
     try:
         if use_configured_clone:
@@ -2852,15 +3280,20 @@ def _build_tts_engine_for_language(
                 owner_id=tts_owner_id,
                 voice_id=tts_voice_id,
                 language=tts_language_hint,
-                seed=ODION_TTS_CLONE_SEED,
+                model=tts_model_override,
+                seed=tts_seed_override
+                if tts_seed_override is not None
+                else ODION_TTS_CLONE_SEED,
                 mode="cloned_voice",
+                base_url=tts_endpoint_override or None,
             )
             logger.info(
-                "Using Odion cloned TTS for %s session: agent_config_id=%s voice_id=%s owner_id=%s seed=%s",
+                "Using Odion cloned TTS for %s session: agent_config_id=%s voice_id=%s owner_id=%s model=%s seed=%s",
                 fallback_label,
                 userdata.get("agent_config_id"),
                 tts_voice_id,
                 tts_owner_id,
+                tts_model_override,
                 ODION_TTS_CLONE_SEED,
             )
             return tts_engine
@@ -2869,14 +3302,17 @@ def _build_tts_engine_for_language(
                 owner_id=tts_owner_id or business_id,
                 voice_id=None,
                 language=tts_language_hint,
-                seed=None,
+                model=tts_model_override,
+                seed=tts_seed_override,
                 mode="default_voice",
+                base_url=tts_endpoint_override or None,
             )
             logger.info(
-                "Using Odion default TTS for %s session: agent_config_id=%s owner_id=%s language_hint=%s",
+                "Using Odion default TTS for %s session: agent_config_id=%s owner_id=%s model=%s language_hint=%s",
                 fallback_label,
                 userdata.get("agent_config_id"),
                 tts_owner_id or business_id,
+                tts_model_override,
                 tts_language_hint,
             )
             return tts_engine
@@ -2889,6 +3325,13 @@ def _build_tts_engine_for_language(
                 tts_voice_id,
                 tts_owner_id,
                 ODION_TTS_CLONE_SEED,
+                exc,
+            )
+            raise
+        if runtime_odion_tts_requested:
+            logger.error(
+                "Failed to initialize runtime Odion TTS override for %s session; refusing to fall back to Deepgram: %s",
+                fallback_label,
                 exc,
             )
             raise
@@ -2919,7 +3362,7 @@ async def entrypoint(ctx: JobContext):
     """
     if _is_en_agent_name(AGENT_NAME):
         userdata = await _init_session_userdata(ctx, language="en")
-        active_agent_config = await _fetch_active_agent_runtime_config(userdata)
+        active_agent_config = await _fetch_agent_runtime_config(userdata)
         business_use_case = _detect_business_use_case(
             active_agent_config=active_agent_config,
             userdata=userdata,
@@ -2970,6 +3413,11 @@ async def entrypoint(ctx: JobContext):
             if str(userdata.get("identity_type") or "").lower() == "web"
             else "voice"
         )
+        await _authorize_billing_start_or_raise(
+            userdata=userdata,
+            business_id=business_id,
+            call_channel=call_channel,
+        )
 
         async def _cleanup_en(reason: str = "") -> None:
             await asyncio.shield(
@@ -2992,11 +3440,13 @@ async def entrypoint(ctx: JobContext):
             userdata=userdata,
             business_id=business_id,
         )
+        stt_engine = _build_stt_engine_for_language(language="en", userdata=userdata)
 
         session = _build_session_for_language(
             language="en",
             instructions=instructions,
             userdata=userdata,
+            stt_engine=stt_engine,
             tts_engine=tts_engine,
         )
         _wire_session_timeline(session, session.userdata)
@@ -3031,22 +3481,41 @@ async def entrypoint(ctx: JobContext):
                 room=ctx.room,
                 room_options=room_io.RoomOptions(delete_room_on_close=True),
             )
+            _start_billing_heartbeat(
+                session=session,
+                ctx=ctx,
+                userdata=userdata,
+                business_id=business_id,
+                started_at=started_at,
+                call_channel=call_channel,
+            )
+            _trigger_first_turn(
+                session, language="en", business_use_case=business_use_case
+            )
             if is_recording_enabled():
-                await _start_session_recording_capture(
-                    ctx=ctx,
-                    userdata=userdata,
-                    business_id=business_id,
-                    session_tracker_id=str(userdata.get("session_tracker_id") or ""),
-                    started_at=started_at,
-                )
+                async def _start_recording_after_join_en() -> None:
+                    try:
+                        await _start_session_recording_capture(
+                            ctx=ctx,
+                            userdata=userdata,
+                            business_id=business_id,
+                            session_tracker_id=str(userdata.get("session_tracker_id") or ""),
+                            started_at=started_at,
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        logger.exception(
+                            "Recording startup failed after English session join: business_id=%s session_id=%s error=%s",
+                            business_id,
+                            str(userdata.get("session_id") or ""),
+                            exc,
+                        )
+
+                _track_background_task(userdata, _start_recording_after_join_en())
             else:
                 logger.info(
                     "Recording not enabled for this session: language=en business_id=%s",
                     business_id,
                 )
-            _trigger_first_turn(
-                session, language="en", business_use_case=business_use_case
-            )
             shutdown_reason = await _wait_for_job_shutdown(ctx)
             logger.info(
                 "Session shutdown received (en): reason=%s",
@@ -3068,7 +3537,7 @@ async def entrypoint(ctx: JobContext):
             )
     else:
         userdata = await _init_session_userdata(ctx, language="fr")
-        active_agent_config = await _fetch_active_agent_runtime_config(userdata)
+        active_agent_config = await _fetch_agent_runtime_config(userdata)
         business_use_case = _detect_business_use_case(
             active_agent_config=active_agent_config,
             userdata=userdata,
@@ -3115,6 +3584,11 @@ async def entrypoint(ctx: JobContext):
             if str(userdata.get("identity_type") or "").lower() == "web"
             else "voice"
         )
+        await _authorize_billing_start_or_raise(
+            userdata=userdata,
+            business_id=business_id,
+            call_channel=call_channel,
+        )
 
         async def _cleanup_fr(reason: str = "") -> None:
             await asyncio.shield(
@@ -3136,10 +3610,12 @@ async def entrypoint(ctx: JobContext):
             userdata=userdata,
             business_id=business_id,
         )
+        stt_engine = _build_stt_engine_for_language(language="fr", userdata=userdata)
         session = _build_session_for_language(
             language="fr",
             instructions=instructions,
             userdata=userdata,
+            stt_engine=stt_engine,
             tts_engine=tts_engine,
         )
         _wire_session_timeline(session, session.userdata)
@@ -3174,22 +3650,41 @@ async def entrypoint(ctx: JobContext):
                 room=ctx.room,
                 room_options=room_io.RoomOptions(delete_room_on_close=True),
             )
+            _start_billing_heartbeat(
+                session=session,
+                ctx=ctx,
+                userdata=userdata,
+                business_id=business_id,
+                started_at=started_at,
+                call_channel=call_channel,
+            )
+            _trigger_first_turn(
+                session, language="fr", business_use_case=business_use_case
+            )
             if is_recording_enabled():
-                await _start_session_recording_capture(
-                    ctx=ctx,
-                    userdata=userdata,
-                    business_id=business_id,
-                    session_tracker_id=str(userdata.get("session_tracker_id") or ""),
-                    started_at=started_at,
-                )
+                async def _start_recording_after_join_fr() -> None:
+                    try:
+                        await _start_session_recording_capture(
+                            ctx=ctx,
+                            userdata=userdata,
+                            business_id=business_id,
+                            session_tracker_id=str(userdata.get("session_tracker_id") or ""),
+                            started_at=started_at,
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        logger.exception(
+                            "Recording startup failed after French session join: business_id=%s session_id=%s error=%s",
+                            business_id,
+                            str(userdata.get("session_id") or ""),
+                            exc,
+                        )
+
+                _track_background_task(userdata, _start_recording_after_join_fr())
             else:
                 logger.info(
                     "Recording not enabled for this session: language=fr business_id=%s",
                     business_id,
                 )
-            _trigger_first_turn(
-                session, language="fr", business_use_case=business_use_case
-            )
             shutdown_reason = await _wait_for_job_shutdown(ctx)
             logger.info(
                 "Session shutdown received (fr): reason=%s",

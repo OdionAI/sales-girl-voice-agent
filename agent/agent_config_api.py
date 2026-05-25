@@ -26,7 +26,7 @@ def _headers(business_id: str) -> dict[str, str]:
     }
 
 
-async def get_active_config(*, agent_id: str, business_id: str) -> dict[str, Any]:
+async def get_runtime_config(*, agent_id: str, business_id: str) -> dict[str, Any]:
     if not is_enabled() or not str(agent_id or "").strip() or not str(business_id or "").strip():
         return {"status": "disabled"}
     # Use runtime-config so public-agent URL sessions can load non-active agents too.
