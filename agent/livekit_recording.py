@@ -18,7 +18,7 @@ RECORDING_ENABLED = os.getenv("LIVEKIT_RECORDING_ENABLED", "false").lower() == "
 RECORDING_BUCKET = str(os.getenv("LIVEKIT_RECORDING_GCS_BUCKET", "")).strip()
 RECORDING_GCP_CREDENTIALS = str(os.getenv("LIVEKIT_RECORDING_GCP_CREDENTIALS_JSON", "")).strip()
 RECORDING_PREFIX = str(os.getenv("LIVEKIT_RECORDING_FILE_PREFIX", "livekit-recordings")).strip("/") or "livekit-recordings"
-RECORDING_FORMAT = str(os.getenv("LIVEKIT_RECORDING_FORMAT", "ogg")).strip().lower() or "ogg"
+RECORDING_FORMAT = str(os.getenv("LIVEKIT_RECORDING_FORMAT", "mp3")).strip().lower() or "mp3"
 RECORDING_PUBLIC_BASE_URL = str(os.getenv("LIVEKIT_RECORDING_PUBLIC_BASE_URL", "")).strip().rstrip("/")
 RECORDING_POLL_TIMEOUT_SECONDS = max(5, int(os.getenv("LIVEKIT_RECORDING_POLL_TIMEOUT_SECONDS", "45")))
 RECORDING_POLL_INTERVAL_SECONDS = max(1, int(os.getenv("LIVEKIT_RECORDING_POLL_INTERVAL_SECONDS", "2")))
