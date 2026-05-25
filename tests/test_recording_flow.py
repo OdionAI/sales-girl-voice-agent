@@ -134,5 +134,48 @@ class DynamicKnowledgeRefreshTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Use ALAT to open an account.", updated_instructions)
 
 
+class TranscriptAndTicketGuardTests(unittest.IsolatedAsyncioTestCase):
+    def test_skips_partial_assistant_fragment_when_full_reply_already_saved(self) -> None:
+        userdata = {
+            "last_persisted_assistant_content": (
+                "Bonjour, je m'appelle Sonia. Merci de nous avoir contactés. "
+                "L'IC correspond au numéro d'immatriculation consulaire."
+            )
+        }
+
+        self.assertTrue(
+            main._should_skip_assistant_message_persist(
+                userdata, "Bonjour, je m'appelle Sonia."
+            )
+        )
+        self.assertFalse(
+            main._should_skip_assistant_message_persist(
+                userdata,
+                "Bonjour, je m'appelle Sonia. Merci de nous avoir contactés. "
+                "L'IC correspond au numéro d'immatriculation consulaire. "
+                "Souhaitez-vous plus de détails ?",
+            )
+        )
+
+    async def test_does_not_reconcile_ticket_update_when_ticket_already_created(self) -> None:
+        userdata = {
+            "enabled_tool_names": ["create_ticket"],
+            "turn_index": 4,
+            "last_create_ticket_success_turn": 3,
+            "recent_user_messages": [
+                "Si cette information n'est pas disponible, pouvez-vous creer un ticket de suivi pour moi ?",
+                "Mon nom complet est Claire Adjovi.",
+            ],
+        }
+
+        with patch.object(main, "ops_create_ticket", AsyncMock()) as create_ticket_mock:
+            await main._reconcile_ticket_claim_if_needed(
+                userdata,
+                "Parfait. J'ai mis à jour le ticket avec votre nom.",
+            )
+
+        create_ticket_mock.assert_not_awaited()
+
+
 if __name__ == "__main__":
     unittest.main()

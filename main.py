@@ -316,6 +316,39 @@ def _assistant_claims_ticket_failed(message: str) -> bool:
     return any(pattern in normalized for pattern in patterns)
 
 
+def _assistant_claims_ticket_updated(message: str) -> bool:
+    normalized = str(message or "").strip().lower()
+    if not normalized:
+        return False
+    patterns = (
+        "i updated the ticket",
+        "i have updated the ticket",
+        "the ticket has been updated",
+        "j'ai mis à jour le ticket",
+        "j’ai mis à jour le ticket",
+        "j'ai mis a jour le ticket",
+        "j’ai mis a jour le ticket",
+        "le ticket a été mis à jour",
+        "le ticket a ete mis a jour",
+    )
+    return any(pattern in normalized for pattern in patterns)
+
+
+def _should_skip_assistant_message_persist(userdata: dict[str, Any], content: str) -> bool:
+    candidate = str(content or "").strip()
+    if not candidate:
+        return True
+
+    last_saved = str(userdata.get("last_persisted_assistant_content") or "").strip()
+    if not last_saved:
+        return False
+    if candidate == last_saved:
+        return True
+    if len(candidate) < len(last_saved) and last_saved.startswith(candidate):
+        return True
+    return False
+
+
 def _is_non_informative_ticket_reply(text: str) -> bool:
     normalized = str(text or "").strip().lower()
     if not normalized:
@@ -376,6 +409,8 @@ async def _reconcile_ticket_claim_if_needed(userdata: dict[str, Any], assistant_
 
     assistant_message = str(assistant_message or "").strip()
     if not assistant_message:
+        return
+    if successful_turn >= 0 and _assistant_claims_ticket_updated(assistant_message):
         return
 
     should_reconcile = _assistant_claims_ticket_created(assistant_message)
@@ -1662,6 +1697,9 @@ def _wire_session_timeline(session: AgentSession, userdata: dict[str, Any]) -> N
         )
 
         role_l = role.lower()
+        if role_l == "assistant" and _should_skip_assistant_message_persist(userdata, content):
+            return
+
         if role_l in {"user", "assistant"}:
             business_id = str(userdata.get("business_id") or "")
             if conversation_service_enabled(business_id):
@@ -1692,6 +1730,8 @@ def _wire_session_timeline(session: AgentSession, userdata: dict[str, Any]) -> N
                             persisted.get("detail"),
                             persisted.get("http_status"),
                         )
+                    elif role_l == "assistant":
+                        userdata["last_persisted_assistant_content"] = content
 
                 _track_background_task(userdata, _persist_remote())
             else:
@@ -1703,6 +1743,8 @@ def _wire_session_timeline(session: AgentSession, userdata: dict[str, Any]) -> N
                     content=content,
                     session_id=str(userdata.get("session_id") or ""),
                 )
+                if role_l == "assistant":
+                    userdata["last_persisted_assistant_content"] = content
 
         if role_l == "assistant":
 
