@@ -156,6 +156,9 @@ class TranscriptAndTicketGuardTests(unittest.IsolatedAsyncioTestCase):
                 "Souhaitez-vous plus de détails ?",
             )
         )
+        self.assertTrue(
+            main._should_skip_assistant_message_persist({}, "Bonjour ! Je")
+        )
 
     async def test_does_not_reconcile_ticket_update_when_ticket_already_created(self) -> None:
         userdata = {
