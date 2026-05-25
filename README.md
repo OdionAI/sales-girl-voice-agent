@@ -53,6 +53,8 @@ Current stable contract:
   saved agent configuration
 - LiveKit room recording is the supported conversation-audio capture path when
   enabled for the environment
+- new recordings should prefer a browser-friendly format such as `mp3` so
+  dashboard playback does not depend on limited codec support
 - Gemini Live is experimental and not the current stable production path
 
 ## Live-data contract
