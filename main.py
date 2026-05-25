@@ -339,6 +339,13 @@ def _should_skip_assistant_message_persist(userdata: dict[str, Any], content: st
     if not candidate:
         return True
 
+    lowered = candidate.lower()
+    if len(candidate) <= 24 and (
+        lowered in {"bonjour ! je", "bonjour! je", "bonjour ! j", "bonjour! j"}
+        or re.match(r"^(bonjour|salut|hello|hi)\W+(je|j|i)\s*$", lowered)
+    ):
+        return True
+
     last_saved = str(userdata.get("last_persisted_assistant_content") or "").strip()
     if not last_saved:
         return False
