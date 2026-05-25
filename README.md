@@ -39,6 +39,10 @@ Current stable contract:
   generic/custom agents
 - generic/custom sessions refresh per-turn knowledge by updating the active
   agent instructions in-place instead of handing off to a new agent
+- assistant transcript persistence should ignore obvious duplicate/partial
+  fragments so dashboard and session transcripts reflect final replies cleanly
+- ticket follow-up reconciliation should not create a second ticket when a
+  recent successful ticket already exists for the same caller turn flow
 - Odion cloned TTS can be used for English sessions when configured
 - LiveKit room recording is the supported conversation-audio capture path when
   enabled for the environment
