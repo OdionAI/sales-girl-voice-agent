@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import main
+from agent import salon_agent
 from agent import livekit_recording
 from agent.livekit_recording import RecordingStartResult
 
@@ -178,6 +179,28 @@ class TranscriptAndTicketGuardTests(unittest.IsolatedAsyncioTestCase):
             )
 
         create_ticket_mock.assert_not_awaited()
+
+    def test_reuses_recent_ticket_for_same_title_on_next_turn(self) -> None:
+        session_userdata = {
+            "turn_index": 3,
+            "last_create_ticket_success_turn": 2,
+            "last_create_ticket_result": {
+                "id": "ticket-1",
+                "title": "Demande d'horaires du service consulaire à Paris pour samedi",
+                "status": "success",
+                "customer_name": "mfab.verify.ticket@example.com",
+            },
+        }
+
+        reused = salon_agent._recent_ticket_reuse_result(
+            session_userdata,
+            title="Demande d'horaires du service consulaire à Paris pour samedi",
+            customer_identifier="Claire Adjovi",
+        )
+
+        self.assertIsNotNone(reused)
+        self.assertEqual(reused["id"], "ticket-1")
+        self.assertTrue(reused["reused_existing_ticket"])
 
 
 if __name__ == "__main__":

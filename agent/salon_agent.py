@@ -69,6 +69,40 @@ def _tool_metadata(ctx: RunContext) -> dict:
     }
 
 
+def _session_userdata(ctx: RunContext) -> dict:
+    session_userdata = getattr(getattr(ctx, "session", None), "userdata", None)
+    return session_userdata if isinstance(session_userdata, dict) else {}
+
+
+def _recent_ticket_reuse_result(
+    session_userdata: dict,
+    *,
+    title: str,
+    customer_identifier: str | None = None,
+) -> dict | None:
+    last_result = session_userdata.get("last_create_ticket_result")
+    if not isinstance(last_result, dict):
+        return None
+
+    last_turn = int(session_userdata.get("last_create_ticket_success_turn", -999))
+    current_turn = int(session_userdata.get("turn_index", 0))
+    if current_turn - last_turn > 1:
+        return None
+
+    requested_title = str(title or "").strip().lower()
+    previous_title = str(last_result.get("title") or "").strip().lower()
+    if not requested_title or requested_title != previous_title:
+        return None
+
+    reused = dict(last_result)
+    if customer_identifier:
+        reused["customer_identifier_hint"] = customer_identifier
+    reused["status"] = "success"
+    reused["reused_existing_ticket"] = True
+    reused["message"] = "A recent ticket already exists for this conversation."
+    return reused
+
+
 def _is_tool_enabled(ctx: RunContext, tool_name: str) -> bool:
     normalized_tool_name = str(tool_name or "").strip()
     if normalized_tool_name in ALWAYS_ENABLED_RUNTIME_TOOLS:
@@ -204,6 +238,16 @@ class SalonAgent(Agent):
                 "status": "failed",
                 "message": "I can't create a support ticket from this agent right now.",
             }
+        session_userdata = _session_userdata(ctx)
+        reused = _recent_ticket_reuse_result(
+            session_userdata,
+            title=title,
+            customer_identifier=customer_identifier,
+        )
+        if reused:
+            logger.info("[TOOL] create_ticket reused existing ticket title=%s", title)
+            return reused
+
         result = await create_ticket_api(
             customer_identifier=customer_identifier,
             title=title,
@@ -215,6 +259,10 @@ class SalonAgent(Agent):
             metadata=_tool_metadata(ctx),
         )
         if result.get("status") != "failed":
+            session_userdata["last_create_ticket_success_turn"] = int(
+                session_userdata.get("turn_index", 0)
+            )
+            session_userdata["last_create_ticket_result"] = result
             logger.info(
                 "[TOOL] create_ticket title=%s issue_type=%s", title, issue_type
             )
