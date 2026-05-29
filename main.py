@@ -2011,6 +2011,8 @@ async def _instructions_with_context(base_prompt: str, userdata: dict[str, Any])
             "- If a request needs human attention, create a ticket if that tool is available.\n"
             "- If the caller asks for a ticket, or agrees to ticket follow-up, call create_ticket immediately before replying.\n"
             "- In the exact turn where you say a ticket was created, create_ticket must already have succeeded.\n"
+            "- Never read ticket IDs or internal reference codes aloud unless the caller explicitly asks for a reference. Confirm tickets naturally without citing numbers.\n"
+            "- If a tool, lookup, or knowledge check fails, respond naturally without mentioning tools, APIs, or knowledge bases. Say you could not find that information or complete that request, then continue helpfully.\n"
         )
     else:
         # Prevent old assistant personas in historical context from overriding current role.
@@ -2029,7 +2031,9 @@ async def _instructions_with_context(base_prompt: str, userdata: dict[str, Any])
             "- Do not claim an action was completed unless the tool confirms it.\n"
             "- If the issue needs human follow-up, create a ticket when that tool is available.\n"
             "- If the caller asks for a ticket, or agrees to ticket follow-up, call create_ticket immediately before replying.\n"
-            "- In the exact turn where you say a ticket was created, create_ticket must already have succeeded."
+            "- In the exact turn where you say a ticket was created, create_ticket must already have succeeded.\n"
+            "- Never read ticket IDs or internal reference codes aloud unless the caller explicitly asks for a reference. Confirm tickets naturally without citing numbers.\n"
+            "- If a tool, lookup, or knowledge check fails, respond naturally without mentioning tools, APIs, or knowledge bases. Say you could not find that information or complete that request, then continue helpfully."
         )
     channel = (
         "web" if str(userdata.get("identity_type") or "").lower() == "web" else "voice"
@@ -2585,8 +2589,9 @@ def _effective_base_prompt(
             "- Infer ticket titles and descriptions yourself from the conversation; do not ask the guest to write them for you.\n"
             "- Only ask a follow-up question before creating a ticket if a concrete missing fact is essential.\n"
             "- Never say a ticket was created unless create_ticket returned success.\n"
+            "- Never read ticket IDs or internal reference codes aloud unless the guest explicitly asks for a reference.\n"
             "- Never say a booking was created unless create_booking returned success.\n"
-            "- If a tool call fails, explain that clearly and offer the next best fallback.\n"
+            "- If a tool call fails, respond naturally without mentioning tools, APIs, or knowledge bases. Say you could not find that information or complete that request, then continue helpfully.\n"
         )
 
     if business_use_case == "restaurant":
@@ -2603,8 +2608,9 @@ def _effective_base_prompt(
             "- In the exact turn where you say a ticket was created, create_ticket must already have succeeded.\n"
             "- Infer ticket titles and descriptions yourself from the conversation; do not ask the customer to write them for you.\n"
             "- Never say a ticket was created unless create_ticket returned success.\n"
+            "- Never read ticket IDs or internal reference codes aloud unless the customer explicitly asks for a reference.\n"
             "- Never say an order was created unless create_order returned success.\n"
-            "- If a tool call fails, explain that clearly and offer the next best fallback.\n"
+            "- If a tool call fails, respond naturally without mentioning tools, APIs, or knowledge bases. Say you could not find that information or complete that request, then continue helpfully.\n"
         )
 
     if business_use_case == "fashion":
@@ -2621,8 +2627,9 @@ def _effective_base_prompt(
             "- In the exact turn where you say a ticket was created, create_ticket must already have succeeded.\n"
             "- Infer ticket titles and descriptions yourself from the conversation; do not ask the customer to write them for you.\n"
             "- Never say a ticket was created unless create_ticket returned success.\n"
+            "- Never read ticket IDs or internal reference codes aloud unless the customer explicitly asks for a reference.\n"
             "- Never say an order was created unless create_order returned success.\n"
-            "- If a tool call fails, explain that clearly and offer the next best fallback.\n"
+            "- If a tool call fails, respond naturally without mentioning tools, APIs, or knowledge bases. Say you could not find that information or complete that request, then continue helpfully.\n"
         )
 
     if business_use_case == "generic":
