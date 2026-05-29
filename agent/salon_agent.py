@@ -55,6 +55,7 @@ def _tool_metadata(ctx: RunContext) -> dict:
         ),
         "business_id": str(session_userdata.get("business_id") or ""),
         "business_use_case": str(session_userdata.get("business_use_case") or ""),
+        "knowledge_base_ids": list(session_userdata.get("knowledge_base_ids") or []),
         "live_data_endpoint": str(session_userdata.get("live_data_endpoint") or ""),
         "conversation_id": conversation_id,
         "session_id": session_id,

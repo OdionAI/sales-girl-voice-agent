@@ -443,10 +443,15 @@ async def search_business_knowledge(
         update_observation(output=output)
         return output
 
+    knowledge_base_ids = [
+        str(kb_id).strip()
+        for kb_id in ((metadata or {}).get("knowledge_base_ids") or [])
+        if str(kb_id).strip()
+    ]
     request_body = {
         "query": str(query or "").strip(),
         "top_k": int(max(1, min(int(top_k or 4), 6))),
-        "agent_id": str((metadata or {}).get("agent_id") or "").strip() or None,
+        "knowledge_base_ids": knowledge_base_ids,
     }
     update_observation(
         input={

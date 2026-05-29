@@ -260,6 +260,7 @@ def _tool_metadata_from_userdata(userdata: dict[str, Any]) -> dict[str, Any]:
         ),
         "business_id": str(userdata.get("business_id") or ""),
         "business_use_case": str(userdata.get("business_use_case") or ""),
+        "knowledge_base_ids": list(userdata.get("knowledge_base_ids") or []),
         "live_data_endpoint": str(userdata.get("live_data_endpoint") or ""),
         "conversation_id": conversation_id,
         "session_id": session_id,
@@ -2170,6 +2171,12 @@ def _hydrate_userdata_from_active_agent_config(
     business_use_case: str,
 ) -> None:
     cfg = active_agent_config or {}
+    configured_kb_ids = cfg.get("knowledge_base_ids")
+    userdata["knowledge_base_ids"] = [
+        str(kb_id).strip()
+        for kb_id in (configured_kb_ids if isinstance(configured_kb_ids, list) else [])
+        if str(kb_id).strip()
+    ]
     tools = cfg.get("tools")
     active_tools = (
         [
@@ -2673,6 +2680,7 @@ def _ops_tool_metadata_from_userdata(userdata: dict[str, Any]) -> dict[str, Any]
         ),
         "business_id": str(userdata.get("business_id") or ""),
         "business_use_case": str(userdata.get("business_use_case") or ""),
+        "knowledge_base_ids": list(userdata.get("knowledge_base_ids") or []),
         "conversation_id": str(userdata.get("conversation_id") or ""),
         "session_id": str(userdata.get("session_id") or ""),
         "end_user_id": str(userdata.get("end_user_id") or ""),
