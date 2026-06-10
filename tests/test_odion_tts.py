@@ -210,6 +210,36 @@ class _FakeTTSSession:
         return None
 
 
+class _FallbackThenSuccessSession:
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+        self._call_count = 0
+
+    def post(self, url, **kwargs):  # noqa: ANN001
+        self._call_count += 1
+        self.calls.append({"url": url, **kwargs})
+        if self._call_count == 1:
+            return _Fake404TTSResponse()
+        return _FakeTTSResponse()
+
+    async def close(self) -> None:
+        return None
+
+
+class _Fake404TTSResponse:
+    status = 404
+    headers = {}
+
+    async def __aenter__(self) -> "_Fake404TTSResponse":
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb) -> None:  # noqa: ANN001
+        return None
+
+    async def text(self) -> str:
+        return "voice_id not found"
+
+
 class _FakeAudioEmitter:
     def initialize(self, **kwargs) -> None:  # noqa: ANN001
         self.initialized = kwargs
@@ -239,6 +269,32 @@ class OdionTTSPayloadTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(fake_session.calls[0]["url"], "http://34.122.84.20/api/v1/tts/stream")
         self.assertEqual(fake_session.calls[0]["json"]["language"], "Pidgin")
         self.assertEqual(fake_session.calls[0]["json"]["model"], "odion-pidgin-tts")
+
+    async def test_missing_clone_switches_remaining_session_to_default_voice(self) -> None:
+        fake_session = _FallbackThenSuccessSession()
+        engine = OdionTTS(
+            owner_id="mavinomichael@gmail.com",
+            voice_id="46f5ac744a504023b93c6dd8ddd46ac6",
+            language="English",
+            seed=0,
+            mode="cloned_voice",
+            base_url="http://34.122.84.20/api/v1/tts/stream",
+            http_session=fake_session,
+        )
+
+        first_stream = engine.synthesize("First reply")
+        await first_stream._run(_FakeAudioEmitter())
+        second_stream = engine.synthesize("Second reply")
+        await second_stream._run(_FakeAudioEmitter())
+
+        self.assertEqual(fake_session.calls[0]["json"]["voice_id"], "46f5ac744a504023b93c6dd8ddd46ac6")
+        self.assertEqual(fake_session.calls[0]["json"]["seed"], 0)
+        self.assertNotIn("voice_id", fake_session.calls[1]["json"])
+        self.assertEqual(fake_session.calls[1]["json"]["seed"], 0)
+        self.assertNotIn("voice_id", fake_session.calls[2]["json"])
+        self.assertEqual(fake_session.calls[2]["json"]["seed"], 0)
+        self.assertIsNone(engine._opts.voice_id)
+        self.assertEqual(engine._opts.mode, "default_voice")
 
 
 if __name__ == "__main__":

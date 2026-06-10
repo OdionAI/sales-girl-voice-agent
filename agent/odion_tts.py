@@ -119,8 +119,12 @@ class ChunkedStream(tts.ChunkedStream):
         except APIStatusError as exc:
             if self._should_fallback_to_default(exc):
                 fallback_opts = replace(self._opts, voice_id=None, mode="default_voice")
+                # Keep the remainder of the session on the same fallback voice once a
+                # configured clone is unavailable, instead of retrying the missing
+                # clone on every utterance and producing a shifting voice.
+                self._tts._opts = replace(self._tts._opts, voice_id=None, mode="default_voice")
                 logger.warning(
-                    "Odion cloned voice lookup failed for owner_id=%s voice_id=%s; retrying with default voice",
+                    "Odion cloned voice lookup failed for owner_id=%s voice_id=%s; switching session to default voice and retrying",
                     self._opts.owner_id,
                     self._opts.voice_id,
                 )
