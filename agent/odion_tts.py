@@ -111,30 +111,58 @@ class ChunkedStream(tts.ChunkedStream):
         self._opts = replace(tts._opts)
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
+        await self._stream_with_fallback(output_emitter)
+
+    async def _stream_with_fallback(self, output_emitter: tts.AudioEmitter) -> None:
+        try:
+            await self._stream_once(output_emitter, self._opts)
+        except APIStatusError as exc:
+            if self._should_fallback_to_default(exc):
+                fallback_opts = replace(self._opts, voice_id=None, mode="default_voice")
+                # Keep the remainder of the session on the same fallback voice once a
+                # configured clone is unavailable, instead of retrying the missing
+                # clone on every utterance and producing a shifting voice.
+                self._tts._opts = replace(self._tts._opts, voice_id=None, mode="default_voice")
+                logger.warning(
+                    "Odion cloned voice lookup failed for owner_id=%s voice_id=%s; switching session to default voice and retrying",
+                    self._opts.owner_id,
+                    self._opts.voice_id,
+                )
+                await self._stream_once(output_emitter, fallback_opts)
+                return
+            raise
+
+    def _should_fallback_to_default(self, exc: APIStatusError) -> bool:
+        if not self._opts.voice_id:
+            return False
+        body = str(getattr(exc, "body", "") or getattr(exc, "message", "") or "").lower()
+        return exc.status_code == 404 and "voice_id not found" in body
+
+    async def _stream_once(self, output_emitter: tts.AudioEmitter, opts: _TTSOptions) -> None:
         payload = {
             "text": self._input_text,
-            "language": self._opts.language,
-            "owner_id": self._opts.owner_id,
+            "language": opts.language,
+            "owner_id": opts.owner_id,
         }
-        if self._opts.model:
-            payload["model"] = self._opts.model
-        if self._opts.voice_id:
-            payload["voice_id"] = self._opts.voice_id
-        if self._opts.seed is not None:
-            payload["seed"] = self._opts.seed
+        if opts.model:
+            payload["model"] = opts.model
+        if opts.voice_id:
+            payload["voice_id"] = opts.voice_id
+        if opts.seed is not None:
+            payload["seed"] = opts.seed
         logger.info(
             "TTS request -> endpoint_url=%s owner_id=%s voice_id=%s model=%s seed=%s language=%s mode=%s",
-            self._opts.endpoint_url,
-            self._opts.owner_id,
-            self._opts.voice_id,
-            self._opts.model,
-            self._opts.seed,
-            self._opts.language,
-            self._opts.mode,
+            opts.endpoint_url,
+            opts.owner_id,
+            opts.voice_id,
+            opts.model,
+            opts.seed,
+            opts.language,
+            opts.mode,
         )
         try:
             async with self._tts._ensure_session().post(
-                self._opts.endpoint_url,
+                opts.endpoint_url,
                 headers={"Content-Type": "application/json"},
                 json=payload,
                 timeout=aiohttp.ClientTimeout(total=120, sock_connect=self._conn_options.timeout),
