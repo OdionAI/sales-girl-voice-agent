@@ -384,7 +384,13 @@ class OdionTTSPayloadTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(emitter.initialized["frame_size_ms"], 200)
 
     async def test_tts_allows_initial_buffer_override(self) -> None:
-        fake_session = _FakeTTSSession(chunks=[b"\x01\x02", b"\x03" * 4096])
+        fake_session = _FakeTTSSession(
+            chunks=[
+                b"\x01\x02",
+                b"\x03" * 4096,
+                b"\x04" * 4096,
+            ]
+        )
         emitter = _FakeAudioEmitter()
         with patch.dict("os.environ", {"ODION_TTS_INITIAL_BUFFER_MS": "100"}, clear=True):
             engine = OdionTTS(
