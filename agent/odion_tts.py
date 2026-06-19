@@ -75,13 +75,47 @@ def _is_full_endpoint_url(value: str) -> bool:
     )
 
 
-def _resolve_tts_endpoint_url(value: str | None) -> str:
-    endpoint_or_base = str(
-        value or os.getenv("ODION_TTS_BASE_URL", DEFAULT_ODION_TTS_BASE_URL)
-    ).strip().rstrip("/")
+def _resolve_explicit_tts_endpoint_url(value: str | None) -> str:
+    endpoint_or_base = str(value or "").strip().rstrip("/")
+    if not endpoint_or_base:
+        return ""
     if _is_full_endpoint_url(endpoint_or_base):
         return endpoint_or_base
     return f"{endpoint_or_base}{DEFAULT_ODION_TTS_STREAM_PATH}"
+
+
+def _resolve_tts_endpoint_url(value: str | None) -> str:
+    return _resolve_explicit_tts_endpoint_url(
+        value or os.getenv("ODION_TTS_BASE_URL", DEFAULT_ODION_TTS_BASE_URL)
+    )
+
+
+def _endpoint_rewrite_hosts() -> set[str]:
+    raw = str(os.getenv("ODION_TTS_ENDPOINT_REWRITE_HOSTS") or "").strip()
+    if not raw:
+        return set()
+    return {item.strip().lower() for item in raw.split(",") if item.strip()}
+
+
+def _rewrite_tts_endpoint_url(endpoint_url: str) -> str:
+    rewrite_url = _resolve_explicit_tts_endpoint_url(
+        os.getenv("ODION_TTS_ENDPOINT_REWRITE_URL")
+    )
+    if not rewrite_url:
+        return endpoint_url
+    try:
+        host = (urlparse(endpoint_url).hostname or "").lower()
+    except Exception:
+        host = ""
+    if host and host in _endpoint_rewrite_hosts():
+        logger.info(
+            "Rewriting Odion TTS endpoint from %s to %s for host=%s",
+            endpoint_url,
+            rewrite_url,
+            host,
+        )
+        return rewrite_url
+    return endpoint_url
 
 
 class OdionTTS(tts.TTS):
@@ -102,7 +136,7 @@ class OdionTTS(tts.TTS):
             sample_rate=24000,
             num_channels=1,
         )
-        endpoint_url = _resolve_tts_endpoint_url(base_url)
+        endpoint_url = _rewrite_tts_endpoint_url(_resolve_tts_endpoint_url(base_url))
         self._opts = _TTSOptions(
             endpoint_url=endpoint_url,
             owner_id=str(owner_id or "").strip(),

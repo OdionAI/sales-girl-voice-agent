@@ -43,6 +43,50 @@ class OdionTTSTests(unittest.TestCase):
             "http://34.122.84.20/api/v1/tts/stream",
         )
 
+    def test_endpoint_rewrites_configured_host_to_direct_endpoint(self) -> None:
+        with patch.dict(
+            "os.environ",
+            {
+                "ODION_TTS_ENDPOINT_REWRITE_HOSTS": "ng-tts.odion.ai",
+                "ODION_TTS_ENDPOINT_REWRITE_URL": (
+                    "http://102.140.102.211/tts/api/v1/tts/stream"
+                ),
+            },
+            clear=False,
+        ):
+            engine = OdionTTS(
+                owner_id="owner-123",
+                voice_id=None,
+                base_url="https://ng-tts.odion.ai/api/v1/tts/stream",
+            )
+
+        self.assertEqual(
+            engine._opts.endpoint_url,
+            "http://102.140.102.211/tts/api/v1/tts/stream",
+        )
+
+    def test_endpoint_rewrite_leaves_unlisted_host_unchanged(self) -> None:
+        with patch.dict(
+            "os.environ",
+            {
+                "ODION_TTS_ENDPOINT_REWRITE_HOSTS": "ng-tts.odion.ai",
+                "ODION_TTS_ENDPOINT_REWRITE_URL": (
+                    "http://102.140.102.211/tts/api/v1/tts/stream"
+                ),
+            },
+            clear=False,
+        ):
+            engine = OdionTTS(
+                owner_id="owner-123",
+                voice_id=None,
+                base_url=DEFAULT_ODION_TTS_BASE_URL,
+            )
+
+        self.assertEqual(
+            engine._opts.endpoint_url,
+            f"{DEFAULT_ODION_TTS_BASE_URL}{DEFAULT_ODION_TTS_STREAM_PATH}",
+        )
+
     def test_tts_builder_passes_runtime_model_and_bypasses_experiment_clone(self) -> None:
         with (
             patch("main.deepgram.TTS", return_value=object()),
