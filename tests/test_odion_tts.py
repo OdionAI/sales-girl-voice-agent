@@ -357,7 +357,7 @@ class OdionTTSPayloadTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(emitter.initialized["frame_size_ms"], 20)
 
-    async def test_tts_buffers_initial_audio_for_npu_endpoint(self) -> None:
+    async def test_tts_does_not_buffer_initial_audio_by_default_for_npu_endpoint(self) -> None:
         fake_session = _FakeTTSSession(
             chunks=[
                 b"\x01\x02",
@@ -379,14 +379,14 @@ class OdionTTSPayloadTests(unittest.IsolatedAsyncioTestCase):
 
         await engine.synthesize("Hello")._run(emitter)
 
-        self.assertEqual(engine._opts.initial_buffer_ms, 250)
-        self.assertGreaterEqual(len(emitter.pushed[0]), 12000)
+        self.assertEqual(engine._opts.initial_buffer_ms, 0)
+        self.assertEqual(emitter.pushed[0], b"\x01\x02")
         self.assertEqual(emitter.initialized["frame_size_ms"], 200)
 
-    async def test_tts_allows_disabling_initial_buffer(self) -> None:
+    async def test_tts_allows_initial_buffer_override(self) -> None:
         fake_session = _FakeTTSSession(chunks=[b"\x01\x02", b"\x03" * 4096])
         emitter = _FakeAudioEmitter()
-        with patch.dict("os.environ", {"ODION_TTS_INITIAL_BUFFER_MS": "0"}, clear=True):
+        with patch.dict("os.environ", {"ODION_TTS_INITIAL_BUFFER_MS": "100"}, clear=True):
             engine = OdionTTS(
                 owner_id="owner-123",
                 voice_id=None,
@@ -397,8 +397,8 @@ class OdionTTSPayloadTests(unittest.IsolatedAsyncioTestCase):
 
         await engine.synthesize("Hello")._run(emitter)
 
-        self.assertEqual(engine._opts.initial_buffer_ms, 0)
-        self.assertEqual(emitter.pushed[0], b"\x01\x02")
+        self.assertEqual(engine._opts.initial_buffer_ms, 100)
+        self.assertGreaterEqual(len(emitter.pushed[0]), 4800)
 
     async def test_missing_clone_switches_remaining_session_to_default_voice(self) -> None:
         fake_session = _FallbackThenSuccessSession()
