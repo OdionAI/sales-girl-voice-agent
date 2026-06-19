@@ -16,7 +16,7 @@ logger = logging.getLogger("salesgirl.odion_tts")
 DEFAULT_ODION_TTS_BASE_URL = "https://eu-tts.odion.ai"
 DEFAULT_ODION_TTS_STREAM_PATH = "/api/v1/tts/stream"
 _PCM16_BYTES_PER_SAMPLE = 2
-_DEFAULT_FRAME_SIZE_MS = 20
+_DEFAULT_FRAME_SIZE_MS = 200
 _DEFAULT_NPU_INITIAL_BUFFER_MS = 250
 
 

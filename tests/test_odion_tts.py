@@ -280,7 +280,7 @@ class OdionTTSPayloadTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(fake_session.calls[0]["json"]["language"], "Pidgin")
         self.assertEqual(fake_session.calls[0]["json"]["model"], "odion-pidgin-tts")
 
-    async def test_tts_initializes_livekit_with_small_pcm_frames(self) -> None:
+    async def test_tts_initializes_livekit_with_default_pcm_frames(self) -> None:
         fake_session = _FakeTTSSession()
         emitter = _FakeAudioEmitter()
         engine = OdionTTS(
@@ -293,9 +293,25 @@ class OdionTTSPayloadTests(unittest.IsolatedAsyncioTestCase):
 
         await engine.synthesize("Hello")._run(emitter)
 
-        self.assertEqual(emitter.initialized["frame_size_ms"], 20)
+        self.assertEqual(emitter.initialized["frame_size_ms"], 200)
         self.assertEqual(emitter.initialized["sample_rate"], 24000)
         self.assertEqual(emitter.initialized["mime_type"], "audio/pcm")
+
+    async def test_tts_allows_low_frame_size_override(self) -> None:
+        fake_session = _FakeTTSSession()
+        emitter = _FakeAudioEmitter()
+        with patch.dict("os.environ", {"ODION_TTS_FRAME_SIZE_MS": "20"}, clear=True):
+            engine = OdionTTS(
+                owner_id="owner-123",
+                voice_id=None,
+                language="English",
+                base_url=DEFAULT_ODION_TTS_BASE_URL,
+                http_session=fake_session,
+            )
+
+        await engine.synthesize("Hello")._run(emitter)
+
+        self.assertEqual(emitter.initialized["frame_size_ms"], 20)
 
     async def test_tts_buffers_initial_audio_for_npu_endpoint(self) -> None:
         fake_session = _FakeTTSSession(
@@ -321,7 +337,7 @@ class OdionTTSPayloadTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(engine._opts.initial_buffer_ms, 250)
         self.assertGreaterEqual(len(emitter.pushed[0]), 12000)
-        self.assertEqual(emitter.initialized["frame_size_ms"], 20)
+        self.assertEqual(emitter.initialized["frame_size_ms"], 200)
 
     async def test_tts_allows_disabling_initial_buffer(self) -> None:
         fake_session = _FakeTTSSession(chunks=[b"\x01\x02", b"\x03" * 4096])
