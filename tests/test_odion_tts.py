@@ -178,8 +178,11 @@ class VoiceLabMetadataHydrationTests(unittest.IsolatedAsyncioTestCase):
 
 
 class _FakeTTSContent:
+    chunks = [b"\x00" * 16]
+
     async def iter_chunked(self, size):  # noqa: ANN001, ARG002
-        yield b"\x00" * 16
+        for chunk in self.chunks:
+            yield chunk
 
 
 class _FakeTTSResponse:
@@ -199,12 +202,17 @@ class _FakeTTSResponse:
 
 
 class _FakeTTSSession:
-    def __init__(self) -> None:
+    def __init__(self, chunks: list[bytes] | None = None) -> None:
         self.calls: list[dict] = []
+        self.chunks = chunks
 
     def post(self, url, **kwargs):  # noqa: ANN001
         self.calls.append({"url": url, **kwargs})
-        return _FakeTTSResponse()
+        response = _FakeTTSResponse()
+        if self.chunks is not None:
+            response.content = _FakeTTSContent()
+            response.content.chunks = self.chunks
+        return response
 
     async def close(self) -> None:
         return None
@@ -243,9 +251,11 @@ class _Fake404TTSResponse:
 class _FakeAudioEmitter:
     def initialize(self, **kwargs) -> None:  # noqa: ANN001
         self.initialized = kwargs
+        self.pushed: list[bytes] = []
 
     def push(self, data) -> None:  # noqa: ANN001
         self.data = data
+        self.pushed.append(data)
 
     def flush(self) -> None:
         self.flushed = True
@@ -269,6 +279,66 @@ class OdionTTSPayloadTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(fake_session.calls[0]["url"], "http://34.122.84.20/api/v1/tts/stream")
         self.assertEqual(fake_session.calls[0]["json"]["language"], "Pidgin")
         self.assertEqual(fake_session.calls[0]["json"]["model"], "odion-pidgin-tts")
+
+    async def test_tts_initializes_livekit_with_small_pcm_frames(self) -> None:
+        fake_session = _FakeTTSSession()
+        emitter = _FakeAudioEmitter()
+        engine = OdionTTS(
+            owner_id="owner-123",
+            voice_id=None,
+            language="English",
+            base_url=DEFAULT_ODION_TTS_BASE_URL,
+            http_session=fake_session,
+        )
+
+        await engine.synthesize("Hello")._run(emitter)
+
+        self.assertEqual(emitter.initialized["frame_size_ms"], 20)
+        self.assertEqual(emitter.initialized["sample_rate"], 24000)
+        self.assertEqual(emitter.initialized["mime_type"], "audio/pcm")
+
+    async def test_tts_buffers_initial_audio_for_npu_endpoint(self) -> None:
+        fake_session = _FakeTTSSession(
+            chunks=[
+                b"\x01\x02",
+                b"\x03" * 4096,
+                b"\x04" * 4096,
+                b"\x05" * 4096,
+                b"\x06" * 4096,
+            ]
+        )
+        emitter = _FakeAudioEmitter()
+        with patch.dict("os.environ", {}, clear=True):
+            engine = OdionTTS(
+                owner_id="owner-123",
+                voice_id=None,
+                language="English",
+                base_url="http://102.140.102.211/api/v1/tts/stream",
+                http_session=fake_session,
+            )
+
+        await engine.synthesize("Hello")._run(emitter)
+
+        self.assertEqual(engine._opts.initial_buffer_ms, 250)
+        self.assertGreaterEqual(len(emitter.pushed[0]), 12000)
+        self.assertEqual(emitter.initialized["frame_size_ms"], 20)
+
+    async def test_tts_allows_disabling_initial_buffer(self) -> None:
+        fake_session = _FakeTTSSession(chunks=[b"\x01\x02", b"\x03" * 4096])
+        emitter = _FakeAudioEmitter()
+        with patch.dict("os.environ", {"ODION_TTS_INITIAL_BUFFER_MS": "0"}, clear=True):
+            engine = OdionTTS(
+                owner_id="owner-123",
+                voice_id=None,
+                language="English",
+                base_url="http://102.140.102.211/api/v1/tts/stream",
+                http_session=fake_session,
+            )
+
+        await engine.synthesize("Hello")._run(emitter)
+
+        self.assertEqual(engine._opts.initial_buffer_ms, 0)
+        self.assertEqual(emitter.pushed[0], b"\x01\x02")
 
     async def test_missing_clone_switches_remaining_session_to_default_voice(self) -> None:
         fake_session = _FallbackThenSuccessSession()

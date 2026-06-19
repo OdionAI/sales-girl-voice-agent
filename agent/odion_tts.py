@@ -15,6 +15,9 @@ logger = logging.getLogger("salesgirl.odion_tts")
 
 DEFAULT_ODION_TTS_BASE_URL = "https://eu-tts.odion.ai"
 DEFAULT_ODION_TTS_STREAM_PATH = "/api/v1/tts/stream"
+_PCM16_BYTES_PER_SAMPLE = 2
+_DEFAULT_FRAME_SIZE_MS = 20
+_DEFAULT_NPU_INITIAL_BUFFER_MS = 250
 
 
 @dataclass
@@ -26,6 +29,38 @@ class _TTSOptions:
     language: str
     seed: int | None
     mode: str
+    frame_size_ms: int
+    http_chunk_bytes: int
+    initial_buffer_ms: int
+
+
+def _env_int(name: str, default: int, *, minimum: int, maximum: int) -> int:
+    raw = str(os.getenv(name) or "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.warning("Ignoring invalid %s=%r; using %s", name, raw, default)
+        return default
+    return max(minimum, min(maximum, value))
+
+
+def _default_initial_buffer_ms(endpoint_url: str) -> int:
+    try:
+        host = (urlparse(endpoint_url).hostname or "").lower()
+    except Exception:
+        host = ""
+    if host == "eu-tts.odion.ai":
+        return 0
+    return _DEFAULT_NPU_INITIAL_BUFFER_MS
+
+
+def _initial_buffer_bytes(*, sample_rate: int, channels: int, initial_buffer_ms: int) -> int:
+    if initial_buffer_ms <= 0:
+        return 0
+    raw = int(sample_rate * channels * _PCM16_BYTES_PER_SAMPLE * initial_buffer_ms / 1000)
+    return raw - (raw % _PCM16_BYTES_PER_SAMPLE)
 
 
 def _is_full_endpoint_url(value: str) -> bool:
@@ -67,14 +102,33 @@ class OdionTTS(tts.TTS):
             sample_rate=24000,
             num_channels=1,
         )
+        endpoint_url = _resolve_tts_endpoint_url(base_url)
         self._opts = _TTSOptions(
-            endpoint_url=_resolve_tts_endpoint_url(base_url),
+            endpoint_url=endpoint_url,
             owner_id=str(owner_id or "").strip(),
             voice_id=(str(voice_id or "").strip() or None),
             model=str(model or "").strip(),
             language=str(language or "Auto").strip() or "Auto",
             seed=seed if isinstance(seed, int) and seed >= 0 else None,
             mode=str(mode or "default_voice").strip() or "default_voice",
+            frame_size_ms=_env_int(
+                "ODION_TTS_FRAME_SIZE_MS",
+                _DEFAULT_FRAME_SIZE_MS,
+                minimum=10,
+                maximum=200,
+            ),
+            http_chunk_bytes=_env_int(
+                "ODION_TTS_HTTP_CHUNK_BYTES",
+                4096,
+                minimum=2,
+                maximum=65536,
+            ),
+            initial_buffer_ms=_env_int(
+                "ODION_TTS_INITIAL_BUFFER_MS",
+                _default_initial_buffer_ms(endpoint_url),
+                minimum=0,
+                maximum=2000,
+            ),
         )
         if not self._opts.owner_id:
             raise ValueError("owner_id is required for OdionTTS")
@@ -183,11 +237,57 @@ class ChunkedStream(tts.ChunkedStream):
                     sample_rate=sample_rate,
                     num_channels=channels,
                     mime_type="audio/pcm",
+                    frame_size_ms=opts.frame_size_ms,
                 )
-                async for data in resp.content.iter_chunked(4096):
-                    if data:
-                        output_emitter.push(data)
+                initial_target_bytes = _initial_buffer_bytes(
+                    sample_rate=sample_rate,
+                    channels=channels,
+                    initial_buffer_ms=opts.initial_buffer_ms,
+                )
+                buffered = bytearray()
+                carried = b""
+                started = initial_target_bytes == 0
+                total_bytes = 0
+                push_count = 0
+                async for data in resp.content.iter_chunked(opts.http_chunk_bytes):
+                    if not data:
+                        continue
+                    chunk = bytes(data)
+                    if carried:
+                        chunk = carried + chunk
+                        carried = b""
+                    if len(chunk) % _PCM16_BYTES_PER_SAMPLE:
+                        carried = chunk[-1:]
+                        chunk = chunk[:-1]
+                    if not chunk:
+                        continue
+                    total_bytes += len(chunk)
+                    if not started:
+                        buffered.extend(chunk)
+                        if len(buffered) < initial_target_bytes:
+                            continue
+                        output_emitter.push(bytes(buffered))
+                        push_count += 1
+                        buffered.clear()
+                        started = True
+                    else:
+                        output_emitter.push(chunk)
+                        push_count += 1
+                if carried:
+                    logger.warning("Dropping trailing odd PCM byte for request_id=%s", request_id)
+                if buffered:
+                    output_emitter.push(bytes(buffered))
+                    push_count += 1
                 output_emitter.flush()
+                logger.info(
+                    "TTS stream complete request_id=%s bytes=%d pushes=%d sample_rate=%d frame_size_ms=%d initial_buffer_ms=%d",
+                    request_id,
+                    total_bytes,
+                    push_count,
+                    sample_rate,
+                    opts.frame_size_ms,
+                    opts.initial_buffer_ms,
+                )
         except asyncio.TimeoutError:
             raise APITimeoutError() from None
         except APIStatusError:
