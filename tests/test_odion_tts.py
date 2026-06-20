@@ -395,12 +395,12 @@ class OdionTTSPayloadTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(engine._opts.output_sample_rate, 24000)
         self.assertNotIn("output_sample_rate", fake_session.calls[0]["json"])
 
-    async def test_tts_npu_endpoint_defaults_to_livekit_pcm_contract(self) -> None:
+    async def test_tts_npu_endpoint_defaults_to_cuda_pcm_contract(self) -> None:
         fake_session = _FakeTTSSession(
-            chunks=[b"\x01\x02", b"\x03" * 1920],
+            chunks=[b"\x01\x02", b"\x03" * 4096],
             headers={
                 "x-request-id": "tts-req",
-                "x-sample-rate": "48000",
+                "x-sample-rate": "24000",
                 "x-channels": "1",
             },
         )
@@ -416,12 +416,12 @@ class OdionTTSPayloadTests(unittest.IsolatedAsyncioTestCase):
 
         await engine.synthesize("Hello")._run(emitter)
 
-        self.assertEqual(engine._opts.output_sample_rate, 48000)
-        self.assertEqual(engine._opts.frame_size_ms, 20)
-        self.assertEqual(engine._opts.http_chunk_bytes, 960)
-        self.assertEqual(fake_session.calls[0]["json"]["output_sample_rate"], 48000)
-        self.assertEqual(emitter.initialized["sample_rate"], 48000)
-        self.assertEqual(emitter.initialized["frame_size_ms"], 20)
+        self.assertEqual(engine._opts.output_sample_rate, 24000)
+        self.assertEqual(engine._opts.frame_size_ms, 200)
+        self.assertEqual(engine._opts.http_chunk_bytes, 4096)
+        self.assertNotIn("output_sample_rate", fake_session.calls[0]["json"])
+        self.assertEqual(emitter.initialized["sample_rate"], 24000)
+        self.assertEqual(emitter.initialized["frame_size_ms"], 200)
 
     async def test_tts_does_not_buffer_initial_audio_by_default_for_npu_endpoint(self) -> None:
         fake_session = _FakeTTSSession(
@@ -434,7 +434,7 @@ class OdionTTSPayloadTests(unittest.IsolatedAsyncioTestCase):
             ],
             headers={
                 "x-request-id": "tts-req",
-                "x-sample-rate": "48000",
+                "x-sample-rate": "24000",
                 "x-channels": "1",
             },
         )
@@ -452,9 +452,9 @@ class OdionTTSPayloadTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(engine._opts.initial_buffer_ms, 0)
         self.assertEqual(emitter.pushed[0], b"\x01\x02")
-        self.assertEqual(fake_session.calls[0]["json"]["output_sample_rate"], 48000)
-        self.assertEqual(emitter.initialized["sample_rate"], 48000)
-        self.assertEqual(emitter.initialized["frame_size_ms"], 20)
+        self.assertNotIn("output_sample_rate", fake_session.calls[0]["json"])
+        self.assertEqual(emitter.initialized["sample_rate"], 24000)
+        self.assertEqual(emitter.initialized["frame_size_ms"], 200)
 
     async def test_tts_allows_initial_buffer_override(self) -> None:
         fake_session = _FakeTTSSession(

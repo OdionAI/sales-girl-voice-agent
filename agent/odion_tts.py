@@ -17,12 +17,9 @@ DEFAULT_ODION_TTS_BASE_URL = "https://eu-tts.odion.ai"
 DEFAULT_ODION_TTS_STREAM_PATH = "/api/v1/tts/stream"
 _PCM16_BYTES_PER_SAMPLE = 2
 _DEFAULT_FRAME_SIZE_MS = 200
-_NPU_FRAME_SIZE_MS = 20
 _DEFAULT_HTTP_CHUNK_BYTES = 4096
-_NPU_HTTP_CHUNK_BYTES = 960
 _DEFAULT_NPU_INITIAL_BUFFER_MS = 0
 _DEFAULT_OUTPUT_SAMPLE_RATE = 24000
-_NPU_OUTPUT_SAMPLE_RATE = 48000
 _SUPPORTED_OUTPUT_SAMPLE_RATES = {24000, 48000}
 _NPU_ENDPOINT_HOSTS = {
     "ng-tts.odion.ai",
@@ -70,20 +67,14 @@ def _is_npu_endpoint(endpoint_url: str) -> bool:
 
 
 def _default_output_sample_rate(endpoint_url: str) -> int:
-    if _is_npu_endpoint(endpoint_url):
-        return _NPU_OUTPUT_SAMPLE_RATE
     return _DEFAULT_OUTPUT_SAMPLE_RATE
 
 
 def _default_frame_size_ms(endpoint_url: str) -> int:
-    if _is_npu_endpoint(endpoint_url):
-        return _NPU_FRAME_SIZE_MS
     return _DEFAULT_FRAME_SIZE_MS
 
 
 def _default_http_chunk_bytes(endpoint_url: str) -> int:
-    if _is_npu_endpoint(endpoint_url):
-        return _NPU_HTTP_CHUNK_BYTES
     return _DEFAULT_HTTP_CHUNK_BYTES
 
 
