@@ -94,6 +94,7 @@ jobs:
             cd /opt/sales-girl-voice-agent && \
             sudo -u ${VM_USER} git fetch origin && \
             sudo -u ${VM_USER} git checkout ${REPO_BRANCH} && \
+            sudo -u ${VM_USER} git stash push -m github-actions-predeploy-${{ github.sha }} || true && \
             sudo -u ${VM_USER} git pull origin ${REPO_BRANCH} && \
             if [ -x /opt/sales-girl-voice-agent/scripts/deploy.sh ]; then \
               /opt/sales-girl-voice-agent/scripts/deploy.sh; \
