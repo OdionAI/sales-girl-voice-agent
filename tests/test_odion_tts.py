@@ -222,7 +222,8 @@ class VoiceLabMetadataHydrationTests(unittest.IsolatedAsyncioTestCase):
 
 
 class _FakeTTSContent:
-    chunks = [b"\x00" * 16]
+    def __init__(self, chunks: list[bytes] | None = None) -> None:
+        self.chunks = chunks or [b"\x00" * 16]
 
     async def iter_chunked(self, size):  # noqa: ANN001, ARG002
         for chunk in self.chunks:
@@ -231,12 +232,14 @@ class _FakeTTSContent:
 
 class _FakeTTSResponse:
     status = 200
-    headers = {
-        "x-request-id": "tts-req",
-        "x-sample-rate": "24000",
-        "x-channels": "1",
-    }
-    content = _FakeTTSContent()
+
+    def __init__(self, *, headers: dict[str, str] | None = None, chunks: list[bytes] | None = None) -> None:
+        self.headers = headers or {
+            "x-request-id": "tts-req",
+            "x-sample-rate": "24000",
+            "x-channels": "1",
+        }
+        self.content = _FakeTTSContent(chunks)
 
     async def __aenter__(self) -> "_FakeTTSResponse":
         return self
@@ -246,17 +249,18 @@ class _FakeTTSResponse:
 
 
 class _FakeTTSSession:
-    def __init__(self, chunks: list[bytes] | None = None) -> None:
+    def __init__(
+        self,
+        chunks: list[bytes] | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> None:
         self.calls: list[dict] = []
         self.chunks = chunks
+        self.headers = headers
 
     def post(self, url, **kwargs):  # noqa: ANN001
         self.calls.append({"url": url, **kwargs})
-        response = _FakeTTSResponse()
-        if self.chunks is not None:
-            response.content = _FakeTTSContent()
-            response.content.chunks = self.chunks
-        return response
+        return _FakeTTSResponse(headers=self.headers, chunks=self.chunks)
 
     async def close(self) -> None:
         return None
@@ -357,6 +361,68 @@ class OdionTTSPayloadTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(emitter.initialized["frame_size_ms"], 20)
 
+    async def test_tts_can_request_48khz_output_for_livekit(self) -> None:
+        fake_session = _FakeTTSSession()
+        emitter = _FakeAudioEmitter()
+        with patch.dict("os.environ", {"ODION_TTS_OUTPUT_SAMPLE_RATE": "48000"}, clear=True):
+            engine = OdionTTS(
+                owner_id="owner-123",
+                voice_id=None,
+                language="English",
+                base_url=DEFAULT_ODION_TTS_BASE_URL,
+                http_session=fake_session,
+            )
+
+        await engine.synthesize("Hello")._run(emitter)
+
+        self.assertEqual(engine._opts.output_sample_rate, 48000)
+        self.assertEqual(fake_session.calls[0]["json"]["output_sample_rate"], 48000)
+
+    async def test_tts_omits_default_output_sample_rate(self) -> None:
+        fake_session = _FakeTTSSession()
+        emitter = _FakeAudioEmitter()
+        with patch.dict("os.environ", {}, clear=True):
+            engine = OdionTTS(
+                owner_id="owner-123",
+                voice_id=None,
+                language="English",
+                base_url=DEFAULT_ODION_TTS_BASE_URL,
+                http_session=fake_session,
+            )
+
+        await engine.synthesize("Hello")._run(emitter)
+
+        self.assertEqual(engine._opts.output_sample_rate, 24000)
+        self.assertNotIn("output_sample_rate", fake_session.calls[0]["json"])
+
+    async def test_tts_npu_endpoint_defaults_to_livekit_pcm_contract(self) -> None:
+        fake_session = _FakeTTSSession(
+            chunks=[b"\x01\x02", b"\x03" * 1920],
+            headers={
+                "x-request-id": "tts-req",
+                "x-sample-rate": "48000",
+                "x-channels": "1",
+            },
+        )
+        emitter = _FakeAudioEmitter()
+        with patch.dict("os.environ", {}, clear=True):
+            engine = OdionTTS(
+                owner_id="owner-123",
+                voice_id=None,
+                language="English",
+                base_url="https://ng-tts.odion.ai",
+                http_session=fake_session,
+            )
+
+        await engine.synthesize("Hello")._run(emitter)
+
+        self.assertEqual(engine._opts.output_sample_rate, 48000)
+        self.assertEqual(engine._opts.frame_size_ms, 20)
+        self.assertEqual(engine._opts.http_chunk_bytes, 960)
+        self.assertEqual(fake_session.calls[0]["json"]["output_sample_rate"], 48000)
+        self.assertEqual(emitter.initialized["sample_rate"], 48000)
+        self.assertEqual(emitter.initialized["frame_size_ms"], 20)
+
     async def test_tts_does_not_buffer_initial_audio_by_default_for_npu_endpoint(self) -> None:
         fake_session = _FakeTTSSession(
             chunks=[
@@ -365,7 +431,12 @@ class OdionTTSPayloadTests(unittest.IsolatedAsyncioTestCase):
                 b"\x04" * 4096,
                 b"\x05" * 4096,
                 b"\x06" * 4096,
-            ]
+            ],
+            headers={
+                "x-request-id": "tts-req",
+                "x-sample-rate": "48000",
+                "x-channels": "1",
+            },
         )
         emitter = _FakeAudioEmitter()
         with patch.dict("os.environ", {}, clear=True):
@@ -381,7 +452,9 @@ class OdionTTSPayloadTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(engine._opts.initial_buffer_ms, 0)
         self.assertEqual(emitter.pushed[0], b"\x01\x02")
-        self.assertEqual(emitter.initialized["frame_size_ms"], 200)
+        self.assertEqual(fake_session.calls[0]["json"]["output_sample_rate"], 48000)
+        self.assertEqual(emitter.initialized["sample_rate"], 48000)
+        self.assertEqual(emitter.initialized["frame_size_ms"], 20)
 
     async def test_tts_allows_initial_buffer_override(self) -> None:
         fake_session = _FakeTTSSession(

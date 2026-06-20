@@ -10,10 +10,27 @@ from livekit import rtc
 from livekit.agents import stt
 from livekit.agents._exceptions import (
     APIConnectionError,
+    APIStatusError,
     APITimeoutError,
-    create_api_error_from_http,
 )
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS, NOT_GIVEN, APIConnectOptions, NotGivenOr
+
+try:
+    from livekit.agents._exceptions import create_api_error_from_http
+except ImportError:
+    def create_api_error_from_http(
+        *,
+        message: str,
+        status: int,
+        request_id: str,
+        body: Any,
+    ) -> APIStatusError:
+        return APIStatusError(
+            message=message,
+            status_code=status,
+            request_id=request_id,
+            body=body,
+        )
 
 DEFAULT_ODION_STT_BASE_URL = "https://eu-stt.odion.ai"
 DEFAULT_ODION_STT_STREAM_PATH = "/stt/v1/stt/stream"

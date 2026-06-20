@@ -17,7 +17,18 @@ DEFAULT_ODION_TTS_BASE_URL = "https://eu-tts.odion.ai"
 DEFAULT_ODION_TTS_STREAM_PATH = "/api/v1/tts/stream"
 _PCM16_BYTES_PER_SAMPLE = 2
 _DEFAULT_FRAME_SIZE_MS = 200
+_NPU_FRAME_SIZE_MS = 20
+_DEFAULT_HTTP_CHUNK_BYTES = 4096
+_NPU_HTTP_CHUNK_BYTES = 960
 _DEFAULT_NPU_INITIAL_BUFFER_MS = 0
+_DEFAULT_OUTPUT_SAMPLE_RATE = 24000
+_NPU_OUTPUT_SAMPLE_RATE = 48000
+_SUPPORTED_OUTPUT_SAMPLE_RATES = {24000, 48000}
+_NPU_ENDPOINT_HOSTS = {
+    "ng-tts.odion.ai",
+    "102.140.102.211",
+    "10.130.151.11",
+}
 
 
 @dataclass
@@ -32,6 +43,7 @@ class _TTSOptions:
     frame_size_ms: int
     http_chunk_bytes: int
     initial_buffer_ms: int
+    output_sample_rate: int
 
 
 def _env_int(name: str, default: int, *, minimum: int, maximum: int) -> int:
@@ -44,6 +56,53 @@ def _env_int(name: str, default: int, *, minimum: int, maximum: int) -> int:
         logger.warning("Ignoring invalid %s=%r; using %s", name, raw, default)
         return default
     return max(minimum, min(maximum, value))
+
+
+def _endpoint_host(endpoint_url: str) -> str:
+    try:
+        return (urlparse(endpoint_url).hostname or "").lower()
+    except Exception:
+        return ""
+
+
+def _is_npu_endpoint(endpoint_url: str) -> bool:
+    return _endpoint_host(endpoint_url) in _NPU_ENDPOINT_HOSTS
+
+
+def _default_output_sample_rate(endpoint_url: str) -> int:
+    if _is_npu_endpoint(endpoint_url):
+        return _NPU_OUTPUT_SAMPLE_RATE
+    return _DEFAULT_OUTPUT_SAMPLE_RATE
+
+
+def _default_frame_size_ms(endpoint_url: str) -> int:
+    if _is_npu_endpoint(endpoint_url):
+        return _NPU_FRAME_SIZE_MS
+    return _DEFAULT_FRAME_SIZE_MS
+
+
+def _default_http_chunk_bytes(endpoint_url: str) -> int:
+    if _is_npu_endpoint(endpoint_url):
+        return _NPU_HTTP_CHUNK_BYTES
+    return _DEFAULT_HTTP_CHUNK_BYTES
+
+
+def _env_output_sample_rate(endpoint_url: str) -> int:
+    default = _default_output_sample_rate(endpoint_url)
+    value = _env_int(
+        "ODION_TTS_OUTPUT_SAMPLE_RATE",
+        default,
+        minimum=min(_SUPPORTED_OUTPUT_SAMPLE_RATES),
+        maximum=max(_SUPPORTED_OUTPUT_SAMPLE_RATES),
+    )
+    if value not in _SUPPORTED_OUTPUT_SAMPLE_RATES:
+        logger.warning(
+            "Ignoring unsupported ODION_TTS_OUTPUT_SAMPLE_RATE=%s; using %s",
+            value,
+            default,
+        )
+        return default
+    return value
 
 
 def _default_initial_buffer_ms(endpoint_url: str) -> int:
@@ -131,12 +190,13 @@ class OdionTTS(tts.TTS):
         base_url: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
     ) -> None:
+        endpoint_url = _rewrite_tts_endpoint_url(_resolve_tts_endpoint_url(base_url))
+        output_sample_rate = _env_output_sample_rate(endpoint_url)
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=False),
-            sample_rate=24000,
+            sample_rate=output_sample_rate,
             num_channels=1,
         )
-        endpoint_url = _rewrite_tts_endpoint_url(_resolve_tts_endpoint_url(base_url))
         self._opts = _TTSOptions(
             endpoint_url=endpoint_url,
             owner_id=str(owner_id or "").strip(),
@@ -147,13 +207,13 @@ class OdionTTS(tts.TTS):
             mode=str(mode or "default_voice").strip() or "default_voice",
             frame_size_ms=_env_int(
                 "ODION_TTS_FRAME_SIZE_MS",
-                _DEFAULT_FRAME_SIZE_MS,
+                _default_frame_size_ms(endpoint_url),
                 minimum=10,
                 maximum=200,
             ),
             http_chunk_bytes=_env_int(
                 "ODION_TTS_HTTP_CHUNK_BYTES",
-                4096,
+                _default_http_chunk_bytes(endpoint_url),
                 minimum=2,
                 maximum=65536,
             ),
@@ -163,6 +223,7 @@ class OdionTTS(tts.TTS):
                 minimum=0,
                 maximum=2000,
             ),
+            output_sample_rate=output_sample_rate,
         )
         if not self._opts.owner_id:
             raise ValueError("owner_id is required for OdionTTS")
@@ -238,8 +299,10 @@ class ChunkedStream(tts.ChunkedStream):
             payload["voice_id"] = opts.voice_id
         if opts.seed is not None:
             payload["seed"] = opts.seed
+        if opts.output_sample_rate != _DEFAULT_OUTPUT_SAMPLE_RATE:
+            payload["output_sample_rate"] = opts.output_sample_rate
         logger.info(
-            "TTS request -> endpoint_url=%s owner_id=%s voice_id=%s model=%s seed=%s language=%s mode=%s",
+            "TTS request -> endpoint_url=%s owner_id=%s voice_id=%s model=%s seed=%s language=%s mode=%s output_sample_rate=%s",
             opts.endpoint_url,
             opts.owner_id,
             opts.voice_id,
@@ -247,6 +310,7 @@ class ChunkedStream(tts.ChunkedStream):
             opts.seed,
             opts.language,
             opts.mode,
+            opts.output_sample_rate,
         )
         try:
             async with self._tts._ensure_session().post(
