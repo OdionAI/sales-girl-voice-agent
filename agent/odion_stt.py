@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import base64
+import io
 import json
 import logging
-from typing import Any, AsyncIterator
+import wave
+from typing import Any
 from urllib.parse import urlparse
 
 import aiohttp
@@ -102,6 +105,45 @@ def _audio_duration(frame: Any) -> float:
         return 0.0
 
 
+def _wav_bytes_from_audio_frame(frame: Any) -> bytes:
+    sample_rate = int(getattr(frame, "sample_rate", 16000) or 16000)
+    num_channels = int(getattr(frame, "num_channels", 1) or 1)
+    pcm_bytes = _audio_frame_bytes(frame)
+    out = io.BytesIO()
+    with wave.open(out, "wb") as wav:
+        wav.setnchannels(num_channels)
+        wav.setsampwidth(2)
+        wav.setframerate(sample_rate)
+        wav.writeframes(pcm_bytes)
+    return out.getvalue()
+
+
+def _stream_payloads_from_text(content: str) -> list[dict[str, Any]]:
+    payloads: list[dict[str, Any]] = []
+    current_event = ""
+    for raw_line in str(content or "").splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if line.startswith("event:"):
+            current_event = line[6:].strip()
+            continue
+        if line.startswith("data:"):
+            line = line[5:].strip()
+        if not line or line == "[DONE]":
+            continue
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict):
+            if current_event and not payload.get("type"):
+                payload["type"] = current_event
+            payloads.append(payload)
+            current_event = ""
+    return payloads
+
+
 def _stream_event_type(payload: dict[str, Any]) -> stt.SpeechEventType | None:
     event_type = str(
         payload.get("type")
@@ -176,8 +218,8 @@ class OdionSTT(stt.STT):
     ) -> None:
         super().__init__(
             capabilities=stt.STTCapabilities(
-                streaming=True,
-                interim_results=True,
+                streaming=False,
+                interim_results=False,
                 diarization=False,
             )
         )
@@ -209,15 +251,18 @@ class OdionSTT(stt.STT):
 
     def _headers(self, *, language: str, sample_rate: int, num_channels: int) -> dict[str, str]:
         headers = {
-            "Content-Type": "audio/pcm",
-            "Accept": "application/x-ndjson, application/json",
-            "X-Sample-Rate": str(sample_rate),
-            "X-Channels": str(num_channels),
-            "X-Language": _display_language(language, model=self._model),
+            "Content-Type": "application/json",
+            "Accept": "text/event-stream, application/x-ndjson, application/json",
+            "User-Agent": "SalesGirlVoiceAgent/1.0",
         }
-        if self._model:
-            headers["X-Model"] = self._model
         return headers
+
+    def _json_payload(self, *, wav_bytes: bytes, language: str) -> dict[str, Any]:
+        return {
+            "audio_base64": base64.b64encode(wav_bytes).decode("ascii"),
+            "language": _display_language(language, model=self._model),
+            "context": "",
+        }
 
     def stream(
         self,
@@ -249,7 +294,6 @@ class OdionSTT(stt.STT):
             else self._language
         )
         combined = rtc.combine_audio_frames(buffer)
-        audio_bytes = combined.data.tobytes()
         sample_rate = int(combined.sample_rate)
         num_channels = int(combined.num_channels)
         headers = self._headers(
@@ -257,11 +301,15 @@ class OdionSTT(stt.STT):
             sample_rate=sample_rate,
             num_channels=num_channels,
         )
+        payload = self._json_payload(
+            wav_bytes=_wav_bytes_from_audio_frame(combined),
+            language=resolved_language,
+        )
 
         try:
             async with self._ensure_session().post(
                 self.endpoint,
-                data=audio_bytes,
+                json=payload,
                 headers=headers,
                 timeout=aiohttp.ClientTimeout(
                     total=max(60, int(conn_options.timeout) + 30),
@@ -273,11 +321,7 @@ class OdionSTT(stt.STT):
                 try:
                     payload = json.loads(content)
                 except json.JSONDecodeError:
-                    payload = [
-                        json.loads(line)
-                        for line in content.splitlines()
-                        if line.strip()
-                    ]
+                    payload = _stream_payloads_from_text(content)
                 transcript_payload = _extract_transcript_payload(payload)
                 if response.status >= 400:
                     raise create_api_error_from_http(
@@ -339,6 +383,7 @@ class _OdionSTTStream(stt.RecognizeStream):
         self._language = language
         self._audio_duration = 0.0
         self._speaking = False
+        self._sse_event_type = ""
 
     async def _next_audio_frame(self) -> Any | None:
         async for item in self._input_ch:
@@ -348,51 +393,60 @@ class _OdionSTTStream(stt.RecognizeStream):
         return None
 
     async def _run(self) -> None:
-        first_frame = await self._next_audio_frame()
-        if first_frame is None:
-            return
-
-        sample_rate = int(getattr(first_frame, "sample_rate", 16000) or 16000)
-        num_channels = int(getattr(first_frame, "num_channels", 1) or 1)
-        headers = self._odion_stt._headers(
-            language=self._language,
-            sample_rate=sample_rate,
-            num_channels=num_channels,
-        )
-
-        async def audio_chunks() -> AsyncIterator[bytes]:
-            yield self._track_audio_frame(first_frame)
+        try:
+            frames: list[Any] = []
             async for item in self._input_ch:
                 if isinstance(item, self._FlushSentinel):
+                    await self._transcribe_segment(frames)
+                    frames = []
                     continue
-                yield self._track_audio_frame(item)
-
-        logger.info(
-            "STT stream request -> endpoint_url=%s model=%s language=%s",
-            self._odion_stt.endpoint,
-            self._odion_stt.model,
-            _display_language(self._language, model=self._odion_stt.model),
-        )
-        try:
-            async with self._odion_stt._ensure_session().post(
-                self._odion_stt.endpoint,
-                data=audio_chunks(),
-                headers=headers,
-                timeout=aiohttp.ClientTimeout(
-                    total=None,
-                    sock_connect=self._conn_options.timeout,
-                    sock_read=None,
-                ),
-            ) as response:
-                if response.status >= 400:
-                    await self._raise_stream_response_error(response)
-                await self._read_stream_response(response)
+                self._audio_duration += _audio_duration(item)
+                frames.append(item)
+            await self._transcribe_segment(frames)
         except TimeoutError as exc:
             raise APITimeoutError() from exc
         except aiohttp.ClientError as exc:
             raise APIConnectionError("failed to reach Odion STT service") from exc
         finally:
             self._emit_usage()
+
+    async def _transcribe_segment(self, frames: list[Any]) -> None:
+        if not frames:
+            logger.info("STT segment skipped: no audio frames")
+            return
+        combined = rtc.combine_audio_frames(frames)
+        sample_rate = int(getattr(combined, "sample_rate", 16000) or 16000)
+        num_channels = int(getattr(combined, "num_channels", 1) or 1)
+        headers = self._odion_stt._headers(
+            language=self._language,
+            sample_rate=sample_rate,
+            num_channels=num_channels,
+        )
+        payload = self._odion_stt._json_payload(
+            wav_bytes=_wav_bytes_from_audio_frame(combined),
+            language=self._language,
+        )
+
+        logger.info(
+            "STT segment request -> endpoint_url=%s model=%s language=%s audio_seconds=%.3f",
+            self._odion_stt.endpoint,
+            self._odion_stt.model,
+            _display_language(self._language, model=self._odion_stt.model),
+            sum(_audio_duration(frame) for frame in frames),
+        )
+        async with self._odion_stt._ensure_session().post(
+            self._odion_stt.endpoint,
+            json=payload,
+            headers=headers,
+            timeout=aiohttp.ClientTimeout(
+                total=max(60, int(self._conn_options.timeout) + 30),
+                sock_connect=self._conn_options.timeout,
+                sock_read=None,
+            ),
+        ) as response:
+            if response.status >= 400:
+                await self._raise_stream_response_error(response)
+            await self._read_stream_response(response)
 
     def _track_audio_frame(self, frame: Any) -> bytes:
         self._audio_duration += _audio_duration(frame)
@@ -430,6 +484,9 @@ class _OdionSTTStream(stt.RecognizeStream):
         line = line.strip()
         if not line:
             return
+        if line.startswith("event:"):
+            self._sse_event_type = line[6:].strip()
+            return
         if line.startswith("data:"):
             line = line[5:].strip()
         if line == "[DONE]":
@@ -441,6 +498,9 @@ class _OdionSTTStream(stt.RecognizeStream):
             return
         if not isinstance(payload, dict):
             return
+        if self._sse_event_type and not payload.get("type"):
+            payload["type"] = self._sse_event_type
+        self._sse_event_type = ""
         event = _speech_event_from_payload(payload, language=self._language)
         if event is None:
             return

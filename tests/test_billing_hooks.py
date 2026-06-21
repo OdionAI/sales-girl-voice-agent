@@ -158,6 +158,68 @@ class BillingHookTests(unittest.IsolatedAsyncioTestCase):
             userdata["billing_bypass_reason"], "voice_lab_runtime_overrides"
         )
 
+    async def test_aicc_sip_lab_inbound_bypasses_billing_authorization(self) -> None:
+        userdata = {
+            "conversation_id": "conv-1",
+            "session_id": "local-session",
+            "end_user_id": "sip-lab@odion.ai",
+            "entry_surface": "aicc_inbound",
+            "session_owner": "sip_lab",
+        }
+
+        with (
+            patch("main.BILLING_FAIL_CLOSED", True),
+            patch("main.billing_hooks_enabled", return_value=True),
+            patch(
+                "main.authorize_billing_call_start",
+                new=AsyncMock(
+                    return_value={
+                        "authorized": False,
+                        "status": "success",
+                    }
+                ),
+            ) as authorize,
+        ):
+            await main._authorize_billing_start_or_raise(
+                userdata=userdata,
+                business_id="biz-1",
+                call_channel="web",
+            )
+
+        authorize.assert_not_awaited()
+        self.assertTrue(userdata["billing_bypassed"])
+        self.assertEqual(userdata["billing_bypass_reason"], "aicc_sip_lab_session")
+
+    async def test_configured_agent_billing_bypass_skips_authorization(self) -> None:
+        userdata = {
+            "conversation_id": "conv-1",
+            "session_id": "local-session",
+            "end_user_id": "sip-lab@odion.ai",
+            "agent_config_id": "agent-bypass-1",
+        }
+
+        with (
+            patch("main.BILLING_FAIL_CLOSED", True),
+            patch.dict(
+                "os.environ",
+                {"BILLING_BYPASS_AGENT_CONFIG_IDS": "agent-bypass-1,agent-bypass-2"},
+            ),
+            patch("main.billing_hooks_enabled", return_value=True),
+            patch(
+                "main.authorize_billing_call_start",
+                new=AsyncMock(return_value={"authorized": False}),
+            ) as authorize,
+        ):
+            await main._authorize_billing_start_or_raise(
+                userdata=userdata,
+                business_id="biz-1",
+                call_channel="web",
+            )
+
+        authorize.assert_not_awaited()
+        self.assertTrue(userdata["billing_bypassed"])
+        self.assertEqual(userdata["billing_bypass_reason"], "agent_billing_bypass")
+
     async def test_billing_heartbeat_skips_bypassed_sessions(self) -> None:
         userdata = {
             "billing_bypassed": True,

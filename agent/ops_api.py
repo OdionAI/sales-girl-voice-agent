@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import json
 import os
 import logging
 from typing import Any
 from urllib.parse import urlparse
 
 import httpx
+from livekit import api
 
 from .observability import observe, trace_tool, update_observation
 
@@ -32,6 +34,19 @@ KNOWLEDGE_SERVICE_TIMEOUT_SECONDS = float(
 AGENT_CLIENT_ID = os.getenv("AGENT_CLIENT_ID", "sales-girl-internal")
 AGENT_NAME = os.getenv("AGENT_NAME", "sales-girl-agent-en")
 OPS_SHARED_OWNER_EMAIL = str(os.getenv("OPS_SHARED_OWNER_EMAIL") or "").strip().lower()
+AICC_OUTBOUND_TRUNK_NAME = str(
+    os.getenv("AICC_OUTBOUND_TRUNK_NAME", "Huawei AICC Outbound Test") or ""
+).strip()
+AICC_OUTBOUND_TRUNK_ID = str(os.getenv("AICC_OUTBOUND_TRUNK_ID", "") or "").strip()
+AICC_TEST_ACCESS_CODE = str(
+    os.getenv("AICC_TEST_ACCESS_CODE", "02014114559") or ""
+).strip()
+AICC_TRANSFER_TARGET_NUMBER = str(
+    os.getenv("AICC_TRANSFER_TARGET_NUMBER") or AICC_TEST_ACCESS_CODE
+).strip()
+AICC_TRANSFER_FROM_NUMBER = str(
+    os.getenv("AICC_TRANSFER_FROM_NUMBER") or AICC_TEST_ACCESS_CODE
+).strip()
 logger = logging.getLogger(__name__)
 
 
@@ -156,6 +171,31 @@ def _ticket_customer_name_and_contact(
         name = contact
 
     return name, contact
+
+
+def _livekit_api() -> api.LiveKitAPI:
+    return api.LiveKitAPI()
+
+
+async def _resolve_aicc_outbound_trunk() -> api.SIPOutboundTrunkInfo | None:
+    async with _livekit_api() as lkapi:
+        trunks = await lkapi.sip.list_sip_outbound_trunk(
+            api.ListSIPOutboundTrunkRequest()
+        )
+
+    items = list(getattr(trunks, "items", []) or [])
+    if AICC_OUTBOUND_TRUNK_ID:
+        for item in items:
+            if (
+                str(getattr(item, "sip_trunk_id", "") or "").strip()
+                == AICC_OUTBOUND_TRUNK_ID
+            ):
+                return item
+    if AICC_OUTBOUND_TRUNK_NAME:
+        for item in items:
+            if str(getattr(item, "name", "") or "").strip() == AICC_OUTBOUND_TRUNK_NAME:
+                return item
+    return items[0] if len(items) == 1 else None
 
 
 def _normalize_http_url(value: str | None) -> str:
@@ -810,6 +850,96 @@ async def create_ticket(
     return await _request_json(
         "POST", "/v1/tools/tickets/create", json_body=body, metadata=metadata
     )
+
+
+@observe(name="tool.transfer_to_aicc", as_type="tool")
+async def transfer_to_aicc(
+    *,
+    reason_summary: str | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    caller_id = str((metadata or {}).get("end_user_id") or "")
+    _trace("transfer_to_aicc", metadata, user_id=caller_id)
+
+    room_name = str((metadata or {}).get("room_name") or "").strip()
+    if not room_name:
+        return {
+            "status": "failed",
+            "message": "This call is missing room context, so I cannot transfer it yet.",
+        }
+
+    target_number = AICC_TRANSFER_TARGET_NUMBER.strip()
+    from_number = AICC_TRANSFER_FROM_NUMBER.strip() or target_number
+    if not target_number:
+        return {
+            "status": "failed",
+            "message": "The AICC transfer destination is not configured yet.",
+        }
+
+    outbound_trunk = await _resolve_aicc_outbound_trunk()
+    if not outbound_trunk or not str(getattr(outbound_trunk, "sip_trunk_id", "") or "").strip():
+        return {
+            "status": "failed",
+            "message": "The AICC outbound SIP trunk is not configured yet.",
+        }
+
+    session_ref = str((metadata or {}).get("session_id") or "").strip() or "session"
+    turn_ref = str((metadata or {}).get("turn_index") or "").strip() or "0"
+    participant_identity = f"aicc_bridge_{session_ref}_{turn_ref}"
+    participant_metadata = {
+        "direction": "outbound",
+        "target_number": target_number,
+        "owner": "voice_agent",
+    }
+    if reason_summary:
+        participant_metadata["reason_summary"] = str(reason_summary).strip()[:240]
+
+    request = api.CreateSIPParticipantRequest(
+        sip_trunk_id=str(getattr(outbound_trunk, "sip_trunk_id", "") or "").strip(),
+        sip_call_to=target_number,
+        sip_number=from_number,
+        room_name=room_name,
+        participant_identity=participant_identity,
+        participant_name="AICC bridge",
+        display_name="AICC bridge",
+        participant_metadata=json.dumps(participant_metadata),
+        participant_attributes={
+            "call_role": "aicc_bridge",
+            "route_number": target_number,
+        },
+        headers={
+            "X-Odion-Entry-Surface": "voice-agent",
+            "X-Odion-Room-Name": room_name,
+        },
+        play_dialtone=True,
+        hide_phone_number=False,
+    )
+
+    async with _livekit_api() as lkapi:
+        participant = await lkapi.sip.create_sip_participant(request)
+
+    result = {
+        "status": "success",
+        "message": "AICC transfer has started.",
+        "room_name": room_name,
+        "target_number": target_number,
+        "participant_identity": str(
+            getattr(participant, "participant_identity", "") or participant_identity
+        ).strip(),
+        "participant_id": str(getattr(participant, "participant_id", "") or "").strip(),
+        "sip_call_id": str(getattr(participant, "sip_call_id", "") or "").strip(),
+        "outbound_trunk_name": str(getattr(outbound_trunk, "name", "") or "").strip(),
+        "outbound_trunk_id": str(
+            getattr(outbound_trunk, "sip_trunk_id", "") or ""
+        ).strip(),
+    }
+    logger.info(
+        "[TOOL] transfer_to_aicc room=%s target=%s trunk=%s",
+        room_name,
+        target_number,
+        result["outbound_trunk_name"],
+    )
+    return result
 
 
 @observe(name="tool.create_booking", as_type="tool")

@@ -6,8 +6,10 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import aiohttp
 import main
 from agent.odion_tts import (
+    DEFAULT_NG_TTS_BASE_URL,
     DEFAULT_ODION_TTS_BASE_URL,
     DEFAULT_ODION_TTS_STREAM_PATH,
     OdionTTS,
@@ -29,6 +31,22 @@ class OdionTTSTests(unittest.TestCase):
         self.assertEqual(
             engine._opts.endpoint_url,
             f"{DEFAULT_ODION_TTS_BASE_URL}{DEFAULT_ODION_TTS_STREAM_PATH}",
+        )
+
+    def test_ng_tts_base_url_is_default_and_preferred_over_legacy_alias(self) -> None:
+        with patch.dict(
+            "os.environ",
+            {
+                "NG_TTS_BASE_URL": "https://ng-tts.example.test",
+                "ODION_TTS_BASE_URL": "https://eu-tts.example.test",
+            },
+        ):
+            engine = OdionTTS(owner_id="owner-123", voice_id=None)
+
+        self.assertEqual(DEFAULT_ODION_TTS_BASE_URL, DEFAULT_NG_TTS_BASE_URL)
+        self.assertEqual(
+            engine._opts.endpoint_url,
+            f"https://ng-tts.example.test{DEFAULT_ODION_TTS_STREAM_PATH}",
         )
 
     def test_endpoint_uses_full_stream_endpoint_url_exactly(self) -> None:
@@ -79,13 +97,23 @@ class OdionTTSTests(unittest.TestCase):
             engine = OdionTTS(
                 owner_id="owner-123",
                 voice_id=None,
-                base_url=DEFAULT_ODION_TTS_BASE_URL,
+                base_url="https://unlisted-tts.example.test",
             )
 
         self.assertEqual(
             engine._opts.endpoint_url,
-            f"{DEFAULT_ODION_TTS_BASE_URL}{DEFAULT_ODION_TTS_STREAM_PATH}",
+            f"https://unlisted-tts.example.test{DEFAULT_ODION_TTS_STREAM_PATH}",
         )
+
+    def test_locale_language_codes_are_normalized_for_odion_tts(self) -> None:
+        engine = OdionTTS(
+            owner_id="owner-123",
+            voice_id=None,
+            language="en-NG",
+            base_url="http://34.122.84.20/api/v1/tts/stream",
+        )
+
+        self.assertEqual(engine._opts.language, "English")
 
     def test_tts_builder_passes_runtime_model_and_bypasses_experiment_clone(self) -> None:
         with (
@@ -109,7 +137,7 @@ class OdionTTSTests(unittest.TestCase):
 
         self.assertIsInstance(engine, OdionTTS)
         self.assertEqual(engine._opts.endpoint_url, "http://34.122.84.20/api/v1/tts/stream")
-        self.assertEqual(engine._opts.model, "odion-pidgin-tts")
+        self.assertEqual(engine._opts.model_profile, "odion-pidgin-tts")
         self.assertEqual(engine._opts.language, "Pidgin")
         self.assertEqual(engine._opts.mode, "default_voice")
         self.assertIsNone(engine._opts.voice_id)
@@ -166,6 +194,33 @@ class OdionTTSTests(unittest.TestCase):
         self.assertEqual(
             engine._opts.endpoint_url,
             "http://34.122.84.20/api/v1/tts/stream",
+        )
+
+    def test_runtime_overrides_preserve_tts_api_key(self) -> None:
+        metadata = json.dumps(
+            {
+                "runtime_overrides": {
+                    "tts_base_url": "https://nockao1yom19xv.api.runpod.ai/api/v1/tts/stream",
+                    "tts_api_key": "runpod-key",
+                }
+            }
+        )
+        ctx = SimpleNamespace(
+            room=SimpleNamespace(
+                remote_participants={
+                    "user": SimpleNamespace(metadata=metadata),
+                }
+            )
+        )
+
+        overrides = main._extract_tts_overrides_from_ctx(ctx)
+
+        self.assertEqual(
+            overrides["runtime_overrides"],
+            {
+                "tts_base_url": "https://nockao1yom19xv.api.runpod.ai/api/v1/tts/stream",
+                "tts_api_key": "runpod-key",
+            },
         )
 
 
@@ -230,6 +285,12 @@ class _FakeTTSContent:
             yield chunk
 
 
+class _IncompleteTTSContent:
+    async def iter_chunked(self, size):  # noqa: ANN001, ARG002
+        yield b"\x00" * 16
+        raise aiohttp.ClientPayloadError("response payload is not completed")
+
+
 class _FakeTTSResponse:
     status = 200
 
@@ -238,6 +299,7 @@ class _FakeTTSResponse:
             "x-request-id": "tts-req",
             "x-sample-rate": "24000",
             "x-channels": "1",
+            "x-audio-format": "pcm_s16le",
         }
         self.content = _FakeTTSContent(chunks)
 
@@ -246,6 +308,12 @@ class _FakeTTSResponse:
 
     async def __aexit__(self, exc_type, exc, tb) -> None:  # noqa: ANN001
         return None
+
+
+class _IncompleteTTSResponse(_FakeTTSResponse):
+    def __init__(self) -> None:
+        super().__init__()
+        self.content = _IncompleteTTSContent()
 
 
 class _FakeTTSSession:
@@ -282,6 +350,38 @@ class _FallbackThenSuccessSession:
         return None
 
 
+class _FallbackThenIncompleteSuccessSession:
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+        self._call_count = 0
+
+    def post(self, url, **kwargs):  # noqa: ANN001
+        self._call_count += 1
+        self.calls.append({"url": url, **kwargs})
+        if self._call_count == 1:
+            return _Fake500TTSResponse()
+        return _IncompleteTTSResponse()
+
+    async def close(self) -> None:
+        return None
+
+
+class _ServerErrorThenSuccessSession:
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+        self._call_count = 0
+
+    def post(self, url, **kwargs):  # noqa: ANN001
+        self._call_count += 1
+        self.calls.append({"url": url, **kwargs})
+        if self._call_count == 1:
+            return _Fake500TTSResponse()
+        return _FakeTTSResponse()
+
+    async def close(self) -> None:
+        return None
+
+
 class _Fake404TTSResponse:
     status = 404
     headers = {}
@@ -296,37 +396,152 @@ class _Fake404TTSResponse:
         return "voice_id not found"
 
 
+class _Fake500TTSResponse:
+    status = 500
+    headers = {}
+
+    async def __aenter__(self) -> "_Fake500TTSResponse":
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb) -> None:  # noqa: ANN001
+        return None
+
+    async def text(self) -> str:
+        return "Internal Server Error"
+
+
 class _FakeAudioEmitter:
     def initialize(self, **kwargs) -> None:  # noqa: ANN001
         self.initialized = kwargs
-        self.pushed: list[bytes] = []
+        self.data_chunks = []
+        self.pushed = self.data_chunks
 
     def push(self, data) -> None:  # noqa: ANN001
         self.data = data
-        self.pushed.append(data)
+        self.data_chunks.append(data)
 
     def flush(self) -> None:
         self.flushed = True
 
+    def end_input(self) -> None:
+        self.ended = True
+
 
 class OdionTTSPayloadTests(unittest.IsolatedAsyncioTestCase):
-    async def test_tts_request_posts_runtime_model(self) -> None:
+    async def test_tts_request_posts_runtime_model_profile(self) -> None:
         fake_session = _FakeTTSSession()
         engine = OdionTTS(
             owner_id="owner-123",
             voice_id=None,
             language="Pidgin",
-            model="odion-pidgin-tts",
+            model="pidgin_custom",
             base_url="http://34.122.84.20/api/v1/tts/stream",
             http_session=fake_session,
         )
 
         stream = engine.synthesize("How far")
-        await stream._run(_FakeAudioEmitter())
+        emitter = _FakeAudioEmitter()
+        await stream._run(emitter)
 
         self.assertEqual(fake_session.calls[0]["url"], "http://34.122.84.20/api/v1/tts/stream")
         self.assertEqual(fake_session.calls[0]["json"]["language"], "Pidgin")
-        self.assertEqual(fake_session.calls[0]["json"]["model"], "odion-pidgin-tts")
+        self.assertEqual(fake_session.calls[0]["json"]["model_profile"], "pidgin_custom")
+        self.assertNotIn("model", fake_session.calls[0]["json"])
+        self.assertEqual(emitter.initialized["mime_type"], "audio/pcm")
+        self.assertEqual(emitter.initialized["frame_size_ms"], 200)
+        self.assertEqual(emitter.initialized["sample_rate"], 24000)
+        self.assertEqual(emitter.initialized["num_channels"], 1)
+        self.assertEqual(emitter.data_chunks, [b"\x00" * 16])
+
+    async def test_tts_request_includes_bearer_token_for_runpod_endpoint(self) -> None:
+        fake_session = _FakeTTSSession()
+        engine = OdionTTS(
+            owner_id="owner-123",
+            voice_id=None,
+            language="English",
+            base_url="https://nockao1yom19xv.api.runpod.ai/api/v1/tts/stream",
+            api_key="runpod-secret",
+            http_session=fake_session,
+        )
+
+        stream = engine.synthesize("Hello there")
+        await stream._run(_FakeAudioEmitter())
+
+        self.assertEqual(
+            fake_session.calls[0]["headers"]["Authorization"],
+            "Bearer runpod-secret",
+        )
+
+    async def test_missing_clone_switches_remaining_session_to_default_voice(self) -> None:
+        fake_session = _FallbackThenSuccessSession()
+        engine = OdionTTS(
+            owner_id="mavinomichael@gmail.com",
+            voice_id="46f5ac744a504023b93c6dd8ddd46ac6",
+            language="English",
+            seed=0,
+            mode="cloned_voice",
+            base_url="http://34.122.84.20/api/v1/tts/stream",
+            http_session=fake_session,
+        )
+
+        first_stream = engine.synthesize("First reply")
+        await first_stream._run(_FakeAudioEmitter())
+        second_stream = engine.synthesize("Second reply")
+        await second_stream._run(_FakeAudioEmitter())
+
+        self.assertEqual(fake_session.calls[0]["json"]["voice_id"], "46f5ac744a504023b93c6dd8ddd46ac6")
+        self.assertEqual(fake_session.calls[0]["json"]["seed"], 0)
+        self.assertNotIn("voice_id", fake_session.calls[1]["json"])
+        self.assertEqual(fake_session.calls[1]["json"]["seed"], 0)
+        self.assertNotIn("voice_id", fake_session.calls[2]["json"])
+        self.assertEqual(fake_session.calls[2]["json"]["seed"], 0)
+        self.assertIsNone(engine._opts.voice_id)
+        self.assertEqual(engine._opts.mode, "default_voice")
+
+    async def test_clone_server_error_switches_remaining_session_to_default_voice(self) -> None:
+        fake_session = _ServerErrorThenSuccessSession()
+        engine = OdionTTS(
+            owner_id="mavinomichael@gmail.com",
+            voice_id="46f5ac744a504023b93c6dd8ddd46ac6",
+            language="English",
+            seed=0,
+            mode="cloned_voice",
+            base_url="http://34.122.84.20/api/v1/tts/stream",
+            http_session=fake_session,
+        )
+
+        first_stream = engine.synthesize("First reply")
+        await first_stream._run(_FakeAudioEmitter())
+        second_stream = engine.synthesize("Second reply")
+        await second_stream._run(_FakeAudioEmitter())
+
+        self.assertEqual(fake_session.calls[0]["json"]["voice_id"], "46f5ac744a504023b93c6dd8ddd46ac6")
+        self.assertNotIn("voice_id", fake_session.calls[1]["json"])
+        self.assertNotIn("voice_id", fake_session.calls[2]["json"])
+        self.assertIsNone(engine._opts.voice_id)
+        self.assertEqual(engine._opts.mode, "default_voice")
+
+    async def test_fallback_uses_received_audio_when_default_stream_closes_early(self) -> None:
+        fake_session = _FallbackThenIncompleteSuccessSession()
+        engine = OdionTTS(
+            owner_id="mavinomichael@gmail.com",
+            voice_id="46f5ac744a504023b93c6dd8ddd46ac6",
+            language="English",
+            seed=0,
+            mode="cloned_voice",
+            base_url="http://34.122.84.20/api/v1/tts/stream",
+            http_session=fake_session,
+        )
+
+        stream = engine.synthesize("First reply")
+        emitter = _FakeAudioEmitter()
+        await stream._run(emitter)
+
+        self.assertEqual(fake_session.calls[0]["json"]["voice_id"], "46f5ac744a504023b93c6dd8ddd46ac6")
+        self.assertNotIn("voice_id", fake_session.calls[1]["json"])
+        self.assertEqual(emitter.data_chunks, [b"\x00" * 16])
+        self.assertTrue(emitter.ended)
+        self.assertIsNone(engine._opts.voice_id)
 
     async def test_tts_initializes_livekit_with_default_pcm_frames(self) -> None:
         fake_session = _FakeTTSSession()
