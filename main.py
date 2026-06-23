@@ -13,8 +13,20 @@ from dotenv import load_dotenv
 # Load env immediately so API clients can read the correct base URLs
 load_dotenv()
 
-from livekit.agents import AgentServer, AgentSession, JobContext, cli, room_io
-from livekit.plugins import deepgram, google
+from livekit.agents import (
+    APIConnectOptions,
+    NOT_GIVEN,
+    AgentServer,
+    AgentSession,
+    JobContext,
+    cli,
+    room_io,
+)
+from livekit.agents import llm, stt
+from livekit.agents._exceptions import APIConnectionError, APIStatusError
+from livekit.agents.llm import LLMStream
+from livekit.agents.llm.tool_context import find_function_tools
+from livekit.plugins import deepgram, google, groq, silero
 
 from agent.conversation_memory import (
     append_message,
@@ -42,6 +54,7 @@ from agent.billing_hooks import (
     send_call_heartbeat as send_billing_call_heartbeat,
 )
 from agent.agent_config_api import get_runtime_config as get_agent_runtime_config
+from agent.dynamic_tools import build_dynamic_http_tools
 from agent.ops_api import (
     create_ticket as ops_create_ticket,
     get_account_overview as ops_get_account_overview,
@@ -160,6 +173,11 @@ server = AgentServer(
     port=AGENT_PORT,
 )
 init_store()
+BUILTIN_RUNTIME_TOOL_NAMES = frozenset(
+    str(getattr(tool, "info").name or "").strip()
+    for tool in find_function_tools(SalonAgent)
+    if getattr(getattr(tool, "info", None), "name", None)
+)
 
 
 class UsageMeter:
@@ -513,6 +531,11 @@ def _billing_session_id(userdata: dict[str, Any]) -> str:
 
 
 def _billing_bypass_reason(userdata: dict[str, Any], call_channel: str) -> str:
+    # Platform-owned help/guide sessions are funded by the platform and never
+    # charged to the viewing business wallet, so callers are never blocked by
+    # low airtime when asking the SalesGirl guide for help.
+    if str(userdata.get("session_kind") or "").strip().lower() == "help":
+        return "platform_help_session"
     runtime_overrides = userdata.get("runtime_overrides")
     if (
         call_channel == "web"
@@ -520,6 +543,18 @@ def _billing_bypass_reason(userdata: dict[str, Any], call_channel: str) -> str:
         and bool(runtime_overrides)
     ):
         return "voice_lab_runtime_overrides"
+    entry_surface = str(userdata.get("entry_surface") or "").strip().lower()
+    session_owner = str(userdata.get("session_owner") or "").strip().lower()
+    if entry_surface == "aicc_inbound" or session_owner == "sip_lab":
+        return "aicc_sip_lab_session"
+    bypass_agent_ids = {
+        item.strip()
+        for item in str(os.getenv("BILLING_BYPASS_AGENT_CONFIG_IDS") or "").split(",")
+        if item.strip()
+    }
+    agent_config_id = str(userdata.get("agent_config_id") or "").strip()
+    if agent_config_id and agent_config_id in bypass_agent_ids:
+        return "agent_billing_bypass"
     return ""
 
 
@@ -1044,8 +1079,8 @@ TURN_MIN_INTERRUPTION_DURATION = _float_env(
 )
 
 GOOGLE_LLM_MODEL_DEFAULT = (
-    str(os.getenv("GOOGLE_LLM_MODEL_DEFAULT") or "gemini-2.0-flash").strip()
-    or "gemini-2.0-flash"
+    str(os.getenv("GOOGLE_LLM_MODEL_DEFAULT") or "gemini-3-flash-preview").strip()
+    or "gemini-3-flash-preview"
 )
 GOOGLE_LLM_MODEL_EN = (
     str(os.getenv("GOOGLE_LLM_MODEL_EN") or GOOGLE_LLM_MODEL_DEFAULT).strip()
@@ -1055,6 +1090,352 @@ GOOGLE_LLM_MODEL_FR = (
     str(os.getenv("GOOGLE_LLM_MODEL_FR") or GOOGLE_LLM_MODEL_DEFAULT).strip()
     or GOOGLE_LLM_MODEL_DEFAULT
 )
+GOOGLE_LLM_BACKUP_MODEL_DEFAULT = (
+    str(os.getenv("GOOGLE_LLM_BACKUP_MODEL_DEFAULT") or "gemini-3.1-flash-lite").strip()
+    or "gemini-3.1-flash-lite"
+)
+GOOGLE_LLM_BACKUP_MODEL_EN = (
+    str(os.getenv("GOOGLE_LLM_BACKUP_MODEL_EN") or GOOGLE_LLM_BACKUP_MODEL_DEFAULT).strip()
+    or GOOGLE_LLM_BACKUP_MODEL_DEFAULT
+)
+GOOGLE_LLM_BACKUP_MODEL_FR = (
+    str(os.getenv("GOOGLE_LLM_BACKUP_MODEL_FR") or GOOGLE_LLM_BACKUP_MODEL_DEFAULT).strip()
+    or GOOGLE_LLM_BACKUP_MODEL_DEFAULT
+)
+
+LLM_PROVIDER = str(os.getenv("LLM_PROVIDER") or "google").strip().lower() or "google"
+GROQ_LLM_MODEL_DEFAULT = (
+    str(
+        os.getenv("GROQ_LLM_MODEL_DEFAULT")
+        or "meta-llama/llama-4-scout-17b-16e-instruct"
+    ).strip()
+    or "meta-llama/llama-4-scout-17b-16e-instruct"
+)
+GROQ_LLM_MODEL_EN = (
+    str(os.getenv("GROQ_LLM_MODEL_EN") or GROQ_LLM_MODEL_DEFAULT).strip()
+    or GROQ_LLM_MODEL_DEFAULT
+)
+GROQ_LLM_MODEL_FR = (
+    str(os.getenv("GROQ_LLM_MODEL_FR") or GROQ_LLM_MODEL_DEFAULT).strip()
+    or GROQ_LLM_MODEL_DEFAULT
+)
+GROQ_LLM_BACKUP_MODEL_DEFAULT = (
+    str(os.getenv("GROQ_LLM_BACKUP_MODEL_DEFAULT") or "llama-3.3-70b-versatile").strip()
+    or "llama-3.3-70b-versatile"
+)
+GROQ_LLM_BACKUP_MODEL_EN = (
+    str(os.getenv("GROQ_LLM_BACKUP_MODEL_EN") or GROQ_LLM_BACKUP_MODEL_DEFAULT).strip()
+    or GROQ_LLM_BACKUP_MODEL_DEFAULT
+)
+GROQ_LLM_BACKUP_MODEL_FR = (
+    str(os.getenv("GROQ_LLM_BACKUP_MODEL_FR") or GROQ_LLM_BACKUP_MODEL_DEFAULT).strip()
+    or GROQ_LLM_BACKUP_MODEL_DEFAULT
+)
+
+
+def _is_llm_model_unavailable_error(error: Exception) -> bool:
+    if not isinstance(error, APIStatusError):
+        return False
+    body = str(getattr(error, "body", "") or error).lower()
+    return error.status_code == 404 and (
+        "no longer available" in body
+        or "model" in body and "not available" in body
+        or "model not found" in body
+        or "not_found" in body
+    )
+
+
+def _is_google_model_unavailable_error(error: Exception) -> bool:
+    return _is_llm_model_unavailable_error(error)
+
+
+def _groq_llm_kwargs_for_model(model: str) -> dict[str, Any]:
+    lowered = str(model or "").strip().lower()
+    if "qwen" in lowered:
+        return {"reasoning_effort": "none"}
+    return {}
+
+
+class FallbackGoogleLLM(llm.LLM):
+    def __init__(
+        self,
+        *,
+        primary_model: str,
+        backup_model: str = "",
+    ) -> None:
+        super().__init__()
+        self._primary_model = str(primary_model or "").strip()
+        self._backup_model = str(backup_model or "").strip()
+        self._active_model = self._primary_model
+        self._primary = google.LLM(model=self._primary_model)
+        self._backup = (
+            google.LLM(model=self._backup_model)
+            if self._backup_model and self._backup_model != self._primary_model
+            else None
+        )
+
+    @property
+    def model(self) -> str:
+        return self._active_model or self._primary_model or "unknown"
+
+    @property
+    def provider(self) -> str:
+        return "google"
+
+    def prewarm(self) -> None:
+        self._primary.prewarm()
+        if self._backup:
+            self._backup.prewarm()
+
+    async def aclose(self) -> None:
+        await self._primary.aclose()
+        if self._backup:
+            await self._backup.aclose()
+
+    def chat(
+        self,
+        *,
+        chat_ctx: llm.ChatContext,
+        tools: list[llm.Tool] | None = None,
+        conn_options: APIConnectOptions = APIConnectOptions(),
+        parallel_tool_calls=NOT_GIVEN,
+        tool_choice=NOT_GIVEN,
+        response_format=NOT_GIVEN,
+        extra_kwargs=NOT_GIVEN,
+    ) -> LLMStream:
+        return _FallbackGoogleLLMStream(
+            self,
+            chat_ctx=chat_ctx,
+            tools=tools or [],
+            conn_options=conn_options,
+            parallel_tool_calls=parallel_tool_calls,
+            tool_choice=tool_choice,
+            response_format=response_format,
+            extra_kwargs=extra_kwargs,
+        )
+
+
+class _FallbackGoogleLLMStream(llm.LLMStream):
+    def __init__(
+        self,
+        llm_v: FallbackGoogleLLM,
+        *,
+        chat_ctx: llm.ChatContext,
+        tools: list[llm.Tool],
+        conn_options,
+        parallel_tool_calls,
+        tool_choice,
+        response_format,
+        extra_kwargs,
+    ) -> None:
+        super().__init__(llm_v, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
+        self._routing_llm = llm_v
+        self._parallel_tool_calls = parallel_tool_calls
+        self._tool_choice = tool_choice
+        self._response_format = response_format
+        self._extra_kwargs = extra_kwargs
+
+    async def _run(self) -> None:
+        attempts: list[tuple[google.LLM, str]] = [
+            (self._routing_llm._primary, self._routing_llm._primary_model)
+        ]
+        if self._routing_llm._backup:
+            attempts.append((self._routing_llm._backup, self._routing_llm._backup_model))
+
+        last_error: Exception | None = None
+        for index, (provider_llm, model_name) in enumerate(attempts):
+            self._routing_llm._active_model = model_name
+            stream = provider_llm.chat(
+                chat_ctx=self._chat_ctx,
+                tools=self._tools,
+                conn_options=self._conn_options,
+                parallel_tool_calls=self._parallel_tool_calls,
+                tool_choice=self._tool_choice,
+                response_format=self._response_format,
+                extra_kwargs=self._extra_kwargs,
+            )
+            try:
+                async with stream:
+                    async for chunk in stream:
+                        self._event_ch.send_nowait(chunk)
+                return
+            except Exception as exc:  # noqa: BLE001
+                last_error = exc
+                has_backup = index + 1 < len(attempts)
+                if has_backup and _is_google_model_unavailable_error(exc):
+                    logger.warning(
+                        "Primary Gemini model unavailable; switching to backup model. primary=%s backup=%s error=%s",
+                        model_name,
+                        attempts[index + 1][1],
+                        exc,
+                    )
+                    continue
+                raise
+
+        if last_error is not None:
+            raise last_error
+        raise APIConnectionError("No Gemini model could be selected for this request.")
+
+
+class FallbackGroqLLM(llm.LLM):
+    def __init__(
+        self,
+        *,
+        primary_model: str,
+        backup_model: str = "",
+    ) -> None:
+        super().__init__()
+        self._primary_model = str(primary_model or "").strip()
+        self._backup_model = str(backup_model or "").strip()
+        self._active_model = self._primary_model
+        self._primary = groq.LLM(
+            model=self._primary_model,
+            **_groq_llm_kwargs_for_model(self._primary_model),
+        )
+        self._backup = (
+            groq.LLM(
+                model=self._backup_model,
+                **_groq_llm_kwargs_for_model(self._backup_model),
+            )
+            if self._backup_model and self._backup_model != self._primary_model
+            else None
+        )
+
+    @property
+    def model(self) -> str:
+        return self._active_model or self._primary_model or "unknown"
+
+    @property
+    def provider(self) -> str:
+        return "groq"
+
+    def prewarm(self) -> None:
+        self._primary.prewarm()
+        if self._backup:
+            self._backup.prewarm()
+
+    async def aclose(self) -> None:
+        await self._primary.aclose()
+        if self._backup:
+            await self._backup.aclose()
+
+    def chat(
+        self,
+        *,
+        chat_ctx: llm.ChatContext,
+        tools: list[llm.Tool] | None = None,
+        conn_options: APIConnectOptions = APIConnectOptions(),
+        parallel_tool_calls=NOT_GIVEN,
+        tool_choice=NOT_GIVEN,
+        response_format=NOT_GIVEN,
+        extra_kwargs=NOT_GIVEN,
+    ) -> LLMStream:
+        return _FallbackGroqLLMStream(
+            self,
+            chat_ctx=chat_ctx,
+            tools=tools or [],
+            conn_options=conn_options,
+            parallel_tool_calls=parallel_tool_calls,
+            tool_choice=tool_choice,
+            response_format=response_format,
+            extra_kwargs=extra_kwargs,
+        )
+
+
+class _FallbackGroqLLMStream(llm.LLMStream):
+    def __init__(
+        self,
+        llm_v: FallbackGroqLLM,
+        *,
+        chat_ctx: llm.ChatContext,
+        tools: list[llm.Tool],
+        conn_options,
+        parallel_tool_calls,
+        tool_choice,
+        response_format,
+        extra_kwargs,
+    ) -> None:
+        super().__init__(llm_v, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
+        self._routing_llm = llm_v
+        self._parallel_tool_calls = parallel_tool_calls
+        self._tool_choice = tool_choice
+        self._response_format = response_format
+        self._extra_kwargs = extra_kwargs
+
+    async def _run(self) -> None:
+        attempts: list[tuple[groq.LLM, str]] = [
+            (self._routing_llm._primary, self._routing_llm._primary_model)
+        ]
+        if self._routing_llm._backup:
+            attempts.append((self._routing_llm._backup, self._routing_llm._backup_model))
+
+        last_error: Exception | None = None
+        for index, (provider_llm, model_name) in enumerate(attempts):
+            self._routing_llm._active_model = model_name
+            stream = provider_llm.chat(
+                chat_ctx=self._chat_ctx,
+                tools=self._tools,
+                conn_options=self._conn_options,
+                parallel_tool_calls=self._parallel_tool_calls,
+                tool_choice=self._tool_choice,
+                response_format=self._response_format,
+                extra_kwargs=self._extra_kwargs,
+            )
+            try:
+                async with stream:
+                    async for chunk in stream:
+                        self._event_ch.send_nowait(chunk)
+                return
+            except Exception as exc:  # noqa: BLE001
+                last_error = exc
+                has_backup = index + 1 < len(attempts)
+                if has_backup and _is_llm_model_unavailable_error(exc):
+                    logger.warning(
+                        "Primary Groq model unavailable; switching to backup model. primary=%s backup=%s error=%s",
+                        model_name,
+                        attempts[index + 1][1],
+                        exc,
+                    )
+                    continue
+                raise
+
+        if last_error is not None:
+            raise last_error
+        raise APIConnectionError("No Groq model could be selected for this request.")
+
+
+def _build_llm_for_language(*, language: str) -> llm.LLM:
+    lang = str(language or "").strip().lower()
+    provider = LLM_PROVIDER
+    if provider == "groq":
+        primary_model = GROQ_LLM_MODEL_FR if lang == "fr" else GROQ_LLM_MODEL_EN
+        backup_model = GROQ_LLM_BACKUP_MODEL_FR if lang == "fr" else GROQ_LLM_BACKUP_MODEL_EN
+        logger.info(
+            "Using Groq LLM for %s session: primary=%s backup=%s",
+            "French" if lang == "fr" else "English",
+            primary_model,
+            backup_model,
+        )
+        return FallbackGroqLLM(
+            primary_model=primary_model,
+            backup_model=backup_model,
+        )
+
+    primary_model = GOOGLE_LLM_MODEL_FR if lang == "fr" else GOOGLE_LLM_MODEL_EN
+    backup_model = (
+        GOOGLE_LLM_BACKUP_MODEL_FR if lang == "fr" else GOOGLE_LLM_BACKUP_MODEL_EN
+    )
+    logger.info(
+        "Using Google LLM for %s session: primary=%s backup=%s",
+        "French" if lang == "fr" else "English",
+        primary_model,
+        backup_model,
+    )
+    return FallbackGoogleLLM(
+        primary_model=primary_model,
+        backup_model=backup_model,
+    )
+
 
 def _normalize_business_id(value: str | None) -> str:
     raw = str(value or "").strip()
@@ -1192,6 +1573,26 @@ def _room_name_from_ctx(ctx: JobContext) -> str:
     return str(getattr(getattr(ctx, "room", None), "name", "") or "").strip()
 
 
+def _job_metadata_from_ctx(ctx: JobContext) -> dict[str, Any]:
+    job = getattr(ctx, "job", None)
+    candidates = [
+        getattr(job, "metadata", None),
+        getattr(getattr(job, "agent_dispatch", None), "metadata", None),
+        getattr(getattr(job, "dispatch", None), "metadata", None),
+    ]
+    for raw in candidates:
+        metadata_raw = str(raw or "").strip()
+        if not metadata_raw:
+            continue
+        try:
+            payload = json.loads(metadata_raw)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict):
+            return payload
+    return {}
+
+
 def _stable_id(value: str, *, prefix: str, max_len: int) -> str:
     raw = str(value or "").strip()
     if not raw:
@@ -1243,6 +1644,7 @@ _RUNTIME_OVERRIDE_KEYS = (
     "tts_provider",
     "tts_model",
     "tts_base_url",
+    "tts_api_key",
 )
 
 
@@ -1293,6 +1695,41 @@ def _extract_tts_overrides_from_ctx(ctx: JobContext) -> dict[str, Any]:
         if runtime_overrides:
             overrides["runtime_overrides"] = runtime_overrides
         return overrides
+    return {}
+
+
+def _extract_session_extras_from_ctx(ctx: JobContext) -> dict[str, Any]:
+    """Read optional session-scoped extras from participant metadata.
+
+    Used by platform-owned shared agents (for example the Help Center guide)
+    that live on one business but must be aware of the *viewing* account.
+    ``guest_context`` is a pre-formatted, human-readable block injected into the
+    agent instructions; ``session_kind`` marks platform sessions (for example
+    ``help``) that should not bill the room's business wallet.
+    """
+    room = getattr(ctx, "room", None)
+    participants = getattr(room, "remote_participants", None)
+    if not participants:
+        return {}
+
+    values = participants.values() if hasattr(participants, "values") else participants
+    for participant in values:
+        metadata_raw = str(getattr(participant, "metadata", "") or "").strip()
+        if not metadata_raw:
+            continue
+        try:
+            payload = json.loads(metadata_raw)
+        except json.JSONDecodeError:
+            continue
+        extras: dict[str, Any] = {}
+        guest_context = str(payload.get("guest_context") or "").strip()
+        if guest_context:
+            extras["guest_context"] = guest_context[:4000]
+        session_kind = str(payload.get("session_kind") or "").strip().lower()
+        if session_kind:
+            extras["session_kind"] = session_kind
+        if extras:
+            return extras
     return {}
 
 
@@ -1349,6 +1786,7 @@ def _participant_identity_from_ctx(
             "tts_provider",
             "tts_model",
             "tts_base_url",
+            "tts_api_key",
         ):
             value = str(payload.get(key) or "").strip()
             if value:
@@ -1449,6 +1887,7 @@ def _participant_identity_from_ctx(
 
 async def _init_session_userdata(ctx: JobContext, language: str) -> dict[str, Any]:
     room_name = _room_name_from_ctx(ctx)
+    job_metadata = _job_metadata_from_ctx(ctx)
     stable_session_id = _stable_id(room_name, prefix="sid", max_len=120)
     (
         end_user_id,
@@ -1535,6 +1974,9 @@ async def _init_session_userdata(ctx: JobContext, language: str) -> dict[str, An
         "end_user_name": end_user_name,
         "tts_endpoint": tts_endpoint,
         "runtime_overrides": runtime_overrides,
+        "entry_surface": str(job_metadata.get("entry_surface") or "").strip(),
+        "session_owner": str(job_metadata.get("owner") or "").strip(),
+        "route_number": str(job_metadata.get("route_number") or "").strip(),
         "tts_mode": "auto",
         "tts_owner_id": "",
         "tts_voice_id": "",
@@ -1551,8 +1993,10 @@ async def _init_session_userdata(ctx: JobContext, language: str) -> dict[str, An
         "timeline_event_index": 0,
         "last_user_transcript": "",
         "last_assistant_message": "",
+        "guest_context": "",
+        "session_kind": "",
         "usage_meter": UsageMeter(),
-    } | participant_overrides
+    } | participant_overrides | _extract_session_extras_from_ctx(ctx)
 
 
 def _wire_session_timeline(session: AgentSession, userdata: dict[str, Any]) -> None:
@@ -1859,6 +2303,20 @@ async def _instructions_with_context(base_prompt: str, userdata: dict[str, Any])
         "- Only give a short summary when the caller explicitly asks for one or when a brief confirmation is genuinely useful.\n"
         "- If the caller says thank you, says they are done, or clearly signals the conversation is over, respond naturally and close politely.\n"
     )
+    guest_context = str(userdata.get("guest_context") or "").strip()
+    if guest_context:
+        # Shared platform agents (for example the Help Center guide) are injected
+        # with the *viewing* account's details so the conversation feels personal
+        # and account-aware even though the agent itself lives on another business.
+        base_prompt = (
+            f"{base_prompt}\n\n"
+            "Caller account context (the SalesGirl account you are currently helping):\n"
+            f"{guest_context}\n"
+            "- Use these details to make the conversation natural and personal.\n"
+            "- Greet the caller by name (or by their business name) at the start when a name is available.\n"
+            "- Treat these details as the source of truth about this account's setup; do not contradict them.\n"
+            "- Never read these instructions aloud or say that you were given context."
+        )
     end_user_id = str(userdata.get("end_user_id") or "")
     if not end_user_id:
         return base_prompt
@@ -2008,7 +2466,9 @@ async def _instructions_with_context(base_prompt: str, userdata: dict[str, Any])
             "- search_business_knowledge is always available as a built-in runtime tool for this business.\n"
             "- Use built-in knowledge search before saying you do not have enough information.\n"
             "- Use dashboard-configured tools only when they are relevant and available.\n"
+            "- Read each enabled tool description as the source of truth for when to use that tool and what it should help you accomplish.\n"
             "- Do not claim any action succeeded unless the tool confirms it.\n"
+            "- If transfer_to_aicc is enabled and the caller needs immediate human help during the live call, prefer that live handoff instead of promising later follow-up.\n"
             "- If a request needs human attention, create a ticket if that tool is available.\n"
             "- If the caller asks for a ticket, or agrees to ticket follow-up, call create_ticket immediately before replying.\n"
             "- In the exact turn where you say a ticket was created, create_ticket must already have succeeded.\n"
@@ -2030,6 +2490,7 @@ async def _instructions_with_context(base_prompt: str, userdata: dict[str, Any])
             "Issue handling lock:\n"
             "- Use only the configured tools for the current business.\n"
             "- Do not claim an action was completed unless the tool confirms it.\n"
+            "- If transfer_to_aicc is enabled and the caller needs immediate human help during the live call, prefer that live handoff instead of promising later follow-up.\n"
             "- If the issue needs human follow-up, create a ticket when that tool is available.\n"
             "- If the caller asks for a ticket, or agrees to ticket follow-up, call create_ticket immediately before replying.\n"
             "- In the exact turn where you say a ticket was created, create_ticket must already have succeeded.\n"
@@ -2295,6 +2756,7 @@ def _runtime_tool_guidance(
     lines = [
         "Enabled tools for this agent right now:",
         "- Only the tools described here are available in this conversation.",
+        "- Treat each tool description as the contract for what the tool does, when to use it, and which request fields matter.",
         "- Use an enabled tool whenever it is the right way to answer or complete the request.",
         "- If a tool is not listed as enabled here, do not act as if you can use it.",
     ]
@@ -2310,6 +2772,16 @@ def _runtime_tool_guidance(
     else:
         lines.append(
             "- create_ticket is not enabled. Do not say a support ticket was created."
+        )
+
+    if "transfer_to_aicc" in enabled_names:
+        desc = _tool_description(by_name["transfer_to_aicc"])
+        lines.append(
+            f"- transfer_to_aicc is enabled. Use it when the caller asks for a human, or when the request cannot be safely resolved during this live call after you have used business knowledge first. Before using it, tell the caller naturally that you are connecting them to a colleague and ask them to hold briefly. Do not mention tools, SIP, routing, or internal systems. {desc}".strip()
+        )
+    else:
+        lines.append(
+            "- transfer_to_aicc is not enabled. Do not say you are transferring the live call to a human agent."
         )
 
     if business_use_case == "hotel":
@@ -2378,6 +2850,7 @@ def _runtime_tool_guidance(
         if name
         not in {
             "create_ticket",
+            "transfer_to_aicc",
             "create_booking",
             "create_order",
             "fetch_room_availability",
@@ -2413,8 +2886,8 @@ def _detect_business_use_case(
     tools = cfg.get("tools")
     tool_names = {
         str(tool.get("name") or "").strip().lower()
-        for tool in tools
-        if isinstance(tools, list) and isinstance(tool, dict)
+        for tool in (tools if isinstance(tools, list) else [])
+        if isinstance(tool, dict)
     }
     fidelity_tool_names = {
         "account_overview",
@@ -2647,6 +3120,7 @@ def _effective_base_prompt(
             "- search_business_knowledge is a built-in runtime tool for every agent, even when it is not part of the dashboard-configured tool list.\n"
             "- Use business knowledge search before saying you do not have enough information.\n"
             "- Treat dashboard-configured tools as additional tools, not as the full list of built-in runtime capabilities.\n"
+            "- If transfer_to_aicc is enabled and the caller needs a live human handoff, tell them naturally that you are connecting them, then use that tool.\n"
         )
 
     incompatible_tokens = (
@@ -2993,11 +3467,12 @@ def _build_session_for_language(
 ) -> AgentSession:
     if stt_engine is None:
         stt_engine = _build_stt_engine_for_language(language=language, userdata=userdata)
+    session_llm = _build_llm_for_language(language=language)
     if language == "fr":
         return AgentSession(
             stt=stt_engine,
             tts=tts_engine or deepgram.TTS(model="aura-2-agathe-fr"),
-            llm=google.LLM(model=GOOGLE_LLM_MODEL_FR),
+            llm=session_llm,
             userdata=userdata,
             min_endpointing_delay=TURN_MIN_ENDPOINTING_DELAY,
             max_endpointing_delay=TURN_MAX_ENDPOINTING_DELAY,
@@ -3007,7 +3482,7 @@ def _build_session_for_language(
     return AgentSession(
         stt=stt_engine,
         tts=tts_engine,
-        llm=google.LLM(model=GOOGLE_LLM_MODEL_EN),
+        llm=session_llm,
         userdata=userdata,
         min_endpointing_delay=TURN_MIN_ENDPOINTING_DELAY,
         max_endpointing_delay=TURN_MAX_ENDPOINTING_DELAY,
@@ -3097,25 +3572,54 @@ def _runtime_overrides_from_userdata(userdata: dict[str, Any]) -> dict[str, str]
     return _normalize_runtime_overrides(userdata.get("runtime_overrides"))
 
 
+def _default_stt_provider() -> str:
+    return (
+        str(
+            os.getenv("VOICE_AGENT_STT_PROVIDER")
+            or os.getenv("DEFAULT_STT_PROVIDER")
+            or "deepgram"
+        ).strip().lower()
+        or "deepgram"
+    )
+
+
+def _default_stt_model() -> str:
+    return str(os.getenv("VOICE_AGENT_STT_MODEL") or "nova-3").strip() or "nova-3"
+
+
+def _default_odion_stt_base_url() -> str:
+    return (
+        str(os.getenv("ODION_STT_BASE_URL") or DEFAULT_ODION_STT_BASE_URL).strip()
+        or DEFAULT_ODION_STT_BASE_URL
+    )
+
+
 def _build_stt_engine_for_language(*, language: str, userdata: dict[str, Any]) -> Any:
     lang = str(language or "").strip().lower()
     overrides = _runtime_overrides_from_userdata(userdata)
-    provider = str(overrides.get("stt_provider") or "deepgram").strip().lower()
-    model = str(overrides.get("stt_model") or "nova-3").strip() or "nova-3"
+    provider = (
+        str(overrides.get("stt_provider") or _default_stt_provider()).strip().lower()
+    )
+    model = str(overrides.get("stt_model") or _default_stt_model()).strip() or _default_stt_model()
     base_url = str(overrides.get("stt_base_url") or "").strip()
 
     if provider == "odion_stt":
-        resolved_base_url = base_url or DEFAULT_ODION_STT_BASE_URL
+        resolved_base_url = base_url or _default_odion_stt_base_url()
         logger.info(
-            "Using Odion STT override: base_url=%s model=%s language=%s",
+            "Using Odion STT runtime selection: base_url=%s model=%s language=%s override=%s",
             resolved_base_url,
             model,
             lang,
+            bool(overrides.get("stt_provider") or overrides.get("stt_base_url")),
         )
-        return OdionSTT(
+        odion_stt = OdionSTT(
             language=lang,
             model=model,
             base_url=resolved_base_url,
+        )
+        return stt.StreamAdapter(
+            stt=odion_stt,
+            vad=silero.VAD.load(),
         )
     stt_kwargs: dict[str, Any] = {
         "language": _deepgram_stt_language_for_language(lang),
@@ -3156,6 +3660,7 @@ def _build_tts_engine_for_language(
         or _deepgram_tts_model_for_language(lang)
     )
     override_base_url = str(runtime_overrides.get("tts_base_url") or "").strip()
+    override_api_key = str(runtime_overrides.get("tts_api_key") or "").strip()
     fallback_tts: Any = (
         deepgram.TTS(model=_deepgram_tts_model_for_language(lang))
     )
@@ -3301,6 +3806,7 @@ def _build_tts_engine_for_language(
                 else ODION_TTS_CLONE_SEED,
                 mode="cloned_voice",
                 base_url=tts_endpoint_override or None,
+                api_key=override_api_key or None,
             )
             logger.info(
                 "Using Odion cloned TTS for %s session: agent_config_id=%s voice_id=%s owner_id=%s model=%s seed=%s",
@@ -3321,6 +3827,7 @@ def _build_tts_engine_for_language(
                 seed=tts_seed_override,
                 mode="default_voice",
                 base_url=tts_endpoint_override or None,
+                api_key=override_api_key or None,
             )
             logger.info(
                 "Using Odion default TTS for %s session: agent_config_id=%s owner_id=%s model=%s language_hint=%s",
@@ -3464,6 +3971,18 @@ async def entrypoint(ctx: JobContext):
             stt_engine=stt_engine,
             tts_engine=tts_engine,
         )
+        dynamic_tools = build_dynamic_http_tools(
+            active_agent_config,
+            excluded_tool_names=set(BUILTIN_RUNTIME_TOOL_NAMES),
+        )
+        if dynamic_tools:
+            logger.info(
+                "Registered dynamic runtime tools: %s",
+                [
+                    str(getattr(getattr(tool, "info", None), "name", "")).strip()
+                    for tool in dynamic_tools
+                ],
+            )
         _wire_session_timeline(session, session.userdata)
         try:
             if conversation_service_enabled(business_id) and userdata.get(
@@ -3492,7 +4011,7 @@ async def entrypoint(ctx: JobContext):
                     },
                 )
             await session.start(
-                agent=SalonAgent(instructions=instructions),
+                agent=SalonAgent(instructions=instructions, tools=dynamic_tools),
                 room=ctx.room,
                 room_options=room_io.RoomOptions(delete_room_on_close=True),
             )
@@ -3633,6 +4152,18 @@ async def entrypoint(ctx: JobContext):
             stt_engine=stt_engine,
             tts_engine=tts_engine,
         )
+        dynamic_tools = build_dynamic_http_tools(
+            active_agent_config,
+            excluded_tool_names=set(BUILTIN_RUNTIME_TOOL_NAMES),
+        )
+        if dynamic_tools:
+            logger.info(
+                "Registered dynamic runtime tools: %s",
+                [
+                    str(getattr(getattr(tool, "info", None), "name", "")).strip()
+                    for tool in dynamic_tools
+                ],
+            )
         _wire_session_timeline(session, session.userdata)
         try:
             if conversation_service_enabled(business_id) and userdata.get(
@@ -3661,7 +4192,7 @@ async def entrypoint(ctx: JobContext):
                     },
                 )
             await session.start(
-                agent=SalonAgent(instructions=instructions),
+                agent=SalonAgent(instructions=instructions, tools=dynamic_tools),
                 room=ctx.room,
                 room_options=room_io.RoomOptions(delete_room_on_close=True),
             )

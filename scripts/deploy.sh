@@ -77,7 +77,8 @@ sudo -u "$VM_USER" bash -c "source .venv/bin/activate && pip install --upgrade p
 # Ensure .env file exists (should be created via Secret Manager or manually)
 if [ ! -f ".env" ]; then
     echo "⚠️  Warning: .env file not found. Please create it with required environment variables."
-    echo "   Required vars: LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET, DEEPGRAM_API_KEY, GOOGLE_API_KEY"
+    echo "   Required vars: LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET, DEEPGRAM_API_KEY"
+    echo "   LLM vars: GOOGLE_API_KEY when LLM_PROVIDER=google, or GROQ_API_KEY when LLM_PROVIDER=groq"
 fi
 
 # Reload systemd daemon

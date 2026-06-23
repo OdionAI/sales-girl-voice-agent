@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import base64
+import io
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
+import wave
 
 from livekit import rtc
 from livekit.agents import stt
@@ -90,11 +93,11 @@ class _FakeSession:
 
 
 class OdionSTTTests(unittest.IsolatedAsyncioTestCase):
-    def test_odion_stt_advertises_streaming_capability(self) -> None:
+    def test_odion_stt_advertises_non_streaming_capability(self) -> None:
         engine = OdionSTT(language="en")
 
-        self.assertTrue(engine.capabilities.streaming)
-        self.assertTrue(engine.capabilities.interim_results)
+        self.assertFalse(engine.capabilities.streaming)
+        self.assertFalse(engine.capabilities.interim_results)
 
     def test_endpoint_appends_default_path_for_host_only_base_url(self) -> None:
         engine = OdionSTT(
@@ -136,12 +139,13 @@ class OdionSTTTests(unittest.IsolatedAsyncioTestCase):
             event = await engine.recognize(buffer=[_FakeFrame()])
 
         self.assertEqual(fake_session.calls[0]["url"], "https://eu-stt.odion.ai/stt/v1/stt/stream")
-        self.assertEqual(fake_session.calls[0]["data"], b"\0" * 4000)
-        self.assertEqual(fake_session.calls[0]["headers"]["Content-Type"], "audio/pcm")
-        self.assertEqual(fake_session.calls[0]["headers"]["X-Sample-Rate"], "16000")
-        self.assertEqual(fake_session.calls[0]["headers"]["X-Channels"], "1")
-        self.assertEqual(fake_session.calls[0]["headers"]["X-Language"], "English")
-        self.assertEqual(fake_session.calls[0]["headers"]["X-Model"], "Qwen/Qwen3-ASR-1.7B")
+        self.assertEqual(fake_session.calls[0]["headers"]["Content-Type"], "application/json")
+        self.assertEqual(fake_session.calls[0]["json"]["language"], "English")
+        wav_bytes = base64.b64decode(fake_session.calls[0]["json"]["audio_base64"])
+        with wave.open(io.BytesIO(wav_bytes), "rb") as wav:
+            self.assertEqual(wav.getframerate(), 16000)
+            self.assertEqual(wav.getnchannels(), 1)
+            self.assertEqual(wav.getsampwidth(), 2)
         self.assertEqual(event.request_id, "req-123")
         self.assertEqual(event.alternatives[0].text, "Hello from Sales Girl")
         self.assertAlmostEqual(event.recognition_usage.audio_duration, 1.25)
@@ -166,16 +170,23 @@ class OdionSTTTests(unittest.IsolatedAsyncioTestCase):
         with patch("agent.odion_stt.rtc.combine_audio_frames", return_value=_FakeAudioBuffer()):
             event = await engine.recognize(buffer=[_FakeFrame()])
 
-        self.assertEqual(fake_session.calls[0]["headers"]["X-Language"], "Pidgin")
-        self.assertEqual(fake_session.calls[0]["headers"]["X-Model"], "odion-pidgin-asr")
+        self.assertEqual(fake_session.calls[0]["headers"]["Content-Type"], "application/json")
+        self.assertEqual(fake_session.calls[0]["json"]["language"], "Pidgin")
+        wav_bytes = base64.b64decode(fake_session.calls[0]["json"]["audio_base64"])
+        with wave.open(io.BytesIO(wav_bytes), "rb") as wav:
+            self.assertEqual(wav.getframerate(), 16000)
+            self.assertEqual(wav.getnchannels(), 1)
+            self.assertEqual(wav.getsampwidth(), 2)
         self.assertEqual(event.request_id, "req-pidgin")
         self.assertEqual(event.alternatives[0].text, "How far")
 
-    async def test_stream_posts_pcm_frames_to_odion_stream_endpoint(self) -> None:
+    async def test_stream_posts_wav_base64_segments_to_odion_stream_endpoint(self) -> None:
         fake_response = _FakeResponse(
             stream_lines=[
-                '{"type":"partial","request_id":"req-stream","text":"How"}\n',
-                '{"type":"final","request_id":"req-stream","text":"How far"}\n',
+                'event: partial\n',
+                'data: {"request_id":"req-stream","text":"How"}\n',
+                'event: final\n',
+                'data: {"request_id":"req-stream","text":"How far"}\n',
             ]
         )
         fake_session = _FakeSession(fake_response)
@@ -198,12 +209,15 @@ class OdionSTTTests(unittest.IsolatedAsyncioTestCase):
         events = [event async for event in stream]
 
         self.assertEqual(fake_session.calls[0]["url"], "http://34.122.84.20/stt/v1/stt/stream")
-        self.assertEqual(fake_response.streamed_chunks, [frame.data.tobytes()])
-        self.assertEqual(fake_session.calls[0]["headers"]["Content-Type"], "audio/pcm")
-        self.assertEqual(fake_session.calls[0]["headers"]["X-Sample-Rate"], "16000")
-        self.assertEqual(fake_session.calls[0]["headers"]["X-Channels"], "1")
-        self.assertEqual(fake_session.calls[0]["headers"]["X-Language"], "Pidgin")
-        self.assertEqual(fake_session.calls[0]["headers"]["X-Model"], "odion-pidgin-asr")
+        self.assertEqual(fake_response.streamed_chunks, [])
+        self.assertEqual(fake_session.calls[0]["headers"]["Content-Type"], "application/json")
+        self.assertEqual(fake_session.calls[0]["json"]["language"], "Pidgin")
+        wav_bytes = base64.b64decode(fake_session.calls[0]["json"]["audio_base64"])
+        with wave.open(io.BytesIO(wav_bytes), "rb") as wav:
+            self.assertEqual(wav.getframerate(), 16000)
+            self.assertEqual(wav.getnchannels(), 1)
+            self.assertEqual(wav.getsampwidth(), 2)
+            self.assertEqual(wav.readframes(160), frame.data.tobytes())
         self.assertIn(stt.SpeechEventType.START_OF_SPEECH, [event.type for event in events])
         self.assertIn(stt.SpeechEventType.END_OF_SPEECH, [event.type for event in events])
         final_events = [
@@ -214,7 +228,7 @@ class OdionSTTTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(final_events[0].request_id, "req-stream")
         self.assertEqual(final_events[0].alternatives[0].text, "How far")
 
-    def test_main_builds_odion_stt_from_runtime_overrides(self) -> None:
+    def test_main_builds_odion_stt_stream_adapter_from_runtime_overrides(self) -> None:
         userdata = {
             "runtime_overrides": {
                 "stt_provider": "odion_stt",
@@ -222,12 +236,14 @@ class OdionSTTTests(unittest.IsolatedAsyncioTestCase):
             }
         }
 
-        engine = main._build_stt_engine_for_language(language="en", userdata=userdata)
+        with patch("main.silero.VAD.load", return_value=object()):
+            engine = main._build_stt_engine_for_language(language="en", userdata=userdata)
 
-        self.assertIsInstance(engine, OdionSTT)
-        self.assertEqual(engine.endpoint, f"{DEFAULT_ODION_STT_BASE_URL}/stt/v1/stt/stream")
+        self.assertIsInstance(engine, stt.StreamAdapter)
+        self.assertIsInstance(engine.wrapped_stt, OdionSTT)
+        self.assertEqual(engine.wrapped_stt.endpoint, f"{DEFAULT_ODION_STT_BASE_URL}/stt/v1/stt/stream")
 
-    def test_main_builds_odion_stt_with_full_endpoint_override(self) -> None:
+    def test_main_builds_odion_stt_stream_adapter_with_full_endpoint_override(self) -> None:
         userdata = {
             "runtime_overrides": {
                 "stt_provider": "odion_stt",
@@ -236,17 +252,39 @@ class OdionSTTTests(unittest.IsolatedAsyncioTestCase):
             }
         }
 
-        engine = main._build_stt_engine_for_language(language="en", userdata=userdata)
+        with patch("main.silero.VAD.load", return_value=object()):
+            engine = main._build_stt_engine_for_language(language="en", userdata=userdata)
 
-        self.assertIsInstance(engine, OdionSTT)
-        self.assertEqual(engine.endpoint, "http://34.122.84.20/stt/v1/stt/stream")
+        self.assertIsInstance(engine, stt.StreamAdapter)
+        self.assertIsInstance(engine.wrapped_stt, OdionSTT)
+        self.assertEqual(engine.wrapped_stt.endpoint, "http://34.122.84.20/stt/v1/stt/stream")
+
+    def test_main_builds_odion_stt_from_environment_defaults(self) -> None:
+        userdata = {"runtime_overrides": {}}
+
+        with patch.dict(
+            "os.environ",
+            {
+                "VOICE_AGENT_STT_PROVIDER": "odion_stt",
+                "VOICE_AGENT_STT_MODEL": "Qwen/Qwen3-ASR-1.7B",
+                "ODION_STT_BASE_URL": "https://ng-stt.odion.ai/v1/stt/stream",
+            },
+            clear=False,
+        ):
+            with patch("main.silero.VAD.load", return_value=object()):
+                engine = main._build_stt_engine_for_language(language="en", userdata=userdata)
+
+        self.assertIsInstance(engine, stt.StreamAdapter)
+        self.assertIsInstance(engine.wrapped_stt, OdionSTT)
+        self.assertEqual(engine.wrapped_stt.endpoint, "https://ng-stt.odion.ai/v1/stt/stream")
+        self.assertEqual(engine.wrapped_stt.model, "Qwen/Qwen3-ASR-1.7B")
 
     def test_session_builder_uses_supplied_stt_engine(self) -> None:
         stt_engine = object()
         tts_engine = object()
 
         with (
-            patch("main.google.LLM", return_value=object()),
+            patch("main._build_llm_for_language", return_value=object()),
             patch(
                 "main.AgentSession",
                 side_effect=lambda **kwargs: SimpleNamespace(**kwargs),

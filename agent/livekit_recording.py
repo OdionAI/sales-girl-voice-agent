@@ -15,8 +15,17 @@ from livekit import api
 logger = logging.getLogger(__name__)
 
 RECORDING_ENABLED = os.getenv("LIVEKIT_RECORDING_ENABLED", "false").lower() == "true"
-RECORDING_BUCKET = str(os.getenv("LIVEKIT_RECORDING_GCS_BUCKET", "")).strip()
+RECORDING_STORAGE_PROVIDER = str(os.getenv("LIVEKIT_RECORDING_STORAGE_PROVIDER", "gcs")).strip().lower() or "gcs"
+RECORDING_BUCKET = str(
+    os.getenv("LIVEKIT_RECORDING_BUCKET") or os.getenv("LIVEKIT_RECORDING_GCS_BUCKET", "")
+).strip()
 RECORDING_GCP_CREDENTIALS = str(os.getenv("LIVEKIT_RECORDING_GCP_CREDENTIALS_JSON", "")).strip()
+RECORDING_S3_ACCESS_KEY = str(os.getenv("LIVEKIT_RECORDING_S3_ACCESS_KEY", "")).strip()
+RECORDING_S3_SECRET_KEY = str(os.getenv("LIVEKIT_RECORDING_S3_SECRET_KEY", "")).strip()
+RECORDING_S3_SESSION_TOKEN = str(os.getenv("LIVEKIT_RECORDING_S3_SESSION_TOKEN", "")).strip()
+RECORDING_S3_REGION = str(os.getenv("LIVEKIT_RECORDING_S3_REGION", "af-south-1")).strip()
+RECORDING_S3_ENDPOINT = str(os.getenv("LIVEKIT_RECORDING_S3_ENDPOINT", "")).strip()
+RECORDING_S3_FORCE_PATH_STYLE = os.getenv("LIVEKIT_RECORDING_S3_FORCE_PATH_STYLE", "false").lower() == "true"
 RECORDING_PREFIX = str(os.getenv("LIVEKIT_RECORDING_FILE_PREFIX", "livekit-recordings")).strip("/") or "livekit-recordings"
 RECORDING_FORMAT = str(os.getenv("LIVEKIT_RECORDING_FORMAT", "mp3")).strip().lower() or "mp3"
 RECORDING_PUBLIC_BASE_URL = str(os.getenv("LIVEKIT_RECORDING_PUBLIC_BASE_URL", "")).strip().rstrip("/")
@@ -42,7 +51,11 @@ class RecordingFinalizeResult:
 
 
 def is_recording_enabled() -> bool:
-    return bool(RECORDING_ENABLED and RECORDING_BUCKET and RECORDING_GCP_CREDENTIALS)
+    if not RECORDING_ENABLED or not RECORDING_BUCKET:
+        return False
+    if RECORDING_STORAGE_PROVIDER == "s3":
+        return bool(RECORDING_S3_ACCESS_KEY and RECORDING_S3_SECRET_KEY and RECORDING_S3_ENDPOINT)
+    return bool(RECORDING_GCP_CREDENTIALS)
 
 
 def _api_client() -> api.LiveKitAPI:
@@ -76,6 +89,16 @@ def _public_url_for_path(filepath: str) -> str:
     normalized_path = filepath.lstrip("/")
     if RECORDING_PUBLIC_BASE_URL:
         return f"{RECORDING_PUBLIC_BASE_URL}/{normalized_path}"
+    if RECORDING_STORAGE_PROVIDER == "s3":
+        endpoint = RECORDING_S3_ENDPOINT.rstrip("/")
+        if endpoint:
+            if RECORDING_S3_FORCE_PATH_STYLE:
+                return f"{endpoint}/{RECORDING_BUCKET}/{normalized_path}"
+            scheme, sep, host = endpoint.partition("://")
+            if sep and host:
+                return f"{scheme}://{RECORDING_BUCKET}.{host}/{normalized_path}"
+            return f"{RECORDING_BUCKET}.{endpoint}/{normalized_path}"
+        return f"s3://{RECORDING_BUCKET}/{normalized_path}"
     return f"https://storage.googleapis.com/{RECORDING_BUCKET}/{normalized_path}"
 
 
@@ -162,7 +185,7 @@ async def start_room_recording(
         return RecordingStartResult(enabled=False, detail="recording_disabled")
 
     credentials = _serialize_credentials()
-    if not credentials:
+    if RECORDING_STORAGE_PROVIDER != "s3" and not credentials:
         return RecordingStartResult(enabled=False, detail="invalid_gcp_credentials")
 
     filepath = _recording_path(
@@ -178,9 +201,25 @@ async def start_room_recording(
             api.EncodedFileOutput(
                 file_type=_file_type_for_format(),
                 filepath=filepath,
-                gcp=api.GCPUpload(
-                    bucket=RECORDING_BUCKET,
-                    credentials=credentials,
+                **(
+                    {
+                        "s3": api.S3Upload(
+                            access_key=RECORDING_S3_ACCESS_KEY,
+                            secret=RECORDING_S3_SECRET_KEY,
+                            session_token=RECORDING_S3_SESSION_TOKEN,
+                            region=RECORDING_S3_REGION,
+                            endpoint=RECORDING_S3_ENDPOINT,
+                            bucket=RECORDING_BUCKET,
+                            force_path_style=RECORDING_S3_FORCE_PATH_STYLE,
+                        )
+                    }
+                    if RECORDING_STORAGE_PROVIDER == "s3"
+                    else {
+                        "gcp": api.GCPUpload(
+                            bucket=RECORDING_BUCKET,
+                            credentials=credentials,
+                        )
+                    }
                 ),
             )
         ],
@@ -227,6 +266,21 @@ def _normalize_recording_url(location: str | None, fallback: str | None) -> str 
         bucket, _, path = remainder.partition("/")
         if bucket and path:
             return f"https://storage.googleapis.com/{bucket}/{path}"
+    if raw.startswith("s3://"):
+        _, _, remainder = raw.partition("s3://")
+        bucket, _, path = remainder.partition("/")
+        if bucket and path:
+            if RECORDING_PUBLIC_BASE_URL:
+                return f"{RECORDING_PUBLIC_BASE_URL}/{path}"
+            if RECORDING_S3_ENDPOINT:
+                endpoint = RECORDING_S3_ENDPOINT.rstrip("/")
+                if RECORDING_S3_FORCE_PATH_STYLE:
+                    return f"{endpoint}/{bucket}/{path}"
+                scheme, sep, host = endpoint.partition("://")
+                if sep and host:
+                    return f"{scheme}://{bucket}.{host}/{path}"
+                return f"{bucket}.{endpoint}/{path}"
+            return raw
     if raw.startswith("http://") or raw.startswith("https://"):
         return raw
     return fallback

@@ -3,6 +3,15 @@ import os
 
 from livekit.agents import Agent, RunContext, function_tool
 
+from .tool_schema_compat import (
+    CREATE_BOOKING_RAW_SCHEMA,
+    CREATE_ORDER_RAW_SCHEMA,
+    SEARCH_BUSINESS_KNOWLEDGE_RAW_SCHEMA,
+    TRANSFER_TO_AICC_RAW_SCHEMA,
+    normalize_order_items,
+    normalize_price_snapshot,
+    normalize_top_k,
+)
 from .ops_api import (
     apply_billing_adjustment as apply_billing_adjustment_api,
     block_card as block_card_api,
@@ -28,6 +37,7 @@ from .ops_api import (
     reverse_failed_transaction as reverse_failed_transaction_api,
     search_business_knowledge as search_business_knowledge_api,
     send_email as send_email_api,
+    transfer_to_aicc as transfer_to_aicc_api,
     unblock_card as unblock_card_api,
     update_customer_record as update_customer_record_api,
 )
@@ -39,11 +49,18 @@ ALWAYS_ENABLED_RUNTIME_TOOLS = {"search_business_knowledge"}
 
 
 def _tool_metadata(ctx: RunContext) -> dict:
-    session_userdata = getattr(getattr(ctx, "session", None), "userdata", None)
+    session_userdata = getattr(ctx, "userdata", None)
+    if not isinstance(session_userdata, dict):
+        session_userdata = getattr(getattr(ctx, "session", None), "userdata", None)
     if not isinstance(session_userdata, dict):
         session_userdata = {}
 
-    room_name = getattr(getattr(ctx, "room", None), "name", "")
+    room_name = str(session_userdata.get("room_name") or "").strip()
+    if not room_name:
+        room_name = str(
+            getattr(getattr(ctx, "room", None), "name", "")
+            or getattr(getattr(getattr(ctx, "session", None), "room", None), "name", "")
+        ).strip()
     conversation_id = str(session_userdata.get("conversation_id") or room_name)
     session_id = str(session_userdata.get("session_id") or conversation_id)
     return {
@@ -67,6 +84,7 @@ def _tool_metadata(ctx: RunContext) -> dict:
             session_userdata.get("last_assistant_message") or ""
         ),
         "timeline_event_index": int(session_userdata.get("timeline_event_index", 0)),
+        "room_name": str(room_name or ""),
     }
 
 
@@ -129,17 +147,16 @@ class SalonAgent(Agent):
     Shared English customer support agent for business-specific use cases.
     """
 
-    @function_tool()
+    @function_tool(raw_schema=SEARCH_BUSINESS_KNOWLEDGE_RAW_SCHEMA)
     async def search_business_knowledge(
         self,
         ctx: RunContext,
         query: str,
-        top_k: int = 4,
+        top_k: int | str | None = 4,
     ) -> dict:
-        """Search the saved business knowledge base for policies, services, amenities, FAQs, and other documented facts before saying you do not know an answer."""
         result = await search_business_knowledge_api(
             query=query,
-            top_k=top_k,
+            top_k=normalize_top_k(top_k),
             metadata=_tool_metadata(ctx),
         )
         if result.get("status") != "failed":
@@ -269,7 +286,29 @@ class SalonAgent(Agent):
             )
         return result
 
-    @function_tool()
+    @function_tool(raw_schema=TRANSFER_TO_AICC_RAW_SCHEMA)
+    async def transfer_to_aicc(
+        self,
+        ctx: RunContext,
+        raw_arguments: dict | None = None,
+    ) -> dict:
+        """Transfer the current live caller to the configured Huawei AICC human-agent route when the caller asks for a human or the AI cannot resolve the request safely."""
+        if not _is_tool_enabled(ctx, "transfer_to_aicc"):
+            return {
+                "status": "failed",
+                "message": "I can't transfer this call to a human agent from this agent right now.",
+            }
+        args = raw_arguments if isinstance(raw_arguments, dict) else {}
+        reason_summary = str(args.get("reason_summary") or "").strip()
+        result = await transfer_to_aicc_api(
+            reason_summary=reason_summary,
+            metadata=_tool_metadata(ctx),
+        )
+        if result.get("status") != "failed":
+            logger.info("[TOOL] transfer_to_aicc reason=%s", reason_summary or "")
+        return result
+
+    @function_tool(raw_schema=CREATE_BOOKING_RAW_SCHEMA)
     async def create_booking(
         self,
         ctx: RunContext,
@@ -279,10 +318,9 @@ class SalonAgent(Agent):
         guest_count: int = 1,
         guest_name: str | None = None,
         special_requests: str | None = None,
-        price_snapshot: dict | str | None = None,
+        price_snapshot: dict | None = None,
         customer_identifier: str | None = None,
     ) -> dict:
-        """Create a hotel booking inside the platform for the current guest and business."""
         if not _is_tool_enabled(ctx, "create_booking"):
             return {
                 "status": "failed",
@@ -296,7 +334,7 @@ class SalonAgent(Agent):
             check_out_date=check_out_date,
             guest_count=guest_count,
             special_requests=special_requests,
-            price_snapshot=price_snapshot,
+            price_snapshot=normalize_price_snapshot(price_snapshot),
             metadata=_tool_metadata(ctx),
         )
         if result.get("status") != "failed":
@@ -307,7 +345,7 @@ class SalonAgent(Agent):
             )
         return result
 
-    @function_tool()
+    @function_tool(raw_schema=CREATE_ORDER_RAW_SCHEMA)
     async def create_order(
         self,
         ctx: RunContext,
@@ -316,17 +354,9 @@ class SalonAgent(Agent):
         items: list[dict] | None = None,
         customer_name: str | None = None,
         notes: str | None = None,
-        price_snapshot: dict | str | None = None,
+        price_snapshot: dict | None = None,
         customer_identifier: str | None = None,
     ) -> dict:
-        """Create a restaurant or fashion order inside the platform for the current customer and business.
-
-        If the customer orders multiple different items (e.g. Rice and Chicken), you MUST use the `items` array.
-        Format for items: [{"item_name": "Fried Rice", "quantity": 1, "price_snapshot": {"amount": 2500, "currency": "NGN"}}]
-
-        For single items, you must provide `price_snapshot` in the format: {"amount": 2500, "currency": "NGN"}
-        """
-        # Ensure tool is currently enabled for this specific agent context
         if not _is_tool_enabled(ctx, "create_order"):
             return {
                 "status": "failed",
@@ -337,9 +367,9 @@ class SalonAgent(Agent):
             customer_name=customer_name,
             item_name=item_name,
             quantity=quantity,
-            items=items,
+            items=normalize_order_items(items),
             notes=notes,
-            price_snapshot=price_snapshot,
+            price_snapshot=normalize_price_snapshot(price_snapshot),
             metadata=_tool_metadata(ctx),
         )
         if result.get("status") != "failed":
