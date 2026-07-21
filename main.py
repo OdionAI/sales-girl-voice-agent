@@ -14,7 +14,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from livekit.agents import AgentServer, AgentSession, JobContext, cli, room_io
-from livekit.plugins import deepgram, google
+from livekit.plugins import deepgram, openai
 
 from agent.conversation_memory import (
     append_message,
@@ -30,7 +30,12 @@ from agent.conversation_service_api import (
     resolve_conversation as resolve_conversation_remote,
     start_session as start_session_remote,
     update_session_recording as update_session_recording_remote,
+    update_session_analysis as update_session_analysis_remote,
     utcnow as conv_api_utcnow,
+)
+from agent.conversation_analysis import (
+    analyze_messages,
+    is_enabled as conversation_analysis_enabled,
 )
 from agent.billing_hooks import (
     FAIL_CLOSED as BILLING_FAIL_CLOSED,
@@ -658,6 +663,48 @@ async def _finalize_session_cleanup(
                     exc,
                 )
 
+        if conversation_service_enabled(business_id) and session_tracker_id and conversation_analysis_enabled():
+            try:
+                await update_session_analysis_remote(
+                    session_id=session_tracker_id,
+                    analysis_status="pending",
+                    business_id=business_id,
+                )
+                context = await fetch_context_remote(
+                    str(userdata.get("conversation_id") or ""),
+                    limit=200,
+                    business_id=business_id,
+                )
+                analysis = await analyze_messages(context.get("messages") or [], language=language)
+                persisted_analysis = await update_session_analysis_remote(
+                    session_id=session_tracker_id,
+                    business_id=business_id,
+                    **analysis,
+                )
+                if str(persisted_analysis.get("status") or "") != "success":
+                    logger.error(
+                        "Session analysis persist failed: session_id=%s detail=%s",
+                        session_tracker_id,
+                        persisted_analysis.get("detail"),
+                    )
+            except Exception as exc:  # noqa: BLE001
+                logger.exception(
+                    "Post-session analysis failed: session_id=%s error=%s",
+                    session_tracker_id,
+                    exc,
+                )
+                try:
+                    await update_session_analysis_remote(
+                        session_id=session_tracker_id,
+                        analysis_status="failed",
+                        business_id=business_id,
+                    )
+                except Exception:
+                    logger.exception(
+                        "Failed to persist analysis failure state: session_id=%s",
+                        session_tracker_id,
+                    )
+
 
 REQUIRE_VERIFIED_PHONE = os.getenv("REQUIRE_VERIFIED_PHONE", "true").lower() == "true"
 CONVERSATION_SERVICE_REQUIRED = (
@@ -729,6 +776,20 @@ TURN_MIN_INTERRUPTION_DURATION = _float_env(
     0.7,
     min_value=0.1,
 )
+
+VOICE_AGENT_LLM_PROVIDER = str(
+    os.getenv("VOICE_AGENT_LLM_PROVIDER") or os.getenv("LLM_PROVIDER") or "maas"
+).strip().lower()
+MAAS_API_KEY = str(os.getenv("MAAS_API_KEY") or os.getenv("HUAWEI_MAAS_API_KEY") or "").strip()
+MAAS_BASE_URL = str(
+    os.getenv(
+        "MAAS_BASE_URL",
+        "https://api-ap-southeast-1.modelarts-maas.com/openai/v1",
+    )
+).strip().rstrip("/")
+MAAS_LLM_MODEL_DEFAULT = str(os.getenv("MAAS_LLM_MODEL_DEFAULT") or "glm-5.2").strip() or "glm-5.2"
+MAAS_LLM_MODEL_EN = str(os.getenv("MAAS_LLM_MODEL_EN") or MAAS_LLM_MODEL_DEFAULT).strip() or MAAS_LLM_MODEL_DEFAULT
+MAAS_LLM_MODEL_FR = str(os.getenv("MAAS_LLM_MODEL_FR") or MAAS_LLM_MODEL_DEFAULT).strip() or MAAS_LLM_MODEL_DEFAULT
 
 
 def _normalize_business_id(value: str | None) -> str:
@@ -2481,11 +2542,24 @@ def _build_session_for_language(
     stt_engine: Any | None = None,
     tts_engine: Any | None = None,
 ) -> AgentSession:
+    if VOICE_AGENT_LLM_PROVIDER != "maas":
+        raise RuntimeError(
+            "Unsupported voice LLM provider. Huawei runtime requires VOICE_AGENT_LLM_PROVIDER=maas."
+        )
+    if not MAAS_API_KEY:
+        raise RuntimeError("MAAS_API_KEY is required when using the Huawei MaaS voice runtime.")
+    llm_engine = openai.LLM(
+        model=MAAS_LLM_MODEL_FR if language == "fr" else MAAS_LLM_MODEL_EN,
+        api_key=MAAS_API_KEY,
+        base_url=MAAS_BASE_URL,
+        temperature=0.2,
+        extra_body={"chat_template_kwargs": {"thinking": False}},
+    )
     if language == "fr":
         return AgentSession(
             stt=stt_engine or deepgram.STT(language="fr"),
             tts=tts_engine or deepgram.TTS(model="aura-2-agathe-fr"),
-            llm=google.LLM(model="gemini-2.0-flash"),
+            llm=llm_engine,
             userdata=userdata,
             min_endpointing_delay=TURN_MIN_ENDPOINTING_DELAY,
             max_endpointing_delay=TURN_MAX_ENDPOINTING_DELAY,
@@ -2495,7 +2569,7 @@ def _build_session_for_language(
     return AgentSession(
         stt=stt_engine or deepgram.STT(language="en"),
         tts=tts_engine,
-        llm=google.LLM(model="gemini-2.0-flash"),
+        llm=llm_engine,
         userdata=userdata,
         min_endpointing_delay=TURN_MIN_ENDPOINTING_DELAY,
         max_endpointing_delay=TURN_MAX_ENDPOINTING_DELAY,

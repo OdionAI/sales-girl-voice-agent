@@ -193,5 +193,20 @@ async def update_session_recording(
     )
 
 
+async def update_session_analysis(
+    *, session_id: str, analysis_status: str, summary: str | None = None,
+    primary_intent: str | None = None, intent_confidence: float | None = None,
+    sentiment: str | None = None, resolution_status: str | None = None,
+    business_id: str | None = None,
+) -> dict[str, Any]:
+    return await _request_json(
+        "POST", f"/v1/conversations/sessions/{session_id}/analysis",
+        json={"analysis_status": analysis_status, "summary": summary,
+              "primary_intent": primary_intent, "intent_confidence": intent_confidence,
+              "sentiment": sentiment, "resolution_status": resolution_status},
+        business_id=business_id,
+    )
+
+
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
