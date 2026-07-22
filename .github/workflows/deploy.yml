@@ -16,7 +16,7 @@ concurrency:
 
 env:
   REPO_DIR: sales-girl-voice-agent
-  COMPOSE_SERVICES: voice-agent-en voice-agent-fr
+  COMPOSE_SERVICES: voice-agent-en,voice-agent-fr
 
 jobs:
   deploy:
@@ -24,7 +24,7 @@ jobs:
     timeout-minutes: 45
     env:
       DEPLOY_ENV: ${{ github.ref_name == 'main' && 'prod' || 'staging' }}
-      HEALTH_PORT: ""
+      HEALTH_PORT: "none"
       HUAWEI_BASTION_HOST: ${{ vars.HUAWEI_BASTION_HOST || '159.138.169.125' }}
       HUAWEI_NODE_B_PRIVATE_HOST: ${{ vars.HUAWEI_NODE_B_PRIVATE_HOST || '10.40.20.169' }}
       HUAWEI_SSH_USER: ${{ vars.HUAWEI_SSH_USER || 'root' }}
@@ -121,7 +121,7 @@ jobs:
           project_name="$4"
           service_list="$5"
           health_port="$6"
-          IFS=' ' read -r -a services <<< "${service_list}"
+          IFS=',' read -r -a services <<< "${service_list}"
           export COMPOSE_PROJECT_NAME="${project_name}"
           compose=(docker compose --env-file .env.node-b)
 
@@ -136,7 +136,7 @@ jobs:
               echo "Deployment failed; restoring ${previous_target}"
               ln -sfn "${previous_target}" "${current_link}"
               cd "${stack_dir}"
-              "${compose[@]}" build "${services[@]}" || true
+              "${compose[@]}" build --no-deps "${services[@]}" || true
               "${compose[@]}" up -d --no-deps --force-recreate "${services[@]}" || true
             fi
             exit "${status}"
@@ -146,7 +146,7 @@ jobs:
           ln -sfn "${release_dir}" "${current_link}"
           cd "${stack_dir}"
           "${compose[@]}" config -q
-          "${compose[@]}" build "${services[@]}"
+          "${compose[@]}" build --no-deps "${services[@]}"
           "${compose[@]}" up -d --no-deps --force-recreate "${services[@]}"
 
           for service in "${services[@]}"; do
@@ -155,7 +155,7 @@ jobs:
             test "$(docker inspect -f '{{.State.Running}}' "${container_id}")" = "true"
           done
 
-          if [[ -n "${health_port}" ]]; then
+          if [[ "${health_port}" != "none" ]]; then
             healthy=false
             for _ in {1..30}; do
               if curl -fsS "http://127.0.0.1:${health_port}/v1/health" >/dev/null; then
@@ -166,11 +166,24 @@ jobs:
             done
             test "${healthy}" = "true"
           else
-            sleep 10
-            for service in "${services[@]}"; do
-              container_id="$("${compose[@]}" ps -q "${service}")"
-              test "$(docker inspect -f '{{.State.Running}}' "${container_id}")" = "true"
+            workers_ready=false
+            for _ in {1..30}; do
+              all_workers_ready=true
+              for service in "${services[@]}"; do
+                container_id="$("${compose[@]}" ps -q "${service}")"
+                if [[ -z "${container_id}" ]] || \
+                  [[ "$(docker inspect -f '{{.State.Running}}' "${container_id}")" != "true" ]] || \
+                  ! docker logs "${container_id}" 2>&1 | grep -q "registered worker"; then
+                  all_workers_ready=false
+                fi
+              done
+              if [[ "${all_workers_ready}" = "true" ]]; then
+                workers_ready=true
+                break
+              fi
+              sleep 2
             done
+            test "${workers_ready}" = "true"
           fi
 
           "${compose[@]}" ps "${services[@]}"
