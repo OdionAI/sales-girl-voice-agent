@@ -1,4 +1,4 @@
-name: Deploy Voice Agent
+name: Deploy Voice Agent to Huawei
 
 on:
   push:
@@ -10,18 +10,26 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: huawei-${{ github.repository }}-${{ github.ref_name }}
+  cancel-in-progress: false
+
 env:
   REPO_DIR: sales-girl-voice-agent
+  COMPOSE_SERVICES: voice-agent-en voice-agent-fr
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     env:
       DEPLOY_ENV: ${{ github.ref_name == 'main' && 'prod' || 'staging' }}
-      TARGET_HOST: ${{ github.ref_name == 'main' && (secrets.HUAWEI_NODE_B_HOST_PROD || '80.238.244.47') || (secrets.HUAWEI_NODE_B_HOST_STAGING || '80.238.244.47') }}
-      TARGET_USER: ${{ secrets.HUAWEI_SSH_USER || 'root' }}
+      HEALTH_PORT: ""
+      HUAWEI_BASTION_HOST: ${{ vars.HUAWEI_BASTION_HOST || '159.138.169.125' }}
+      HUAWEI_NODE_B_PRIVATE_HOST: ${{ vars.HUAWEI_NODE_B_PRIVATE_HOST || '10.40.20.169' }}
+      HUAWEI_SSH_USER: ${{ vars.HUAWEI_SSH_USER || 'root' }}
+      HUAWEI_SRC_ROOT: ${{ vars.HUAWEI_SRC_ROOT || '/opt/salesgirl/src' }}
       TARGET_STACK_DIR: ${{ github.ref_name == 'main' && (vars.HUAWEI_NODE_B_STACK_DIR_PROD || '/opt/salesgirl/node-b-prod') || (vars.HUAWEI_NODE_B_STACK_DIR_STAGING || '/opt/salesgirl/node-b-staging') }}
-      TARGET_SRC_ROOT: ${{ vars.HUAWEI_SRC_ROOT || '/opt/salesgirl/src' }}
       COMPOSE_PROJECT_NAME: ${{ github.ref_name == 'main' && (vars.HUAWEI_COMPOSE_PROJECT_PROD || 'salesgirl-prod') || (vars.HUAWEI_COMPOSE_PROJECT_STAGING || 'salesgirl-staging') }}
 
     steps:
@@ -41,39 +49,130 @@ jobs:
       - name: Run tests
         env:
           GOOGLE_API_KEY: dummy-test-key
+          MAAS_API_KEY: dummy-test-key
         run: python -m unittest discover -s tests -p 'test_*.py'
 
       - name: Build image
         run: docker build -t sales-girl-voice-agent:ci .
 
-      - name: Install SSH key
-        run: |
-          test -n "${TARGET_HOST}" || (echo "Missing Huawei target host for ${DEPLOY_ENV}" && exit 1)
-          mkdir -p ~/.ssh
-          chmod 700 ~/.ssh
-          printf '%s\n' "${{ secrets.HUAWEI_SSH_PRIVATE_KEY }}" > ~/.ssh/huawei_deploy_key
-          chmod 600 ~/.ssh/huawei_deploy_key
-
-      - name: Upload source and deploy voice workers
+      - name: Configure pinned Huawei SSH route
         run: |
           set -euo pipefail
-          REMOTE_RELEASE="${TARGET_SRC_ROOT}/.releases/${REPO_DIR}/${GITHUB_SHA}"
-          REMOTE_CURRENT="${TARGET_SRC_ROOT}/${REPO_DIR}"
-          SSH=(ssh -i ~/.ssh/huawei_deploy_key -o StrictHostKeyChecking=no "${TARGET_USER}@${TARGET_HOST}")
+          test -n "${{ secrets.HUAWEI_SSH_PRIVATE_KEY }}"
+          test -n "${{ secrets.HUAWEI_SSH_KNOWN_HOSTS }}"
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "${{ secrets.HUAWEI_SSH_PRIVATE_KEY }}" > ~/.ssh/huawei_deploy_key
+          printf '%s\n' "${{ secrets.HUAWEI_SSH_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/huawei_deploy_key ~/.ssh/known_hosts
+          ssh-keygen -y -f ~/.ssh/huawei_deploy_key >/dev/null
+          cat > ~/.ssh/config <<EOF
+          Host huawei-bastion
+            HostName ${HUAWEI_BASTION_HOST}
+            User ${HUAWEI_SSH_USER}
+            IdentityFile ~/.ssh/huawei_deploy_key
+            IdentitiesOnly yes
+            BatchMode yes
+            StrictHostKeyChecking yes
+            UserKnownHostsFile ~/.ssh/known_hosts
+            ServerAliveInterval 15
+            ServerAliveCountMax 4
 
-          "${SSH[@]}" "mkdir -p '${REMOTE_RELEASE}' '${TARGET_SRC_ROOT}'"
+          Host huawei-node-b
+            HostName ${HUAWEI_NODE_B_PRIVATE_HOST}
+            User ${HUAWEI_SSH_USER}
+            IdentityFile ~/.ssh/huawei_deploy_key
+            IdentitiesOnly yes
+            BatchMode yes
+            ProxyJump huawei-bastion
+            StrictHostKeyChecking yes
+            UserKnownHostsFile ~/.ssh/known_hosts
+            ServerAliveInterval 15
+            ServerAliveCountMax 4
+          EOF
+          chmod 600 ~/.ssh/config
+          ssh huawei-node-b true
+
+      - name: Upload immutable release and deploy
+        run: |
+          set -euo pipefail
+          remote_release="${HUAWEI_SRC_ROOT}/.releases/${DEPLOY_ENV}/${REPO_DIR}/${GITHUB_SHA}"
+          remote_current="${HUAWEI_SRC_ROOT}/${DEPLOY_ENV}/${REPO_DIR}"
+
+          ssh huawei-node-b "mkdir -p '${remote_release}' '${HUAWEI_SRC_ROOT}/${DEPLOY_ENV}'"
           tar \
             --exclude='.git' \
             --exclude='.venv' \
             --exclude='__pycache__' \
             --exclude='.pytest_cache' \
-            -czf - . | "${SSH[@]}" "tar -xzf - -C '${REMOTE_RELEASE}'"
+            -czf - . | ssh huawei-node-b "tar -xzf - -C '${remote_release}'"
 
-          "${SSH[@]}" "\
-            set -euo pipefail && \
-            ln -sfn '${REMOTE_RELEASE}' '${REMOTE_CURRENT}' && \
-            cd '${TARGET_STACK_DIR}' && \
-            COMPOSE_PROJECT_NAME='${COMPOSE_PROJECT_NAME}' docker compose --env-file .env.node-b build voice-agent-en voice-agent-fr && \
-            COMPOSE_PROJECT_NAME='${COMPOSE_PROJECT_NAME}' docker compose --env-file .env.node-b up -d --no-deps --force-recreate voice-agent-en voice-agent-fr && \
-            COMPOSE_PROJECT_NAME='${COMPOSE_PROJECT_NAME}' docker compose --env-file .env.node-b ps voice-agent-en voice-agent-fr && \
-            docker image prune -f"
+          ssh huawei-node-b bash -s -- \
+            "${remote_release}" \
+            "${remote_current}" \
+            "${TARGET_STACK_DIR}" \
+            "${COMPOSE_PROJECT_NAME}" \
+            "${COMPOSE_SERVICES}" \
+            "${HEALTH_PORT}" <<'REMOTE'
+          set -Eeuo pipefail
+
+          release_dir="$1"
+          current_link="$2"
+          stack_dir="$3"
+          project_name="$4"
+          service_list="$5"
+          health_port="$6"
+          IFS=' ' read -r -a services <<< "${service_list}"
+          export COMPOSE_PROJECT_NAME="${project_name}"
+          compose=(docker compose --env-file .env.node-b)
+
+          exec 9>/var/lock/salesgirl-deploy.lock
+          flock -w 1800 9
+
+          previous_target="$(readlink "${current_link}" 2>/dev/null || true)"
+          rollback() {
+            status=$?
+            trap - EXIT
+            if [[ ${status} -ne 0 && -n "${previous_target}" && -d "${previous_target}" ]]; then
+              echo "Deployment failed; restoring ${previous_target}"
+              ln -sfn "${previous_target}" "${current_link}"
+              cd "${stack_dir}"
+              "${compose[@]}" build "${services[@]}" || true
+              "${compose[@]}" up -d --no-deps --force-recreate "${services[@]}" || true
+            fi
+            exit "${status}"
+          }
+          trap rollback EXIT
+
+          ln -sfn "${release_dir}" "${current_link}"
+          cd "${stack_dir}"
+          "${compose[@]}" config -q
+          "${compose[@]}" build "${services[@]}"
+          "${compose[@]}" up -d --no-deps --force-recreate "${services[@]}"
+
+          for service in "${services[@]}"; do
+            container_id="$("${compose[@]}" ps -q "${service}")"
+            test -n "${container_id}"
+            test "$(docker inspect -f '{{.State.Running}}' "${container_id}")" = "true"
+          done
+
+          if [[ -n "${health_port}" ]]; then
+            healthy=false
+            for _ in {1..30}; do
+              if curl -fsS "http://127.0.0.1:${health_port}/v1/health" >/dev/null; then
+                healthy=true
+                break
+              fi
+              sleep 2
+            done
+            test "${healthy}" = "true"
+          else
+            sleep 10
+            for service in "${services[@]}"; do
+              container_id="$("${compose[@]}" ps -q "${service}")"
+              test "$(docker inspect -f '{{.State.Running}}' "${container_id}")" = "true"
+            done
+          fi
+
+          "${compose[@]}" ps "${services[@]}"
+          trap - EXIT
+          REMOTE

@@ -215,12 +215,13 @@ runtime never forwards this credential to a different scheme, host, or port.
 ## CI and deployment
 
 - dependency install/build sanity checks run on `dev`, `staging`, and `main`
-- pushes to `staging` deploy the staging VM runtime through GitHub Actions
-- pushes to `main` deploy the production VM runtime through GitHub Actions
-- GitHub Actions can publish a release image to Artifact Registry for parity,
-  but the active runtime still deploys onto the managed VM
-- the VM deploy flow should pull the target branch and restart the systemd
-  services instead of relying on local manual SSH deploy habits
+- pushes to `staging` and `main` deploy both language workers to the matching
+  Huawei node-B Compose stack through node A as an SSH bastion
+- the workflow runs unit and Docker-build gates, uploads the exact commit,
+  serializes Compose changes, and rolls back the source target if startup fails
+- it does not authenticate to GCP, publish to Artifact Registry, or use IAP
+- the approved personal-GCP dependency is the external NG/Odion TTS endpoint;
+  Huawei MaaS `glm-5.2` remains the live and post-call text model
 
 Branch convention:
 
