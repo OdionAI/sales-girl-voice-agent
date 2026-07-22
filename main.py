@@ -3589,7 +3589,23 @@ def _trigger_first_turn(
     session: AgentSession, *, language: str, business_use_case: str
 ) -> None:
     try:
+        # Huawei MaaS rejects an LLM request whose conversation contains only
+        # the system instructions. Build a one-off context with a synthetic
+        # user turn so GLM can generate the opening greeting. Passing the turn
+        # through ``chat_ctx`` (rather than ``user_input``) keeps it out of the
+        # caller transcript and the persisted conversation history.
+        kickoff_context = llm.ChatContext.empty()
+        kickoff_context.add_message(
+            role="user",
+            content=(
+                "L'appelant vient de se connecter. Commencez l'accueil maintenant."
+                if str(language or "").strip().lower() == "fr"
+                else "The caller has just connected. Begin the welcome now."
+            ),
+            extra={"synthetic_kickoff": True},
+        )
         session.generate_reply(
+            chat_ctx=kickoff_context,
             instructions=_kickoff_prompt_for_language(language, business_use_case),
             input_modality="text",
         )
