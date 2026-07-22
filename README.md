@@ -190,6 +190,11 @@ Deployed staging and production VM environments must set
 is not provided, but the base URL itself must still be configured or business
 knowledge retrieval is effectively disabled.
 
+Dynamic HTTP tools whose URL has the exact same origin as
+`CONVERSATION_API_BASE_URL` receive `CONVERSATION_SERVICE_TOKEN` from the voice
+runtime at call time. Do not store that token in an agent tool definition. The
+runtime never forwards this credential to a different scheme, host, or port.
+
 ## CI and deployment
 
 - dependency install/build sanity checks run on `dev`, `staging`, and `main`

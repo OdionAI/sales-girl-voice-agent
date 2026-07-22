@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, patch
@@ -107,6 +108,95 @@ class DynamicHttpToolsTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result["status"], "failed")
         self.assertIn("Missing required fields", result["detail"])
+
+    async def test_conversation_service_tool_uses_runtime_service_auth(self) -> None:
+        tools = build_dynamic_http_tools(
+            {
+                "tools": [
+                    {
+                        "name": "record_caller_details",
+                        "description": "Record confirmed caller details after the request has been handled.",
+                        "method": "POST",
+                        "url": "http://conversation-service:8091/v1/tools/caller-records",
+                        "request_schema": {
+                            "type": "object",
+                            "properties": {"first_name": {"type": "string"}},
+                            "required": ["first_name"],
+                        },
+                    }
+                ]
+            }
+        )
+
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "CONVERSATION_API_BASE_URL": "http://conversation-service:8091",
+                    "CONVERSATION_SERVICE_TOKEN": "runtime-only-token",
+                },
+            ),
+            patch("agent.dynamic_tools.httpx.AsyncClient") as client_cls,
+        ):
+            client = AsyncMock()
+            client.request.return_value = httpx.Response(
+                201,
+                json={"status": "success", "saved": True},
+                headers={"content-type": "application/json"},
+            )
+            client_cls.return_value.__aenter__.return_value = client
+            client_cls.return_value.__aexit__.return_value = False
+
+            result = await tools[0](
+                ctx=self._run_context(["record_caller_details"]),
+                raw_arguments={"first_name": "Aïcha"},
+            )
+
+        self.assertEqual(result["status"], "success")
+        headers = client.request.await_args.kwargs["headers"]
+        self.assertEqual(headers["X-Service-Token"], "runtime-only-token")
+        self.assertEqual(headers["X-Service-Name"], "sales-girl-voice-agent")
+
+    async def test_runtime_service_auth_is_not_sent_to_external_tools(self) -> None:
+        tools = build_dynamic_http_tools(
+            {
+                "tools": [
+                    {
+                        "name": "external_lookup",
+                        "description": "Look up information from an approved external vendor endpoint.",
+                        "method": "POST",
+                        "url": "https://vendor.example.com/lookup",
+                    }
+                ]
+            }
+        )
+
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "CONVERSATION_API_BASE_URL": "http://conversation-service:8091",
+                    "CONVERSATION_SERVICE_TOKEN": "must-not-leak",
+                },
+            ),
+            patch("agent.dynamic_tools.httpx.AsyncClient") as client_cls,
+        ):
+            client = AsyncMock()
+            client.request.return_value = httpx.Response(
+                200,
+                json={"status": "success"},
+                headers={"content-type": "application/json"},
+            )
+            client_cls.return_value.__aenter__.return_value = client
+            client_cls.return_value.__aexit__.return_value = False
+
+            await tools[0](
+                ctx=self._run_context(["external_lookup"]),
+                raw_arguments={},
+            )
+
+        headers = client.request.await_args.kwargs["headers"]
+        self.assertNotIn("X-Service-Token", headers)
 
     async def test_disabled_dynamic_tool_returns_failed_result(self) -> None:
         tools = build_dynamic_http_tools(

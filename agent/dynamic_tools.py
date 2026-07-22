@@ -4,6 +4,7 @@ import copy
 import logging
 import os
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -207,6 +208,34 @@ def _custom_headers(tool: dict[str, Any], method: str) -> dict[str, str]:
     return headers
 
 
+def _normalized_origin(raw_url: str) -> tuple[str, str, int] | None:
+    try:
+        parsed = urlsplit(str(raw_url or "").strip())
+        scheme = parsed.scheme.lower()
+        hostname = (parsed.hostname or "").lower()
+        if scheme not in {"http", "https"} or not hostname:
+            return None
+        port = parsed.port or (443 if scheme == "https" else 80)
+    except ValueError:
+        return None
+    return scheme, hostname, port
+
+
+def _conversation_service_auth_headers(url: str) -> dict[str, str]:
+    """Inject runtime auth only for the configured conversation-service origin."""
+    configured_origin = _normalized_origin(
+        os.getenv("CONVERSATION_API_BASE_URL", "")
+    )
+    request_origin = _normalized_origin(url)
+    service_token = str(os.getenv("CONVERSATION_SERVICE_TOKEN") or "").strip()
+    if not service_token or not configured_origin or request_origin != configured_origin:
+        return {}
+    return {
+        "X-Service-Token": service_token,
+        "X-Service-Name": "sales-girl-voice-agent",
+    }
+
+
 def _response_payload(tool_name: str, response: httpx.Response) -> Any:
     content_type = str(response.headers.get("content-type") or "").lower()
     if "application/json" in content_type:
@@ -277,6 +306,9 @@ async def invoke_dynamic_http_tool(
         )
 
     headers = _custom_headers(tool, method)
+    # Internal service credentials stay in the runtime environment. They are
+    # never persisted in an agent tool definition returned by agent-config.
+    headers.update(_conversation_service_auth_headers(url))
     headers.update(_metadata_headers(metadata, tool_name))
     request_kwargs: dict[str, Any] = {
         "method": method,
