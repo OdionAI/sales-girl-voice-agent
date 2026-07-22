@@ -26,7 +26,7 @@ from livekit.agents import llm, stt
 from livekit.agents._exceptions import APIConnectionError, APIStatusError
 from livekit.agents.llm import LLMStream
 from livekit.agents.llm.tool_context import find_function_tools
-from livekit.plugins import deepgram, google, groq, silero
+from livekit.plugins import deepgram, google, groq, openai, silero
 
 from agent.conversation_memory import (
     append_message,
@@ -42,7 +42,12 @@ from agent.conversation_service_api import (
     resolve_conversation as resolve_conversation_remote,
     start_session as start_session_remote,
     update_session_recording as update_session_recording_remote,
+    update_session_analysis as update_session_analysis_remote,
     utcnow as conv_api_utcnow,
+)
+from agent.conversation_analysis import (
+    analyze_messages,
+    is_enabled as conversation_analysis_enabled,
 )
 from agent.billing_hooks import (
     FAIL_CLOSED as BILLING_FAIL_CLOSED,
@@ -944,6 +949,48 @@ async def _finalize_session_cleanup(
                     exc,
                 )
 
+        if conversation_service_enabled(business_id) and session_tracker_id and conversation_analysis_enabled():
+            try:
+                await update_session_analysis_remote(
+                    session_id=session_tracker_id,
+                    analysis_status="pending",
+                    business_id=business_id,
+                )
+                context = await fetch_context_remote(
+                    str(userdata.get("conversation_id") or ""),
+                    limit=200,
+                    business_id=business_id,
+                )
+                analysis = await analyze_messages(context.get("messages") or [], language=language)
+                persisted_analysis = await update_session_analysis_remote(
+                    session_id=session_tracker_id,
+                    business_id=business_id,
+                    **analysis,
+                )
+                if str(persisted_analysis.get("status") or "") != "success":
+                    logger.error(
+                        "Session analysis persist failed: session_id=%s detail=%s",
+                        session_tracker_id,
+                        persisted_analysis.get("detail"),
+                    )
+            except Exception as exc:  # noqa: BLE001
+                logger.exception(
+                    "Post-session analysis failed: session_id=%s error=%s",
+                    session_tracker_id,
+                    exc,
+                )
+                try:
+                    await update_session_analysis_remote(
+                        session_id=session_tracker_id,
+                        analysis_status="failed",
+                        business_id=business_id,
+                    )
+                except Exception:
+                    logger.exception(
+                        "Failed to persist analysis failure state: session_id=%s",
+                        session_tracker_id,
+                    )
+
 
 async def _start_session_recording_capture(
     *,
@@ -1078,6 +1125,17 @@ TURN_MIN_INTERRUPTION_DURATION = _float_env(
     min_value=0.1,
 )
 
+VOICE_AGENT_LLM_PROVIDER = str(
+    os.getenv("VOICE_AGENT_LLM_PROVIDER") or os.getenv("LLM_PROVIDER") or "maas"
+).strip().lower()
+MAAS_API_KEY = str(os.getenv("MAAS_API_KEY") or os.getenv("HUAWEI_MAAS_API_KEY") or "").strip()
+MAAS_BASE_URL = str(
+    os.getenv("MAAS_BASE_URL", "https://api-ap-southeast-1.modelarts-maas.com/openai/v1")
+).strip().rstrip("/")
+MAAS_LLM_MODEL_DEFAULT = str(os.getenv("MAAS_LLM_MODEL_DEFAULT") or "glm-5.2").strip() or "glm-5.2"
+MAAS_LLM_MODEL_EN = str(os.getenv("MAAS_LLM_MODEL_EN") or MAAS_LLM_MODEL_DEFAULT).strip() or MAAS_LLM_MODEL_DEFAULT
+MAAS_LLM_MODEL_FR = str(os.getenv("MAAS_LLM_MODEL_FR") or MAAS_LLM_MODEL_DEFAULT).strip() or MAAS_LLM_MODEL_DEFAULT
+
 GOOGLE_LLM_MODEL_DEFAULT = (
     str(os.getenv("GOOGLE_LLM_MODEL_DEFAULT") or "gemini-3-flash-preview").strip()
     or "gemini-3-flash-preview"
@@ -1103,7 +1161,9 @@ GOOGLE_LLM_BACKUP_MODEL_FR = (
     or GOOGLE_LLM_BACKUP_MODEL_DEFAULT
 )
 
-LLM_PROVIDER = str(os.getenv("LLM_PROVIDER") or "google").strip().lower() or "google"
+LLM_PROVIDER = str(
+    os.getenv("LLM_PROVIDER") or os.getenv("VOICE_AGENT_LLM_PROVIDER") or "maas"
+).strip().lower() or "maas"
 GROQ_LLM_MODEL_DEFAULT = (
     str(
         os.getenv("GROQ_LLM_MODEL_DEFAULT")
@@ -1407,6 +1467,16 @@ class _FallbackGroqLLMStream(llm.LLMStream):
 def _build_llm_for_language(*, language: str) -> llm.LLM:
     lang = str(language or "").strip().lower()
     provider = LLM_PROVIDER
+    if provider == "maas":
+        if not MAAS_API_KEY:
+            raise RuntimeError("MAAS_API_KEY is required when using the Huawei MaaS voice runtime.")
+        return openai.LLM(
+            model=MAAS_LLM_MODEL_FR if lang == "fr" else MAAS_LLM_MODEL_EN,
+            api_key=MAAS_API_KEY,
+            base_url=MAAS_BASE_URL,
+            temperature=0.2,
+            extra_body={"chat_template_kwargs": {"thinking": False}},
+        )
     if provider == "groq":
         primary_model = GROQ_LLM_MODEL_FR if lang == "fr" else GROQ_LLM_MODEL_EN
         backup_model = GROQ_LLM_BACKUP_MODEL_FR if lang == "fr" else GROQ_LLM_BACKUP_MODEL_EN
