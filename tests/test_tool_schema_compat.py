@@ -2,10 +2,15 @@ import os
 import unittest
 from unittest.mock import patch
 
+from livekit.agents import Agent, llm
 from livekit.agents.llm.tool_context import find_function_tools
 
 from agent.dynamic_tools import _normalize_schema
-from agent.salon_agent import SalonAgent
+from agent.salon_agent import (
+    SalonAgent,
+    parse_textual_function_call,
+    select_enabled_runtime_tools,
+)
 from agent.tool_schema_compat import (
     CREATE_BOOKING_RAW_SCHEMA,
     CREATE_ORDER_RAW_SCHEMA,
@@ -127,6 +132,70 @@ class ToolSchemaCompatTests(unittest.TestCase):
         self.assertTrue(
             _object_has_additional_properties_false(transfer_schema["parameters"])
         )
+
+    def test_runtime_tool_selection_exposes_only_enabled_tools_and_knowledge(self) -> None:
+        tools = find_function_tools(SalonAgent)
+        selected = select_enabled_runtime_tools(tools, ["create_ticket"])
+        self.assertEqual(
+            {tool.info.name for tool in selected},
+            {"create_ticket", "search_business_knowledge"},
+        )
+
+    def test_textual_function_call_is_recovered_only_for_allowed_tool(self) -> None:
+        text = '<function>create_ticket{"title":"Passeport","description":"Suivi"}</function>'
+        recovered = parse_textual_function_call(
+            text, allowed_tool_names={"create_ticket"}
+        )
+        self.assertIsNotNone(recovered)
+        self.assertEqual(recovered[0], "create_ticket")
+        self.assertEqual(
+            recovered[1], '{"title":"Passeport","description":"Suivi"}'
+        )
+        self.assertIsNone(
+            parse_textual_function_call(text, allowed_tool_names={"send_email"})
+        )
+
+    def test_textual_function_call_rejects_invalid_json(self) -> None:
+        self.assertIsNone(
+            parse_textual_function_call(
+                "<function>create_ticket{not-json}</function>",
+                allowed_tool_names={"create_ticket"},
+            )
+        )
+
+
+class TextualToolCallStreamTests(unittest.IsolatedAsyncioTestCase):
+    async def test_llm_node_converts_split_text_markup_before_tts(self) -> None:
+        async def textual_stream():
+            yield llm.ChatChunk(
+                id="chunk-1",
+                delta=llm.ChoiceDelta(role="assistant", content="<funct"),
+            )
+            yield llm.ChatChunk(
+                id="chunk-1",
+                delta=llm.ChoiceDelta(
+                    content='ion>create_ticket{"title":"Passeport","description":"Suivi"}</function>'
+                ),
+            )
+
+        agent = SalonAgent(instructions="test")
+        tools = [
+            tool
+            for tool in agent.tools
+            if tool.info.name == "create_ticket"
+        ]
+        with patch.object(Agent.default, "llm_node", return_value=textual_stream()):
+            output = [
+                chunk
+                async for chunk in agent.llm_node(
+                    llm.ChatContext.empty(), tools, model_settings=None
+                )
+            ]
+
+        self.assertEqual(len(output), 1)
+        self.assertEqual(output[0].delta.content, None)
+        self.assertEqual(len(output[0].delta.tool_calls), 1)
+        self.assertEqual(output[0].delta.tool_calls[0].name, "create_ticket")
 
 
 if __name__ == "__main__":

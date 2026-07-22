@@ -1,7 +1,11 @@
+import json
 import logging
 import os
+import re
+import uuid
+from typing import Any
 
-from livekit.agents import Agent, RunContext, function_tool
+from livekit.agents import Agent, RunContext, function_tool, llm
 
 from .tool_schema_compat import (
     CREATE_BOOKING_RAW_SCHEMA,
@@ -46,6 +50,64 @@ logger = logging.getLogger(__name__)
 AGENT_CLIENT_ID = os.getenv("AGENT_CLIENT_ID", "sales-girl-internal")
 AGENT_NAME = os.getenv("AGENT_NAME", "sales-girl-agent-en")
 ALWAYS_ENABLED_RUNTIME_TOOLS = {"search_business_knowledge"}
+_TEXTUAL_FUNCTION_CALL_PATTERN = re.compile(
+    r"^\s*<function>\s*([A-Za-z_][A-Za-z0-9_]*)\s*(\{.*\})\s*</function>\s*$",
+    re.DOTALL | re.IGNORECASE,
+)
+_TEXTUAL_FUNCTION_MARKER = "<function>"
+
+
+def _runtime_tool_name(tool: Any) -> str:
+    return str(getattr(getattr(tool, "info", None), "name", "") or "").strip()
+
+
+def select_enabled_runtime_tools(
+    tools: list[Any], enabled_tool_names: list[str] | set[str] | tuple[str, ...]
+) -> list[Any]:
+    """Return only tools explicitly enabled for this configured agent."""
+    enabled = {
+        str(name or "").strip()
+        for name in enabled_tool_names
+        if str(name or "").strip()
+    }
+    enabled.update(ALWAYS_ENABLED_RUNTIME_TOOLS)
+    return [tool for tool in tools if _runtime_tool_name(tool) in enabled]
+
+
+def parse_textual_function_call(
+    text: str, *, allowed_tool_names: set[str]
+) -> tuple[str, str] | None:
+    """Recover the exact textual tool-call form occasionally emitted by MaaS."""
+    match = _TEXTUAL_FUNCTION_CALL_PATTERN.fullmatch(str(text or ""))
+    if not match:
+        return None
+    tool_name = match.group(1).strip()
+    if tool_name not in allowed_tool_names:
+        return None
+    try:
+        arguments = json.loads(match.group(2))
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(arguments, dict):
+        return None
+    return tool_name, json.dumps(arguments, ensure_ascii=False, separators=(",", ":"))
+
+
+def _text_from_llm_chunk(chunk: Any) -> str:
+    if isinstance(chunk, str):
+        return chunk
+    if isinstance(chunk, llm.ChatChunk) and chunk.delta is not None:
+        return str(chunk.delta.content or "")
+    return ""
+
+
+def _is_possible_textual_function_prefix(text: str) -> bool:
+    candidate = str(text or "").lstrip().lower()
+    if not candidate:
+        return True
+    return _TEXTUAL_FUNCTION_MARKER.startswith(candidate) or candidate.startswith(
+        _TEXTUAL_FUNCTION_MARKER
+    )
 
 
 def _tool_metadata(ctx: RunContext) -> dict:
@@ -146,6 +208,100 @@ class SalonAgent(Agent):
     """
     Shared English customer support agent for business-specific use cases.
     """
+
+    async def llm_node(self, chat_ctx, tools, model_settings):
+        """Convert MaaS textual function markup into a real LiveKit tool call.
+
+        GLM normally returns OpenAI-compatible structured tool calls. If it emits
+        the fallback ``<function>name{...}</function>`` representation, hold that
+        response out of TTS and recover it only for a tool enabled in this turn.
+        """
+        pending: list[Any] = []
+        buffered_text = ""
+        probing = True
+        last_chunk_id = ""
+
+        async for chunk in Agent.default.llm_node(
+            self, chat_ctx, tools, model_settings
+        ):
+            if isinstance(chunk, llm.ChatChunk):
+                last_chunk_id = chunk.id or last_chunk_id
+                if chunk.delta is not None and chunk.delta.tool_calls:
+                    # While probing, pending content can only be whitespace or
+                    # a textual-function prefix. Never send that prefix to TTS
+                    # when the provider follows it with a structured call.
+                    pending.clear()
+                    probing = False
+                    yield chunk
+                    continue
+
+            if not probing:
+                yield chunk
+                continue
+
+            pending.append(chunk)
+            buffered_text += _text_from_llm_chunk(chunk)
+            if _is_possible_textual_function_prefix(buffered_text):
+                continue
+
+            for buffered_chunk in pending:
+                yield buffered_chunk
+            pending.clear()
+            probing = False
+
+        if not probing:
+            return
+
+        allowed_tool_names = {
+            name for tool in tools if (name := _runtime_tool_name(tool))
+        }
+        recovered = parse_textual_function_call(
+            buffered_text, allowed_tool_names=allowed_tool_names
+        )
+        if recovered:
+            tool_name, arguments = recovered
+            logger.warning(
+                "Recovered textual MaaS function call as a structured tool call: tool=%s",
+                tool_name,
+            )
+            yield llm.ChatChunk(
+                id=last_chunk_id or f"textual-tool-{uuid.uuid4().hex}",
+                delta=llm.ChoiceDelta(
+                    role="assistant",
+                    tool_calls=[
+                        llm.FunctionToolCall(
+                            name=tool_name,
+                            arguments=arguments,
+                            call_id=f"call_textual_{uuid.uuid4().hex}",
+                        )
+                    ],
+                ),
+            )
+            for buffered_chunk in pending:
+                if isinstance(buffered_chunk, llm.ChatChunk) and buffered_chunk.usage:
+                    yield llm.ChatChunk(id=buffered_chunk.id, usage=buffered_chunk.usage)
+            return
+
+        if buffered_text.lstrip().lower().startswith(_TEXTUAL_FUNCTION_MARKER):
+            logger.error(
+                "Suppressed malformed or unauthorized textual MaaS function call."
+            )
+            activity = getattr(self, "_activity", None)
+            session = getattr(activity, "session", None)
+            userdata = getattr(session, "userdata", None)
+            language = (
+                str(userdata.get("language") or "")
+                if isinstance(userdata, dict)
+                else ""
+            )
+            if language.lower() == "fr":
+                yield "Je suis désolée, je n’ai pas pu terminer cette action. Pourriez-vous réessayer ?"
+            else:
+                yield "I'm sorry, I couldn't complete that action. Could you try again?"
+            return
+
+        for buffered_chunk in pending:
+            yield buffered_chunk
 
     @function_tool(raw_schema=SEARCH_BUSINESS_KNOWLEDGE_RAW_SCHEMA)
     async def search_business_knowledge(
