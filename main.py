@@ -13,8 +13,20 @@ from dotenv import load_dotenv
 # Load env immediately so API clients can read the correct base URLs
 load_dotenv()
 
-from livekit.agents import AgentServer, AgentSession, JobContext, cli, room_io
-from livekit.plugins import deepgram, openai
+from livekit.agents import (
+    APIConnectOptions,
+    NOT_GIVEN,
+    AgentServer,
+    AgentSession,
+    JobContext,
+    cli,
+    room_io,
+)
+from livekit.agents import llm, stt
+from livekit.agents._exceptions import APIConnectionError, APIStatusError
+from livekit.agents.llm import LLMStream
+from livekit.agents.llm.tool_context import find_function_tools
+from livekit.plugins import deepgram, google, groq, openai, silero
 
 from agent.conversation_memory import (
     append_message,
@@ -47,13 +59,16 @@ from agent.billing_hooks import (
     send_call_heartbeat as send_billing_call_heartbeat,
 )
 from agent.agent_config_api import get_runtime_config as get_agent_runtime_config
+from agent.dynamic_tools import build_dynamic_http_tools
 from agent.ops_api import (
+    create_ticket as ops_create_ticket,
     get_account_overview as ops_get_account_overview,
     get_payment_summary as ops_get_payment_summary,
     get_recent_transactions as ops_get_recent_transactions,
     get_tariff_profile as ops_get_tariff_profile,
     get_vending_history as ops_get_vending_history,
     lookup_customer_account as ops_lookup_customer_account,
+    search_business_knowledge as ops_search_business_knowledge,
 )
 from agent.odion_tts import OdionTTS
 from agent.odion_stt import DEFAULT_ODION_STT_BASE_URL, OdionSTT
@@ -127,6 +142,12 @@ GENERIC_STATIC_PROMPT_EN = (
     "Use the saved business instructions and knowledge first, use tools only when relevant, never invent live data, "
     "and create a support ticket when human follow-up is needed."
 )
+ALWAYS_ENABLED_RUNTIME_TOOLS = ("search_business_knowledge",)
+
+SHARED_ODION_CATALOG_OWNER_BY_VOICE_ID = {
+    "d270a5cec6914373b9deed1d1c3cbade": "mavinomichael@gmail.com",
+    "46f5ac744a504023b93c6dd8ddd46ac6": "mavinomichael@gmail.com",
+}
 
 
 def _is_en_agent_name(name: str) -> bool:
@@ -157,6 +178,11 @@ server = AgentServer(
     port=AGENT_PORT,
 )
 init_store()
+BUILTIN_RUNTIME_TOOL_NAMES = frozenset(
+    str(getattr(tool, "info").name or "").strip()
+    for tool in find_function_tools(SalonAgent)
+    if getattr(getattr(tool, "info", None), "name", None)
+)
 
 
 class UsageMeter:
@@ -232,6 +258,249 @@ def _track_background_task(userdata: dict[str, Any], coro: Any) -> None:
     task.add_done_callback(_cleanup)
 
 
+def _append_recent_user_message(userdata: dict[str, Any], content: str) -> None:
+    recent = userdata.setdefault("recent_user_messages", [])
+    if not isinstance(recent, list):
+        recent = []
+        userdata["recent_user_messages"] = recent
+    cleaned = str(content or "").strip()
+    if not cleaned:
+        return
+    recent.append(cleaned)
+    if len(recent) > 8:
+        del recent[:-8]
+
+
+def _tool_metadata_from_userdata(userdata: dict[str, Any]) -> dict[str, Any]:
+    conversation_id = str(userdata.get("conversation_id") or "")
+    session_id = str(userdata.get("session_id") or conversation_id)
+    return {
+        "client_id": str(userdata.get("client_id") or "sales-girl-internal"),
+        "agent_id": str(
+            userdata.get("agent_config_id")
+            or userdata.get("agent_id")
+            or AGENT_NAME
+        ),
+        "business_id": str(userdata.get("business_id") or ""),
+        "business_use_case": str(userdata.get("business_use_case") or ""),
+        "knowledge_base_ids": list(userdata.get("knowledge_base_ids") or []),
+        "live_data_endpoint": str(userdata.get("live_data_endpoint") or ""),
+        "conversation_id": conversation_id,
+        "session_id": session_id,
+        "end_user_id": str(userdata.get("end_user_id") or ""),
+        "end_user_name": str(userdata.get("end_user_name") or ""),
+        "caller_phone_e164": str(userdata.get("caller_phone_e164") or ""),
+        "enabled_tool_names": list(userdata.get("enabled_tool_names") or []),
+        "turn_index": int(userdata.get("turn_index", 0)),
+        "last_user_transcript": str(userdata.get("last_user_transcript") or ""),
+        "last_assistant_message": str(userdata.get("last_assistant_message") or ""),
+        "timeline_event_index": int(userdata.get("timeline_event_index", 0)),
+    }
+
+
+def _assistant_claims_ticket_created(message: str) -> bool:
+    normalized = str(message or "").strip().lower()
+    if not normalized:
+        return False
+    patterns = (
+        "i have created a ticket",
+        "i created a ticket",
+        "ticket has been created",
+        "j'ai créé un ticket",
+        "j’ai créé un ticket",
+        "le ticket a été créé",
+        "un ticket a été créé",
+    )
+    return any(pattern in normalized for pattern in patterns)
+
+
+def _assistant_claims_ticket_failed(message: str) -> bool:
+    normalized = str(message or "").strip().lower()
+    if not normalized:
+        return False
+    patterns = (
+        "ticket creation failed",
+        "couldn't create the ticket",
+        "could not create the ticket",
+        "could not create a ticket",
+        "unable to create the ticket",
+        "unable to create a ticket",
+        "there was an issue creating the ticket",
+        "there is an issue creating the ticket",
+        "issue creating the ticket",
+        "problem creating the ticket",
+        "sorry, there was an issue creating the ticket",
+        "n'ai pas pu créer le ticket",
+        "la création du ticket a échoué",
+        "je suis désolé, la création du ticket a échoué",
+        "je n'ai pas pu créer le ticket",
+        "impossible de créer le ticket",
+        "un problème est survenu lors de la création du ticket",
+    )
+    return any(pattern in normalized for pattern in patterns)
+
+
+def _assistant_claims_ticket_updated(message: str) -> bool:
+    normalized = str(message or "").strip().lower()
+    if not normalized:
+        return False
+    patterns = (
+        "i updated the ticket",
+        "i have updated the ticket",
+        "the ticket has been updated",
+        "j'ai mis à jour le ticket",
+        "j’ai mis à jour le ticket",
+        "j'ai mis a jour le ticket",
+        "j’ai mis a jour le ticket",
+        "le ticket a été mis à jour",
+        "le ticket a ete mis a jour",
+    )
+    return any(pattern in normalized for pattern in patterns)
+
+
+def _should_skip_assistant_message_persist(userdata: dict[str, Any], content: str) -> bool:
+    candidate = str(content or "").strip()
+    if not candidate:
+        return True
+
+    lowered = candidate.lower()
+    if len(candidate) <= 24 and (
+        lowered in {"bonjour ! je", "bonjour! je", "bonjour ! j", "bonjour! j"}
+        or re.match(r"^(bonjour|salut|hello|hi)\W+(je|j|i)\s*$", lowered)
+    ):
+        return True
+
+    last_saved = str(userdata.get("last_persisted_assistant_content") or "").strip()
+    if not last_saved:
+        return False
+    if candidate == last_saved:
+        return True
+    if len(candidate) < len(last_saved) and last_saved.startswith(candidate):
+        return True
+    return False
+
+
+def _is_non_informative_ticket_reply(text: str) -> bool:
+    normalized = str(text or "").strip().lower()
+    if not normalized:
+        return True
+    trivial = {
+        "ok",
+        "okay",
+        "no problem",
+        "oui",
+        "yes",
+        "d'accord",
+        "d’accord",
+        "or",
+        "dit",
+    }
+    return normalized in trivial or len(normalized) < 3
+
+
+def _fallback_ticket_summary(userdata: dict[str, Any]) -> tuple[str, str]:
+    recent = [
+        str(item).strip()
+        for item in list(userdata.get("recent_user_messages") or [])
+        if not _is_non_informative_ticket_reply(str(item))
+    ]
+    combined = " ".join(recent[-4:]).strip()
+    lowered = combined.lower()
+    if "alat" in lowered:
+        return (
+            "ALAT App Issues",
+            combined or "Customer reported issues while using the ALAT app.",
+        )
+    if "passeport" in lowered or "passport" in lowered:
+        return (
+            "Passport Support Request",
+            combined or "Customer requested help related to a passport issue.",
+        )
+    title_source = recent[0] if recent else "Support Request"
+    title = " ".join(title_source.replace('"', "").split()[:6]).strip() or "Support Request"
+    if len(title) < 2:
+        title = "Support Request"
+    description = combined or str(userdata.get("last_user_transcript") or "").strip() or "Customer requested human follow-up."
+    return title[:255], description
+
+
+async def _reconcile_ticket_claim_if_needed(userdata: dict[str, Any], assistant_message: str) -> None:
+    enabled = {
+        str(name or "").strip()
+        for name in list(userdata.get("enabled_tool_names") or [])
+        if str(name or "").strip()
+    }
+    if "create_ticket" not in enabled:
+        return
+
+    current_turn = int(userdata.get("turn_index", 0))
+    successful_turn = int(userdata.get("last_create_ticket_success_turn", -1))
+    if successful_turn == current_turn:
+        return
+
+    assistant_message = str(assistant_message or "").strip()
+    if not assistant_message:
+        return
+    if successful_turn >= 0 and _assistant_claims_ticket_updated(assistant_message):
+        return
+
+    should_reconcile = _assistant_claims_ticket_created(assistant_message)
+    if not should_reconcile and _assistant_claims_ticket_failed(assistant_message):
+        recent = " ".join(list(userdata.get("recent_user_messages") or [])[-4:]).lower()
+        should_reconcile = any(
+            phrase in recent
+            for phrase in (
+                "create a ticket",
+                "create ticket",
+                "créer un billet",
+                "créer un ticket",
+                "creer un ticket",
+            )
+        )
+    if not should_reconcile:
+        return
+
+    title, description = _fallback_ticket_summary(userdata)
+    logger.warning(
+        "Reconciling missing ticket tool execution: business_id=%s conversation_id=%s turn=%s title=%s",
+        userdata.get("business_id"),
+        userdata.get("conversation_id"),
+        current_turn,
+        title,
+    )
+    result = await ops_create_ticket(
+        title=title,
+        description=description,
+        issue_type="general",
+        priority="high",
+        requires_human=True,
+        metadata=_tool_metadata_from_userdata(userdata),
+    )
+    if str(result.get("status") or "").lower() != "failed":
+        userdata["last_create_ticket_success_turn"] = current_turn
+        userdata["last_create_ticket_result"] = result
+        _persist_session_event_async(
+            userdata,
+            event_type="tool_call",
+            role="tool",
+            title="create_ticket_fallback",
+            body=_summarize_tool_output(result),
+            payload={
+                "tool_name": "create_ticket_fallback",
+                "tool_result": result,
+                "event_index": int(userdata.get("timeline_event_index", 0)),
+                "turn_index": current_turn,
+            },
+        )
+    else:
+        logger.error(
+            "Fallback ticket reconciliation failed: business_id=%s conversation_id=%s detail=%s",
+            userdata.get("business_id"),
+            userdata.get("conversation_id"),
+            result.get("detail") or result.get("message"),
+        )
+
+
 async def _drain_background_tasks(userdata: dict[str, Any]) -> None:
     pending = list(userdata.get("background_tasks") or [])
     if not pending:
@@ -267,6 +536,11 @@ def _billing_session_id(userdata: dict[str, Any]) -> str:
 
 
 def _billing_bypass_reason(userdata: dict[str, Any], call_channel: str) -> str:
+    # Platform-owned help/guide sessions are funded by the platform and never
+    # charged to the viewing business wallet, so callers are never blocked by
+    # low airtime when asking the SalesGirl guide for help.
+    if str(userdata.get("session_kind") or "").strip().lower() == "help":
+        return "platform_help_session"
     runtime_overrides = userdata.get("runtime_overrides")
     if (
         call_channel == "web"
@@ -274,6 +548,18 @@ def _billing_bypass_reason(userdata: dict[str, Any], call_channel: str) -> str:
         and bool(runtime_overrides)
     ):
         return "voice_lab_runtime_overrides"
+    entry_surface = str(userdata.get("entry_surface") or "").strip().lower()
+    session_owner = str(userdata.get("session_owner") or "").strip().lower()
+    if entry_surface == "aicc_inbound" or session_owner == "sip_lab":
+        return "aicc_sip_lab_session"
+    bypass_agent_ids = {
+        item.strip()
+        for item in str(os.getenv("BILLING_BYPASS_AGENT_CONFIG_IDS") or "").split(",")
+        if item.strip()
+    }
+    agent_config_id = str(userdata.get("agent_config_id") or "").strip()
+    if agent_config_id and agent_config_id in bypass_agent_ids:
+        return "agent_billing_bypass"
     return ""
 
 
@@ -706,6 +992,65 @@ async def _finalize_session_cleanup(
                     )
 
 
+async def _start_session_recording_capture(
+    *,
+    ctx: JobContext,
+    userdata: dict[str, Any],
+    business_id: str,
+    session_tracker_id: str,
+    started_at: Any,
+) -> None:
+    if not session_tracker_id or not is_recording_enabled():
+        return
+
+    logger.info(
+        "Attempting room recording start: session_id=%s room=%s",
+        session_tracker_id or str(userdata.get("session_id") or ""),
+        str(ctx.room.name or ""),
+    )
+    recording_started = await start_room_recording(
+        room_name=str(ctx.room.name or ""),
+        business_id=business_id,
+        session_id=session_tracker_id or str(userdata.get("session_id") or ""),
+        started_at=started_at,
+    )
+    userdata["recording_egress_id"] = recording_started.egress_id
+    userdata["recording_expected_url"] = recording_started.expected_url
+    userdata["recording_filepath"] = recording_started.filepath
+    initial_recording_status = "recording" if recording_started.egress_id else "failed"
+
+    await update_session_recording_remote(
+        session_id=session_tracker_id,
+        recording_status=initial_recording_status,
+        recording_url=recording_started.expected_url
+        if initial_recording_status == "recording"
+        else None,
+        business_id=business_id,
+    )
+    _persist_session_event_async(
+        userdata,
+        event_type="recording_started"
+        if recording_started.egress_id
+        else "recording_failed",
+        role="system",
+        title="Recording started"
+        if recording_started.egress_id
+        else "Recording failed",
+        body=(
+            f"Audio recording started for room {ctx.room.name}."
+            if recording_started.egress_id
+            else f"Audio recording could not start: {recording_started.detail or 'unknown error'}."
+        ),
+        payload={
+            "recording_status": initial_recording_status,
+            "egress_id": recording_started.egress_id,
+            "recording_url": recording_started.expected_url,
+            "filepath": recording_started.filepath,
+            "detail": recording_started.detail,
+        },
+    )
+
+
 REQUIRE_VERIFIED_PHONE = os.getenv("REQUIRE_VERIFIED_PHONE", "true").lower() == "true"
 CONVERSATION_SERVICE_REQUIRED = (
     os.getenv("CONVERSATION_SERVICE_REQUIRED", "true").lower() == "true"
@@ -713,11 +1058,14 @@ CONVERSATION_SERVICE_REQUIRED = (
 ENABLE_ODION_TTS_EN = os.getenv("ENABLE_ODION_TTS_EN", "true").lower() == "true"
 ENABLE_ODION_TTS_FR = os.getenv("ENABLE_ODION_TTS_FR", "false").lower() == "true"
 ODION_TTS_EXPERIMENT_OWNER_ID = str(
-    os.getenv("ODION_TTS_EXPERIMENT_OWNER_ID") or "mavinomichael@gmail.com"
+    os.getenv("ODION_TTS_EXPERIMENT_OWNER_ID") or ""
 ).strip()
 ODION_TTS_EXPERIMENT_VOICE_ID = str(
-    os.getenv("ODION_TTS_EXPERIMENT_VOICE_ID") or "d270a5cec6914373b9deed1d1c3cbade"
+    os.getenv("ODION_TTS_EXPERIMENT_VOICE_ID") or ""
 ).strip()
+FORCE_ODION_TTS_EXPERIMENT_VOICE = (
+    os.getenv("FORCE_ODION_TTS_EXPERIMENT_VOICE", "false").lower() == "true"
+)
 ODION_TTS_EXPERIMENT_LANGUAGE_HINT = (
     str(os.getenv("ODION_TTS_EXPERIMENT_LANGUAGE_HINT") or "English").strip()
     or "English"
@@ -782,14 +1130,381 @@ VOICE_AGENT_LLM_PROVIDER = str(
 ).strip().lower()
 MAAS_API_KEY = str(os.getenv("MAAS_API_KEY") or os.getenv("HUAWEI_MAAS_API_KEY") or "").strip()
 MAAS_BASE_URL = str(
-    os.getenv(
-        "MAAS_BASE_URL",
-        "https://api-ap-southeast-1.modelarts-maas.com/openai/v1",
-    )
+    os.getenv("MAAS_BASE_URL", "https://api-ap-southeast-1.modelarts-maas.com/openai/v1")
 ).strip().rstrip("/")
 MAAS_LLM_MODEL_DEFAULT = str(os.getenv("MAAS_LLM_MODEL_DEFAULT") or "glm-5.2").strip() or "glm-5.2"
 MAAS_LLM_MODEL_EN = str(os.getenv("MAAS_LLM_MODEL_EN") or MAAS_LLM_MODEL_DEFAULT).strip() or MAAS_LLM_MODEL_DEFAULT
 MAAS_LLM_MODEL_FR = str(os.getenv("MAAS_LLM_MODEL_FR") or MAAS_LLM_MODEL_DEFAULT).strip() or MAAS_LLM_MODEL_DEFAULT
+
+GOOGLE_LLM_MODEL_DEFAULT = (
+    str(os.getenv("GOOGLE_LLM_MODEL_DEFAULT") or "gemini-3-flash-preview").strip()
+    or "gemini-3-flash-preview"
+)
+GOOGLE_LLM_MODEL_EN = (
+    str(os.getenv("GOOGLE_LLM_MODEL_EN") or GOOGLE_LLM_MODEL_DEFAULT).strip()
+    or GOOGLE_LLM_MODEL_DEFAULT
+)
+GOOGLE_LLM_MODEL_FR = (
+    str(os.getenv("GOOGLE_LLM_MODEL_FR") or GOOGLE_LLM_MODEL_DEFAULT).strip()
+    or GOOGLE_LLM_MODEL_DEFAULT
+)
+GOOGLE_LLM_BACKUP_MODEL_DEFAULT = (
+    str(os.getenv("GOOGLE_LLM_BACKUP_MODEL_DEFAULT") or "gemini-3.1-flash-lite").strip()
+    or "gemini-3.1-flash-lite"
+)
+GOOGLE_LLM_BACKUP_MODEL_EN = (
+    str(os.getenv("GOOGLE_LLM_BACKUP_MODEL_EN") or GOOGLE_LLM_BACKUP_MODEL_DEFAULT).strip()
+    or GOOGLE_LLM_BACKUP_MODEL_DEFAULT
+)
+GOOGLE_LLM_BACKUP_MODEL_FR = (
+    str(os.getenv("GOOGLE_LLM_BACKUP_MODEL_FR") or GOOGLE_LLM_BACKUP_MODEL_DEFAULT).strip()
+    or GOOGLE_LLM_BACKUP_MODEL_DEFAULT
+)
+
+LLM_PROVIDER = str(
+    os.getenv("LLM_PROVIDER") or os.getenv("VOICE_AGENT_LLM_PROVIDER") or "maas"
+).strip().lower() or "maas"
+GROQ_LLM_MODEL_DEFAULT = (
+    str(
+        os.getenv("GROQ_LLM_MODEL_DEFAULT")
+        or "meta-llama/llama-4-scout-17b-16e-instruct"
+    ).strip()
+    or "meta-llama/llama-4-scout-17b-16e-instruct"
+)
+GROQ_LLM_MODEL_EN = (
+    str(os.getenv("GROQ_LLM_MODEL_EN") or GROQ_LLM_MODEL_DEFAULT).strip()
+    or GROQ_LLM_MODEL_DEFAULT
+)
+GROQ_LLM_MODEL_FR = (
+    str(os.getenv("GROQ_LLM_MODEL_FR") or GROQ_LLM_MODEL_DEFAULT).strip()
+    or GROQ_LLM_MODEL_DEFAULT
+)
+GROQ_LLM_BACKUP_MODEL_DEFAULT = (
+    str(os.getenv("GROQ_LLM_BACKUP_MODEL_DEFAULT") or "llama-3.3-70b-versatile").strip()
+    or "llama-3.3-70b-versatile"
+)
+GROQ_LLM_BACKUP_MODEL_EN = (
+    str(os.getenv("GROQ_LLM_BACKUP_MODEL_EN") or GROQ_LLM_BACKUP_MODEL_DEFAULT).strip()
+    or GROQ_LLM_BACKUP_MODEL_DEFAULT
+)
+GROQ_LLM_BACKUP_MODEL_FR = (
+    str(os.getenv("GROQ_LLM_BACKUP_MODEL_FR") or GROQ_LLM_BACKUP_MODEL_DEFAULT).strip()
+    or GROQ_LLM_BACKUP_MODEL_DEFAULT
+)
+
+
+def _is_llm_model_unavailable_error(error: Exception) -> bool:
+    if not isinstance(error, APIStatusError):
+        return False
+    body = str(getattr(error, "body", "") or error).lower()
+    return error.status_code == 404 and (
+        "no longer available" in body
+        or "model" in body and "not available" in body
+        or "model not found" in body
+        or "not_found" in body
+    )
+
+
+def _is_google_model_unavailable_error(error: Exception) -> bool:
+    return _is_llm_model_unavailable_error(error)
+
+
+def _groq_llm_kwargs_for_model(model: str) -> dict[str, Any]:
+    lowered = str(model or "").strip().lower()
+    if "qwen" in lowered:
+        return {"reasoning_effort": "none"}
+    return {}
+
+
+class FallbackGoogleLLM(llm.LLM):
+    def __init__(
+        self,
+        *,
+        primary_model: str,
+        backup_model: str = "",
+    ) -> None:
+        super().__init__()
+        self._primary_model = str(primary_model or "").strip()
+        self._backup_model = str(backup_model or "").strip()
+        self._active_model = self._primary_model
+        self._primary = google.LLM(model=self._primary_model)
+        self._backup = (
+            google.LLM(model=self._backup_model)
+            if self._backup_model and self._backup_model != self._primary_model
+            else None
+        )
+
+    @property
+    def model(self) -> str:
+        return self._active_model or self._primary_model or "unknown"
+
+    @property
+    def provider(self) -> str:
+        return "google"
+
+    def prewarm(self) -> None:
+        self._primary.prewarm()
+        if self._backup:
+            self._backup.prewarm()
+
+    async def aclose(self) -> None:
+        await self._primary.aclose()
+        if self._backup:
+            await self._backup.aclose()
+
+    def chat(
+        self,
+        *,
+        chat_ctx: llm.ChatContext,
+        tools: list[llm.Tool] | None = None,
+        conn_options: APIConnectOptions = APIConnectOptions(),
+        parallel_tool_calls=NOT_GIVEN,
+        tool_choice=NOT_GIVEN,
+        response_format=NOT_GIVEN,
+        extra_kwargs=NOT_GIVEN,
+    ) -> LLMStream:
+        return _FallbackGoogleLLMStream(
+            self,
+            chat_ctx=chat_ctx,
+            tools=tools or [],
+            conn_options=conn_options,
+            parallel_tool_calls=parallel_tool_calls,
+            tool_choice=tool_choice,
+            response_format=response_format,
+            extra_kwargs=extra_kwargs,
+        )
+
+
+class _FallbackGoogleLLMStream(llm.LLMStream):
+    def __init__(
+        self,
+        llm_v: FallbackGoogleLLM,
+        *,
+        chat_ctx: llm.ChatContext,
+        tools: list[llm.Tool],
+        conn_options,
+        parallel_tool_calls,
+        tool_choice,
+        response_format,
+        extra_kwargs,
+    ) -> None:
+        super().__init__(llm_v, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
+        self._routing_llm = llm_v
+        self._parallel_tool_calls = parallel_tool_calls
+        self._tool_choice = tool_choice
+        self._response_format = response_format
+        self._extra_kwargs = extra_kwargs
+
+    async def _run(self) -> None:
+        attempts: list[tuple[google.LLM, str]] = [
+            (self._routing_llm._primary, self._routing_llm._primary_model)
+        ]
+        if self._routing_llm._backup:
+            attempts.append((self._routing_llm._backup, self._routing_llm._backup_model))
+
+        last_error: Exception | None = None
+        for index, (provider_llm, model_name) in enumerate(attempts):
+            self._routing_llm._active_model = model_name
+            stream = provider_llm.chat(
+                chat_ctx=self._chat_ctx,
+                tools=self._tools,
+                conn_options=self._conn_options,
+                parallel_tool_calls=self._parallel_tool_calls,
+                tool_choice=self._tool_choice,
+                response_format=self._response_format,
+                extra_kwargs=self._extra_kwargs,
+            )
+            try:
+                async with stream:
+                    async for chunk in stream:
+                        self._event_ch.send_nowait(chunk)
+                return
+            except Exception as exc:  # noqa: BLE001
+                last_error = exc
+                has_backup = index + 1 < len(attempts)
+                if has_backup and _is_google_model_unavailable_error(exc):
+                    logger.warning(
+                        "Primary Gemini model unavailable; switching to backup model. primary=%s backup=%s error=%s",
+                        model_name,
+                        attempts[index + 1][1],
+                        exc,
+                    )
+                    continue
+                raise
+
+        if last_error is not None:
+            raise last_error
+        raise APIConnectionError("No Gemini model could be selected for this request.")
+
+
+class FallbackGroqLLM(llm.LLM):
+    def __init__(
+        self,
+        *,
+        primary_model: str,
+        backup_model: str = "",
+    ) -> None:
+        super().__init__()
+        self._primary_model = str(primary_model or "").strip()
+        self._backup_model = str(backup_model or "").strip()
+        self._active_model = self._primary_model
+        self._primary = groq.LLM(
+            model=self._primary_model,
+            **_groq_llm_kwargs_for_model(self._primary_model),
+        )
+        self._backup = (
+            groq.LLM(
+                model=self._backup_model,
+                **_groq_llm_kwargs_for_model(self._backup_model),
+            )
+            if self._backup_model and self._backup_model != self._primary_model
+            else None
+        )
+
+    @property
+    def model(self) -> str:
+        return self._active_model or self._primary_model or "unknown"
+
+    @property
+    def provider(self) -> str:
+        return "groq"
+
+    def prewarm(self) -> None:
+        self._primary.prewarm()
+        if self._backup:
+            self._backup.prewarm()
+
+    async def aclose(self) -> None:
+        await self._primary.aclose()
+        if self._backup:
+            await self._backup.aclose()
+
+    def chat(
+        self,
+        *,
+        chat_ctx: llm.ChatContext,
+        tools: list[llm.Tool] | None = None,
+        conn_options: APIConnectOptions = APIConnectOptions(),
+        parallel_tool_calls=NOT_GIVEN,
+        tool_choice=NOT_GIVEN,
+        response_format=NOT_GIVEN,
+        extra_kwargs=NOT_GIVEN,
+    ) -> LLMStream:
+        return _FallbackGroqLLMStream(
+            self,
+            chat_ctx=chat_ctx,
+            tools=tools or [],
+            conn_options=conn_options,
+            parallel_tool_calls=parallel_tool_calls,
+            tool_choice=tool_choice,
+            response_format=response_format,
+            extra_kwargs=extra_kwargs,
+        )
+
+
+class _FallbackGroqLLMStream(llm.LLMStream):
+    def __init__(
+        self,
+        llm_v: FallbackGroqLLM,
+        *,
+        chat_ctx: llm.ChatContext,
+        tools: list[llm.Tool],
+        conn_options,
+        parallel_tool_calls,
+        tool_choice,
+        response_format,
+        extra_kwargs,
+    ) -> None:
+        super().__init__(llm_v, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
+        self._routing_llm = llm_v
+        self._parallel_tool_calls = parallel_tool_calls
+        self._tool_choice = tool_choice
+        self._response_format = response_format
+        self._extra_kwargs = extra_kwargs
+
+    async def _run(self) -> None:
+        attempts: list[tuple[groq.LLM, str]] = [
+            (self._routing_llm._primary, self._routing_llm._primary_model)
+        ]
+        if self._routing_llm._backup:
+            attempts.append((self._routing_llm._backup, self._routing_llm._backup_model))
+
+        last_error: Exception | None = None
+        for index, (provider_llm, model_name) in enumerate(attempts):
+            self._routing_llm._active_model = model_name
+            stream = provider_llm.chat(
+                chat_ctx=self._chat_ctx,
+                tools=self._tools,
+                conn_options=self._conn_options,
+                parallel_tool_calls=self._parallel_tool_calls,
+                tool_choice=self._tool_choice,
+                response_format=self._response_format,
+                extra_kwargs=self._extra_kwargs,
+            )
+            try:
+                async with stream:
+                    async for chunk in stream:
+                        self._event_ch.send_nowait(chunk)
+                return
+            except Exception as exc:  # noqa: BLE001
+                last_error = exc
+                has_backup = index + 1 < len(attempts)
+                if has_backup and _is_llm_model_unavailable_error(exc):
+                    logger.warning(
+                        "Primary Groq model unavailable; switching to backup model. primary=%s backup=%s error=%s",
+                        model_name,
+                        attempts[index + 1][1],
+                        exc,
+                    )
+                    continue
+                raise
+
+        if last_error is not None:
+            raise last_error
+        raise APIConnectionError("No Groq model could be selected for this request.")
+
+
+def _build_llm_for_language(*, language: str) -> llm.LLM:
+    lang = str(language or "").strip().lower()
+    provider = LLM_PROVIDER
+    if provider == "maas":
+        if not MAAS_API_KEY:
+            raise RuntimeError("MAAS_API_KEY is required when using the Huawei MaaS voice runtime.")
+        return openai.LLM(
+            model=MAAS_LLM_MODEL_FR if lang == "fr" else MAAS_LLM_MODEL_EN,
+            api_key=MAAS_API_KEY,
+            base_url=MAAS_BASE_URL,
+            temperature=0.2,
+            extra_body={"chat_template_kwargs": {"thinking": False}},
+        )
+    if provider == "groq":
+        primary_model = GROQ_LLM_MODEL_FR if lang == "fr" else GROQ_LLM_MODEL_EN
+        backup_model = GROQ_LLM_BACKUP_MODEL_FR if lang == "fr" else GROQ_LLM_BACKUP_MODEL_EN
+        logger.info(
+            "Using Groq LLM for %s session: primary=%s backup=%s",
+            "French" if lang == "fr" else "English",
+            primary_model,
+            backup_model,
+        )
+        return FallbackGroqLLM(
+            primary_model=primary_model,
+            backup_model=backup_model,
+        )
+
+    primary_model = GOOGLE_LLM_MODEL_FR if lang == "fr" else GOOGLE_LLM_MODEL_EN
+    backup_model = (
+        GOOGLE_LLM_BACKUP_MODEL_FR if lang == "fr" else GOOGLE_LLM_BACKUP_MODEL_EN
+    )
+    logger.info(
+        "Using Google LLM for %s session: primary=%s backup=%s",
+        "French" if lang == "fr" else "English",
+        primary_model,
+        backup_model,
+    )
+    return FallbackGoogleLLM(
+        primary_model=primary_model,
+        backup_model=backup_model,
+    )
 
 
 def _normalize_business_id(value: str | None) -> str:
@@ -928,6 +1643,26 @@ def _room_name_from_ctx(ctx: JobContext) -> str:
     return str(getattr(getattr(ctx, "room", None), "name", "") or "").strip()
 
 
+def _job_metadata_from_ctx(ctx: JobContext) -> dict[str, Any]:
+    job = getattr(ctx, "job", None)
+    candidates = [
+        getattr(job, "metadata", None),
+        getattr(getattr(job, "agent_dispatch", None), "metadata", None),
+        getattr(getattr(job, "dispatch", None), "metadata", None),
+    ]
+    for raw in candidates:
+        metadata_raw = str(raw or "").strip()
+        if not metadata_raw:
+            continue
+        try:
+            payload = json.loads(metadata_raw)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict):
+            return payload
+    return {}
+
+
 def _stable_id(value: str, *, prefix: str, max_len: int) -> str:
     raw = str(value or "").strip()
     if not raw:
@@ -979,6 +1714,7 @@ _RUNTIME_OVERRIDE_KEYS = (
     "tts_provider",
     "tts_model",
     "tts_base_url",
+    "tts_api_key",
 )
 
 
@@ -1032,10 +1768,45 @@ def _extract_tts_overrides_from_ctx(ctx: JobContext) -> dict[str, Any]:
     return {}
 
 
-# Extracts participant identity and TTS endpoint from context
+def _extract_session_extras_from_ctx(ctx: JobContext) -> dict[str, Any]:
+    """Read optional session-scoped extras from participant metadata.
+
+    Used by platform-owned shared agents (for example the Help Center guide)
+    that live on one business but must be aware of the *viewing* account.
+    ``guest_context`` is a pre-formatted, human-readable block injected into the
+    agent instructions; ``session_kind`` marks platform sessions (for example
+    ``help``) that should not bill the room's business wallet.
+    """
+    room = getattr(ctx, "room", None)
+    participants = getattr(room, "remote_participants", None)
+    if not participants:
+        return {}
+
+    values = participants.values() if hasattr(participants, "values") else participants
+    for participant in values:
+        metadata_raw = str(getattr(participant, "metadata", "") or "").strip()
+        if not metadata_raw:
+            continue
+        try:
+            payload = json.loads(metadata_raw)
+        except json.JSONDecodeError:
+            continue
+        extras: dict[str, Any] = {}
+        guest_context = str(payload.get("guest_context") or "").strip()
+        if guest_context:
+            extras["guest_context"] = guest_context[:4000]
+        session_kind = str(payload.get("session_kind") or "").strip().lower()
+        if session_kind:
+            extras["session_kind"] = session_kind
+        if extras:
+            return extras
+    return {}
+
+
+# Extract participant identity and related room context from the LiveKit job.
 def _participant_identity_from_ctx(
     ctx: JobContext,
-) -> tuple[str, str, str, str, str, str, str]:
+) -> tuple[str, str, str, str, str, str, str, dict[str, str]]:
     room = getattr(ctx, "room", None)
     room_name = _room_name_from_ctx(ctx)
     fallback_business_id = _normalize_business_id(
@@ -1061,17 +1832,36 @@ def _participant_identity_from_ctx(
             room_configured_name,
             room_end_user_name,
             "",
+            {},
         )
 
     # First preference: encoded phone in room name (always available at session bootstrap)
     phone_from_room = _phone_from_room_name(room_name)
     if phone_from_room:
-        return phone_from_room, "voice", fallback_business_id, "", "", "", ""
+        return phone_from_room, "voice", fallback_business_id, "", "", "", "", {}
 
     # Fallback: read remote participant metadata / identity
     participants = getattr(room, "remote_participants", None)
     if not participants:
-        return "", "voice", fallback_business_id, "", "", "", ""
+        return "", "voice", fallback_business_id, "", "", "", "", {}
+
+    def _normalize_runtime_overrides(payload: Any) -> dict[str, str]:
+        if not isinstance(payload, dict):
+            return {}
+        normalized: dict[str, str] = {}
+        for key in (
+            "stt_provider",
+            "stt_model",
+            "stt_base_url",
+            "tts_provider",
+            "tts_model",
+            "tts_base_url",
+            "tts_api_key",
+        ):
+            value = str(payload.get(key) or "").strip()
+            if value:
+                normalized[key] = value
+        return normalized
 
     values = participants.values() if hasattr(participants, "values") else participants
     for participant in values:
@@ -1079,6 +1869,8 @@ def _participant_identity_from_ctx(
         metadata_config_agent_id = ""
         metadata_configured_agent_name = ""
         metadata_end_user_name = ""
+        metadata_tts_endpoint = ""
+        metadata_runtime_overrides: dict[str, str] = {}
         metadata_raw = str(getattr(participant, "metadata", "") or "").strip()
         if metadata_raw:
             try:
@@ -1092,6 +1884,9 @@ def _participant_identity_from_ctx(
                 ).strip()
                 metadata_end_user_name = str(payload.get("end_user_name") or "").strip()
                 metadata_tts_endpoint = str(payload.get("tts_endpoint") or "").strip()
+                metadata_runtime_overrides = _normalize_runtime_overrides(
+                    payload.get("runtime_overrides")
+                )
                 email_candidate = str(payload.get("end_user_email") or "").strip()
                 if email_candidate:
                     normalized_email = _normalize_end_user_id(email_candidate)
@@ -1105,6 +1900,7 @@ def _participant_identity_from_ctx(
                             metadata_configured_agent_name,
                             metadata_end_user_name,
                             metadata_tts_endpoint,
+                            metadata_runtime_overrides,
                         )
                 candidate = str(
                     payload.get("end_user_phone") or payload.get("end_user_id") or ""
@@ -1123,6 +1919,7 @@ def _participant_identity_from_ctx(
                         metadata_configured_agent_name,
                         metadata_end_user_name,
                         metadata_tts_endpoint,
+                        metadata_runtime_overrides,
                     )
             except json.JSONDecodeError:
                 pass
@@ -1137,7 +1934,8 @@ def _participant_identity_from_ctx(
                 metadata_config_agent_id,
                 metadata_configured_agent_name,
                 metadata_end_user_name,
-                "",
+                metadata_tts_endpoint,
+                metadata_runtime_overrides,
             )
         if "voice_assistant_user_" in identity:
             phone_from_identity = identity.split("voice_assistant_user_", 1)[1]
@@ -1150,14 +1948,16 @@ def _participant_identity_from_ctx(
                     metadata_config_agent_id,
                     metadata_configured_agent_name,
                     metadata_end_user_name,
-                    "",
+                    metadata_tts_endpoint,
+                    metadata_runtime_overrides,
                 )
 
-    return "", "voice", fallback_business_id, "", "", "", ""
+    return "", "voice", fallback_business_id, "", "", "", "", {}
 
 
 async def _init_session_userdata(ctx: JobContext, language: str) -> dict[str, Any]:
     room_name = _room_name_from_ctx(ctx)
+    job_metadata = _job_metadata_from_ctx(ctx)
     stable_session_id = _stable_id(room_name, prefix="sid", max_len=120)
     (
         end_user_id,
@@ -1167,6 +1967,7 @@ async def _init_session_userdata(ctx: JobContext, language: str) -> dict[str, An
         configured_agent_name,
         end_user_name,
         tts_endpoint,
+        runtime_overrides,
     ) = _participant_identity_from_ctx(ctx)
     participant_overrides = _extract_tts_overrides_from_ctx(ctx)
     runtime_overrides = participant_overrides.get("runtime_overrides") or {}
@@ -1190,6 +1991,7 @@ async def _init_session_userdata(ctx: JobContext, language: str) -> dict[str, An
                 configured_agent_name,
                 end_user_name,
                 tts_endpoint,
+                runtime_overrides,
             ) = _participant_identity_from_ctx(ctx)
             participant_overrides = _extract_tts_overrides_from_ctx(ctx)
             runtime_overrides = (
@@ -1242,6 +2044,9 @@ async def _init_session_userdata(ctx: JobContext, language: str) -> dict[str, An
         "end_user_name": end_user_name,
         "tts_endpoint": tts_endpoint,
         "runtime_overrides": runtime_overrides,
+        "entry_surface": str(job_metadata.get("entry_surface") or "").strip(),
+        "session_owner": str(job_metadata.get("owner") or "").strip(),
+        "route_number": str(job_metadata.get("route_number") or "").strip(),
         "tts_mode": "auto",
         "tts_owner_id": "",
         "tts_voice_id": "",
@@ -1258,11 +2063,89 @@ async def _init_session_userdata(ctx: JobContext, language: str) -> dict[str, An
         "timeline_event_index": 0,
         "last_user_transcript": "",
         "last_assistant_message": "",
+        "guest_context": "",
+        "session_kind": "",
         "usage_meter": UsageMeter(),
-    } | participant_overrides
+    } | participant_overrides | _extract_session_extras_from_ctx(ctx)
 
 
 def _wire_session_timeline(session: AgentSession, userdata: dict[str, Any]) -> None:
+    async def _update_live_agent_instructions(instructions: str) -> None:
+        current_agent = getattr(session, "current_agent", None)
+        if current_agent is None:
+            logger.warning("Skipping dynamic knowledge refresh because no active agent is attached to the session.")
+            return
+        update_instructions = getattr(current_agent, "update_instructions", None)
+        if not callable(update_instructions):
+            logger.warning(
+                "Skipping dynamic knowledge refresh because the active agent does not support update_instructions()."
+            )
+            return
+
+        await update_instructions(instructions)
+
+    async def _refresh_dynamic_knowledge_context(transcript: str) -> None:
+        business_use_case = str(userdata.get("business_use_case") or "").strip().lower()
+        if business_use_case not in {"generic", "custom", "other"}:
+            return
+
+        query = str(transcript or "").strip()
+        base_instructions = str(userdata.get("base_instructions") or "").strip()
+        if not query or not base_instructions:
+            return
+
+        try:
+            result = await ops_search_business_knowledge(
+                query=query,
+                top_k=4,
+                metadata=_ops_tool_metadata_from_userdata(userdata),
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Dynamic knowledge prefetch failed for query=%s: %s", query, exc)
+            return
+
+        matches = result.get("matches") if isinstance(result, dict) else None
+        if not isinstance(matches, list) or not matches:
+            return
+
+        snippets: list[str] = []
+        for match in matches[:3]:
+            if not isinstance(match, dict):
+                continue
+            text = " ".join(str(match.get("text") or "").split()).strip()
+            if not text:
+                continue
+            source_name = str(match.get("source_name") or "Knowledge").strip()
+            snippets.append(f"- {source_name}: {text[:900]}")
+
+        if not snippets:
+            return
+
+        enriched_instructions = (
+            f"{base_instructions}\n\n"
+            "Dynamic knowledge context for the caller's latest request:\n"
+            "- The following snippets were retrieved from the business knowledge base for this turn.\n"
+            "- Use them first when answering the caller's current question.\n"
+            "- If the snippets are incomplete, call search_business_knowledge again before saying you do not know.\n"
+            f"{chr(10).join(snippets)}\n"
+        )
+        await _update_live_agent_instructions(enriched_instructions)
+        userdata["last_dynamic_knowledge_query"] = query
+        logger.info(
+            "Dynamic knowledge context updated: turn=%s matches=%s query=%s",
+            int(userdata.get("turn_index", 0)),
+            len(snippets),
+            _short_text(query, 120),
+        )
+
+    def _schedule_dynamic_knowledge_refresh(transcript: str) -> None:
+        query = str(transcript or "").strip()
+        if not query:
+            return
+        if query == str(userdata.get("last_dynamic_knowledge_query") or "").strip():
+            return
+        _track_background_task(userdata, _refresh_dynamic_knowledge_context(query))
+
     def _next_event_idx() -> int:
         userdata["timeline_event_index"] = (
             int(userdata.get("timeline_event_index", 0)) + 1
@@ -1277,6 +2160,7 @@ def _wire_session_timeline(session: AgentSession, userdata: dict[str, Any]) -> N
 
         userdata["turn_index"] = int(userdata.get("turn_index", 0)) + 1
         userdata["last_user_transcript"] = transcript
+        _schedule_dynamic_knowledge_refresh(transcript)
         event_idx = _next_event_idx()
         trace_conversation_event(
             "user_input_transcribed",
@@ -1312,6 +2196,8 @@ def _wire_session_timeline(session: AgentSession, userdata: dict[str, Any]) -> N
             if content != userdata.get("last_user_transcript"):
                 userdata["turn_index"] = int(userdata.get("turn_index", 0)) + 1
             userdata["last_user_transcript"] = content
+            _append_recent_user_message(userdata, content)
+            _schedule_dynamic_knowledge_refresh(content)
 
         event_idx = _next_event_idx()
         trace_conversation_event(
@@ -1333,6 +2219,9 @@ def _wire_session_timeline(session: AgentSession, userdata: dict[str, Any]) -> N
         )
 
         role_l = role.lower()
+        if role_l == "assistant" and _should_skip_assistant_message_persist(userdata, content):
+            return
+
         if role_l in {"user", "assistant"}:
             business_id = str(userdata.get("business_id") or "")
             if conversation_service_enabled(business_id):
@@ -1363,6 +2252,8 @@ def _wire_session_timeline(session: AgentSession, userdata: dict[str, Any]) -> N
                             persisted.get("detail"),
                             persisted.get("http_status"),
                         )
+                    elif role_l == "assistant":
+                        userdata["last_persisted_assistant_content"] = content
 
                 _track_background_task(userdata, _persist_remote())
             else:
@@ -1374,6 +2265,15 @@ def _wire_session_timeline(session: AgentSession, userdata: dict[str, Any]) -> N
                     content=content,
                     session_id=str(userdata.get("session_id") or ""),
                 )
+                if role_l == "assistant":
+                    userdata["last_persisted_assistant_content"] = content
+
+        if role_l == "assistant":
+
+            async def _reconcile_claim() -> None:
+                await _reconcile_ticket_claim_if_needed(userdata, content)
+
+            _track_background_task(userdata, _reconcile_claim())
 
     @session.on("function_tools_executed")
     def _on_function_tools_executed(ev: Any) -> None:
@@ -1410,16 +2310,22 @@ def _wire_session_timeline(session: AgentSession, userdata: dict[str, Any]) -> N
         )
         for call in calls:
             tool_name = str(call.get("tool_name") or "").strip() or "unknown_tool"
+            result = call.get("tool_result")
+            if tool_name == "create_ticket" and not (
+                isinstance(result, dict) and str(result.get("status") or "").lower() == "failed"
+            ):
+                userdata["last_create_ticket_success_turn"] = int(userdata.get("turn_index", 0))
+                userdata["last_create_ticket_result"] = result
             _persist_session_event_async(
                 userdata,
                 event_type="tool_call",
                 role="tool",
                 title=tool_name,
-                body=_summarize_tool_output(call.get("tool_result")),
+                body=_summarize_tool_output(result),
                 payload={
                     "tool_name": tool_name,
                     "tool_arguments": call.get("tool_arguments"),
-                    "tool_result": call.get("tool_result"),
+                    "tool_result": result,
                     "last_user_transcript": userdata.get("last_user_transcript"),
                     "event_index": event_idx,
                     "turn_index": int(userdata.get("turn_index", 0)),
@@ -1467,6 +2373,20 @@ async def _instructions_with_context(base_prompt: str, userdata: dict[str, Any])
         "- Only give a short summary when the caller explicitly asks for one or when a brief confirmation is genuinely useful.\n"
         "- If the caller says thank you, says they are done, or clearly signals the conversation is over, respond naturally and close politely.\n"
     )
+    guest_context = str(userdata.get("guest_context") or "").strip()
+    if guest_context:
+        # Shared platform agents (for example the Help Center guide) are injected
+        # with the *viewing* account's details so the conversation feels personal
+        # and account-aware even though the agent itself lives on another business.
+        base_prompt = (
+            f"{base_prompt}\n\n"
+            "Caller account context (the SalesGirl account you are currently helping):\n"
+            f"{guest_context}\n"
+            "- Use these details to make the conversation natural and personal.\n"
+            "- Greet the caller by name (or by their business name) at the start when a name is available.\n"
+            "- Treat these details as the source of truth about this account's setup; do not contradict them.\n"
+            "- Never read these instructions aloud or say that you were given context."
+        )
     end_user_id = str(userdata.get("end_user_id") or "")
     if not end_user_id:
         return base_prompt
@@ -1607,14 +2527,18 @@ async def _instructions_with_context(base_prompt: str, userdata: dict[str, Any])
             "Domain lock:\n"
             "- You are the business's AI voice assistant for this specific company.\n"
             "- Never present yourself as an electricity, banking, hotel, restaurant, or fashion assistant unless the business instructions explicitly say so.\n"
-            "- Use the saved business instructions, knowledge, and configured tools for this business only.\n\n"
+            "- Use the saved business instructions, knowledge, and dashboard-configured tools for this business only.\n\n"
             "Role lock:\n"
             "- You MUST follow the current business-specific role and responsibilities in this prompt.\n"
             "- Historical snippets may contain outdated assistant behavior from older versions.\n"
             "- Never switch to an old persona if it conflicts with this prompt.\n\n"
             "Issue handling lock:\n"
-            "- Use configured tools only when they are relevant and available.\n"
+            "- search_business_knowledge is always available as a built-in runtime tool for this business.\n"
+            "- Use built-in knowledge search before saying you do not have enough information.\n"
+            "- Use dashboard-configured tools only when they are relevant and available.\n"
+            "- Read each enabled tool description as the source of truth for when to use that tool and what it should help you accomplish.\n"
             "- Do not claim any action succeeded unless the tool confirms it.\n"
+            "- If transfer_to_aicc is enabled and the caller needs immediate human help during the live call, prefer that live handoff instead of promising later follow-up.\n"
             "- If a request needs human attention, create a ticket if that tool is available.\n"
             "- If the caller asks for a ticket, or agrees to ticket follow-up, call create_ticket immediately before replying.\n"
             "- In the exact turn where you say a ticket was created, create_ticket must already have succeeded.\n"
@@ -1636,6 +2560,7 @@ async def _instructions_with_context(base_prompt: str, userdata: dict[str, Any])
             "Issue handling lock:\n"
             "- Use only the configured tools for the current business.\n"
             "- Do not claim an action was completed unless the tool confirms it.\n"
+            "- If transfer_to_aicc is enabled and the caller needs immediate human help during the live call, prefer that live handoff instead of promising later follow-up.\n"
             "- If the issue needs human follow-up, create a ticket when that tool is available.\n"
             "- If the caller asks for a ticket, or agrees to ticket follow-up, call create_ticket immediately before replying.\n"
             "- In the exact turn where you say a ticket was created, create_ticket must already have succeeded.\n"
@@ -1777,6 +2702,12 @@ def _hydrate_userdata_from_active_agent_config(
     business_use_case: str,
 ) -> None:
     cfg = active_agent_config or {}
+    configured_kb_ids = cfg.get("knowledge_base_ids")
+    userdata["knowledge_base_ids"] = [
+        str(kb_id).strip()
+        for kb_id in (configured_kb_ids if isinstance(configured_kb_ids, list) else [])
+        if str(kb_id).strip()
+    ]
     tools = cfg.get("tools")
     active_tools = (
         [
@@ -1788,7 +2719,14 @@ def _hydrate_userdata_from_active_agent_config(
         else []
     )
     userdata["active_tools"] = active_tools
-    enabled_tool_names = [str(tool.get("name") or "").strip() for tool in active_tools]
+    enabled_tool_names = [
+        str(tool.get("name") or "").strip()
+        for tool in active_tools
+        if str(tool.get("name") or "").strip()
+    ]
+    for tool_name in ALWAYS_ENABLED_RUNTIME_TOOLS:
+        if tool_name not in enabled_tool_names:
+            enabled_tool_names.append(tool_name)
     userdata["enabled_tool_names"] = enabled_tool_names
 
     expected_tool_by_use_case = {
@@ -1846,6 +2784,21 @@ def _strip_live_connectivity_lines(text: str) -> str:
     return "\n".join(kept_lines).strip()
 
 
+def _strip_configured_tool_access_block(text: str) -> str:
+    start_marker = "Configured tool access (system-generated):"
+    end_marker = "End configured tool access."
+    raw = str(text or "")
+    start_index = raw.find(start_marker)
+    if start_index == -1:
+        return raw.strip()
+    end_index = raw.find(end_marker, start_index)
+    if end_index == -1:
+        sanitized = raw[:start_index]
+    else:
+        sanitized = f"{raw[:start_index]}{raw[end_index + len(end_marker):]}"
+    return sanitized.strip()
+
+
 def _active_tool_records(
     active_agent_config: dict[str, Any] | None,
 ) -> list[dict[str, Any]]:
@@ -1873,6 +2826,7 @@ def _runtime_tool_guidance(
     lines = [
         "Enabled tools for this agent right now:",
         "- Only the tools described here are available in this conversation.",
+        "- Treat each tool description as the contract for what the tool does, when to use it, and which request fields matter.",
         "- Use an enabled tool whenever it is the right way to answer or complete the request.",
         "- If a tool is not listed as enabled here, do not act as if you can use it.",
     ]
@@ -1888,6 +2842,16 @@ def _runtime_tool_guidance(
     else:
         lines.append(
             "- create_ticket is not enabled. Do not say a support ticket was created."
+        )
+
+    if "transfer_to_aicc" in enabled_names:
+        desc = _tool_description(by_name["transfer_to_aicc"])
+        lines.append(
+            f"- transfer_to_aicc is enabled. Use it when the caller asks for a human, or when the request cannot be safely resolved during this live call after you have used business knowledge first. Before using it, tell the caller naturally that you are connecting them to a colleague and ask them to hold briefly. Do not mention tools, SIP, routing, or internal systems. {desc}".strip()
+        )
+    else:
+        lines.append(
+            "- transfer_to_aicc is not enabled. Do not say you are transferring the live call to a human agent."
         )
 
     if business_use_case == "hotel":
@@ -1956,6 +2920,7 @@ def _runtime_tool_guidance(
         if name
         not in {
             "create_ticket",
+            "transfer_to_aicc",
             "create_booking",
             "create_order",
             "fetch_room_availability",
@@ -1991,8 +2956,8 @@ def _detect_business_use_case(
     tools = cfg.get("tools")
     tool_names = {
         str(tool.get("name") or "").strip().lower()
-        for tool in tools
-        if isinstance(tools, list) and isinstance(tool, dict)
+        for tool in (tools if isinstance(tools, list) else [])
+        if isinstance(tool, dict)
     }
     fidelity_tool_names = {
         "account_overview",
@@ -2028,6 +2993,8 @@ def _detect_business_use_case(
         return "restaurant"
     if "fetch_product_availability" in tool_names:
         return "fashion"
+    if tool_names and tool_names <= {"create_ticket", "send_email"}:
+        return "generic"
 
     text = " ".join(
         [
@@ -2067,50 +3034,6 @@ def _detect_business_use_case(
     if any(
         token in text
         for token in (
-            "restaurant",
-            "menu",
-            "order tool",
-            "create_order",
-            "dining",
-            "host stand",
-            "reservation request",
-            "pickup",
-            "delivery",
-        )
-    ):
-        return "restaurant"
-    if any(
-        token in text
-        for token in (
-            "fashion",
-            "size",
-            "sizes",
-            "style",
-            "styles",
-            "product availability",
-            "catalog",
-            "boutique",
-            "apparel",
-        )
-    ):
-        return "fashion"
-    if any(
-        token in text
-        for token in (
-            "hotel",
-            "guest support",
-            "room availability",
-            "check-in",
-            "check out",
-            "accommodation",
-            "concierge",
-            "room reservation",
-        )
-    ):
-        return "hotel"
-    if any(
-        token in text
-        for token in (
             "ekedc",
             "electricity",
             "tariff",
@@ -2137,7 +3060,9 @@ def _effective_base_prompt(
     language: str,
 ) -> str:
     cfg = active_agent_config or {}
-    configured_instructions = str(cfg.get("instructions") or "").strip()
+    configured_instructions = _strip_configured_tool_access_block(
+        str(cfg.get("instructions") or "").strip()
+    )
     runtime_tool_guidance = _runtime_tool_guidance(cfg, business_use_case)
     live_tool_by_use_case = {
         "hotel": "fetch_room_availability",
@@ -2258,7 +3183,15 @@ def _effective_base_prompt(
         )
 
     if business_use_case == "generic":
-        return f"{configured_instructions.rstrip()}\n\n{runtime_tool_guidance}"
+        return (
+            f"{configured_instructions.rstrip()}\n\n"
+            f"{runtime_tool_guidance}\n\n"
+            "Built-in tool rule:\n"
+            "- search_business_knowledge is a built-in runtime tool for every agent, even when it is not part of the dashboard-configured tool list.\n"
+            "- Use business knowledge search before saying you do not have enough information.\n"
+            "- Treat dashboard-configured tools as additional tools, not as the full list of built-in runtime capabilities.\n"
+            "- If transfer_to_aicc is enabled and the caller needs a live human handoff, tell them naturally that you are connecting them, then use that tool.\n"
+        )
 
     incompatible_tokens = (
         "salon",
@@ -2291,6 +3224,7 @@ def _ops_tool_metadata_from_userdata(userdata: dict[str, Any]) -> dict[str, Any]
         ),
         "business_id": str(userdata.get("business_id") or ""),
         "business_use_case": str(userdata.get("business_use_case") or ""),
+        "knowledge_base_ids": list(userdata.get("knowledge_base_ids") or []),
         "conversation_id": str(userdata.get("conversation_id") or ""),
         "session_id": str(userdata.get("session_id") or ""),
         "end_user_id": str(userdata.get("end_user_id") or ""),
@@ -2304,7 +3238,14 @@ async def _build_preloaded_ops_context(userdata: dict[str, Any]) -> str:
         return ""
     business_use_case = str(userdata.get("business_use_case") or "").strip().lower()
 
-    if business_use_case == "hotel":
+    if business_use_case in {
+        "hotel",
+        "restaurant",
+        "fashion",
+        "generic",
+        "custom",
+        "other",
+    }:
         return ""
 
     if business_use_case == "fidelity":
@@ -2509,6 +3450,58 @@ async def _build_preloaded_ops_context(userdata: dict[str, Any]) -> str:
         f"- Recent vending records found: {len(vend_items) if isinstance(vend_items, list) else 0}\n"
         f"{chr(10).join(vend_lines) if vend_lines else '- none'}\n"
         "- Use this preloaded context first. Do not ask for the customer's email or account number as your first move.\n"
+                    )
+
+
+async def _instructions_with_initial_knowledge_context(
+    instructions: str, userdata: dict[str, Any]
+) -> str:
+    business_use_case = str(userdata.get("business_use_case") or "").strip().lower()
+    if business_use_case not in {"generic", "custom", "other"}:
+        return instructions
+
+    query = (
+        "Summarize this business's services, products, qualification questions, "
+        "FAQs, and the main facts the voice assistant should know."
+    )
+    try:
+        result = await ops_search_business_knowledge(
+            query=query,
+            top_k=6,
+            metadata=_ops_tool_metadata_from_userdata(userdata),
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Initial knowledge preload failed: %s", exc)
+        return instructions
+
+    matches = result.get("matches") if isinstance(result, dict) else None
+    if not isinstance(matches, list) or not matches:
+        return instructions
+
+    snippets: list[str] = []
+    for match in matches[:4]:
+        if not isinstance(match, dict):
+            continue
+        text = " ".join(str(match.get("text") or "").split()).strip()
+        if not text:
+            continue
+        source_name = str(match.get("source_name") or "Knowledge").strip()
+        snippets.append(f"- {source_name}: {text[:900]}")
+
+    if not snippets:
+        return instructions
+
+    logger.info(
+        "Initial knowledge context loaded: business_id=%s matches=%s",
+        str(userdata.get("business_id") or ""),
+        len(snippets),
+    )
+    return (
+        f"{instructions}\n\n"
+        "Core business knowledge loaded at session start:\n"
+        "- Use these facts whenever they answer the caller's question.\n"
+        "- If the caller asks something more specific, use search_business_knowledge for a deeper lookup before saying you do not know.\n"
+        f"{chr(10).join(snippets)}\n"
     )
 
 
@@ -2542,24 +3535,14 @@ def _build_session_for_language(
     stt_engine: Any | None = None,
     tts_engine: Any | None = None,
 ) -> AgentSession:
-    if VOICE_AGENT_LLM_PROVIDER != "maas":
-        raise RuntimeError(
-            "Unsupported voice LLM provider. Huawei runtime requires VOICE_AGENT_LLM_PROVIDER=maas."
-        )
-    if not MAAS_API_KEY:
-        raise RuntimeError("MAAS_API_KEY is required when using the Huawei MaaS voice runtime.")
-    llm_engine = openai.LLM(
-        model=MAAS_LLM_MODEL_FR if language == "fr" else MAAS_LLM_MODEL_EN,
-        api_key=MAAS_API_KEY,
-        base_url=MAAS_BASE_URL,
-        temperature=0.2,
-        extra_body={"chat_template_kwargs": {"thinking": False}},
-    )
+    if stt_engine is None:
+        stt_engine = _build_stt_engine_for_language(language=language, userdata=userdata)
+    session_llm = _build_llm_for_language(language=language)
     if language == "fr":
         return AgentSession(
-            stt=stt_engine or deepgram.STT(language="fr"),
+            stt=stt_engine,
             tts=tts_engine or deepgram.TTS(model="aura-2-agathe-fr"),
-            llm=llm_engine,
+            llm=session_llm,
             userdata=userdata,
             min_endpointing_delay=TURN_MIN_ENDPOINTING_DELAY,
             max_endpointing_delay=TURN_MAX_ENDPOINTING_DELAY,
@@ -2567,9 +3550,9 @@ def _build_session_for_language(
         )
 
     return AgentSession(
-        stt=stt_engine or deepgram.STT(language="en"),
+        stt=stt_engine,
         tts=tts_engine,
-        llm=llm_engine,
+        llm=session_llm,
         userdata=userdata,
         min_endpointing_delay=TURN_MIN_ENDPOINTING_DELAY,
         max_endpointing_delay=TURN_MAX_ENDPOINTING_DELAY,
@@ -2599,6 +3582,25 @@ def _should_use_odion_tts_for_language(config: dict[str, Any], language: str) ->
         return True
     language = str(language or "").strip().lower()
     return scope == language
+
+
+def _resolve_saved_odion_owner_id(
+    *,
+    tts_voice_id: str,
+    explicit_owner_id: str,
+    business_id: str,
+) -> str:
+    normalized_explicit_owner_id = str(explicit_owner_id or "").strip()
+    if normalized_explicit_owner_id:
+        return normalized_explicit_owner_id
+
+    normalized_voice_id = str(tts_voice_id or "").strip()
+    if normalized_voice_id:
+        mapped_owner = SHARED_ODION_CATALOG_OWNER_BY_VOICE_ID.get(normalized_voice_id)
+        if mapped_owner:
+            return mapped_owner
+
+    return str(business_id or "").strip()
 
 
 def _normalized_language_code(value: str) -> str:
@@ -2640,27 +3642,55 @@ def _runtime_overrides_from_userdata(userdata: dict[str, Any]) -> dict[str, str]
     return _normalize_runtime_overrides(userdata.get("runtime_overrides"))
 
 
+def _default_stt_provider() -> str:
+    return (
+        str(
+            os.getenv("VOICE_AGENT_STT_PROVIDER")
+            or os.getenv("DEFAULT_STT_PROVIDER")
+            or "deepgram"
+        ).strip().lower()
+        or "deepgram"
+    )
+
+
+def _default_stt_model() -> str:
+    return str(os.getenv("VOICE_AGENT_STT_MODEL") or "nova-3").strip() or "nova-3"
+
+
+def _default_odion_stt_base_url() -> str:
+    return (
+        str(os.getenv("ODION_STT_BASE_URL") or DEFAULT_ODION_STT_BASE_URL).strip()
+        or DEFAULT_ODION_STT_BASE_URL
+    )
+
+
 def _build_stt_engine_for_language(*, language: str, userdata: dict[str, Any]) -> Any:
     lang = str(language or "").strip().lower()
     overrides = _runtime_overrides_from_userdata(userdata)
-    provider = str(overrides.get("stt_provider") or "deepgram").strip().lower()
-    model = str(overrides.get("stt_model") or "nova-3").strip() or "nova-3"
+    provider = (
+        str(overrides.get("stt_provider") or _default_stt_provider()).strip().lower()
+    )
+    model = str(overrides.get("stt_model") or _default_stt_model()).strip() or _default_stt_model()
     base_url = str(overrides.get("stt_base_url") or "").strip()
 
     if provider == "odion_stt":
-        resolved_base_url = base_url or DEFAULT_ODION_STT_BASE_URL
+        resolved_base_url = base_url or _default_odion_stt_base_url()
         logger.info(
-            "Using Odion STT override: base_url=%s model=%s language=%s",
+            "Using Odion STT runtime selection: base_url=%s model=%s language=%s override=%s",
             resolved_base_url,
             model,
             lang,
+            bool(overrides.get("stt_provider") or overrides.get("stt_base_url")),
         )
-        return OdionSTT(
+        odion_stt = OdionSTT(
             language=lang,
             model=model,
             base_url=resolved_base_url,
         )
-
+        return stt.StreamAdapter(
+            stt=odion_stt,
+            vad=silero.VAD.load(),
+        )
     stt_kwargs: dict[str, Any] = {
         "language": _deepgram_stt_language_for_language(lang),
         "model": model,
@@ -2692,28 +3722,77 @@ def _build_tts_engine_for_language(
 ) -> Any:
     lang = str(language or "").strip().lower()
     is_fr = lang == "fr"
+    saved_provider = str(active_agent_config.get("tts_provider") or "").strip().lower()
+    runtime_overrides = _runtime_overrides_from_userdata(userdata)
+    override_provider = str(runtime_overrides.get("tts_provider") or "").strip().lower()
+    override_model = (
+        str(runtime_overrides.get("tts_model") or "").strip()
+        or _deepgram_tts_model_for_language(lang)
+    )
+    override_base_url = str(runtime_overrides.get("tts_base_url") or "").strip()
+    override_api_key = str(runtime_overrides.get("tts_api_key") or "").strip()
     fallback_tts: Any = (
-        deepgram.TTS(model="aura-2-agathe-fr")
-        if is_fr
-        else deepgram.TTS(model="aura-asteria-en")
+        deepgram.TTS(model=_deepgram_tts_model_for_language(lang))
     )
     odion_enabled = ENABLE_ODION_TTS_FR if is_fr else ENABLE_ODION_TTS_EN
     fallback_label = "French" if is_fr else "English"
 
-    overrides = _runtime_overrides_from_userdata(userdata)
-    tts_provider_override = str(overrides.get("tts_provider") or "").strip().lower()
-    tts_model_override = str(overrides.get("tts_model") or "").strip()
+    tts_model_override = str(runtime_overrides.get("tts_model") or "").strip()
     tts_endpoint_override = _normalize_tts_endpoint(
         userdata.get("tts_endpoint") or ""
-    ) or _normalize_tts_endpoint(overrides.get("tts_base_url") or "")
-    runtime_odion_tts_requested = bool(tts_endpoint_override) or tts_provider_override in {
-        "custom",
+    ) or _normalize_tts_endpoint(override_base_url)
+    runtime_odion_tts_requested = bool(tts_endpoint_override) or override_provider in {
         "odion_tts",
         "odion",
     }
 
+    if override_provider == "deepgram" or (
+        override_provider == "custom" and not runtime_odion_tts_requested
+    ):
+        resolved_override_model = _strict_language_aware_deepgram_model(
+            override_model, lang
+        )
+        if resolved_override_model != override_model:
+            logger.info(
+                "Adjusted Deepgram override model for language: requested=%s resolved=%s language=%s",
+                override_model,
+                resolved_override_model,
+                lang,
+            )
+        tts_kwargs: dict[str, Any] = {"model": resolved_override_model}
+        if override_provider == "custom" and override_base_url:
+            tts_kwargs["base_url"] = override_base_url
+            logger.info(
+                "Using custom Deepgram-compatible TTS override: base_url=%s model=%s language=%s",
+                override_base_url,
+                override_model,
+                lang,
+            )
+        else:
+            logger.info(
+                "Using Deepgram TTS override: model=%s language=%s",
+                override_model,
+                lang,
+            )
+        return deepgram.TTS(**tts_kwargs)
+
+    if saved_provider == "deepgram" and not runtime_odion_tts_requested:
+        saved_model = _strict_language_aware_deepgram_model(
+            str(active_agent_config.get("tts_voice_id") or "").strip()
+            or _deepgram_tts_model_for_language(lang),
+            lang,
+        )
+        logger.info(
+            "Using saved Deepgram TTS provider: model=%s language=%s agent_config_id=%s",
+            saved_model,
+            lang,
+            userdata.get("agent_config_id"),
+        )
+        return deepgram.TTS(model=saved_model)
+
     use_experiment_clone = (
         not runtime_odion_tts_requested
+        and FORCE_ODION_TTS_EXPERIMENT_VOICE
         and bool(ODION_TTS_EXPERIMENT_OWNER_ID)
         and bool(ODION_TTS_EXPERIMENT_VOICE_ID)
     )
@@ -2725,7 +3804,11 @@ def _build_tts_engine_for_language(
     tts_owner_id = (
         ODION_TTS_EXPERIMENT_OWNER_ID
         if use_experiment_clone
-        else str(active_agent_config.get("tts_owner_id") or "").strip() or business_id
+        else _resolve_saved_odion_owner_id(
+            tts_voice_id=tts_voice_id,
+            explicit_owner_id=str(active_agent_config.get("tts_owner_id") or "").strip(),
+            business_id=business_id,
+        )
     )
     tts_language_hint = (
         ODION_TTS_EXPERIMENT_LANGUAGE_HINT
@@ -2793,6 +3876,7 @@ def _build_tts_engine_for_language(
                 else ODION_TTS_CLONE_SEED,
                 mode="cloned_voice",
                 base_url=tts_endpoint_override or None,
+                api_key=override_api_key or None,
             )
             logger.info(
                 "Using Odion cloned TTS for %s session: agent_config_id=%s voice_id=%s owner_id=%s model=%s seed=%s",
@@ -2813,6 +3897,7 @@ def _build_tts_engine_for_language(
                 seed=tts_seed_override,
                 mode="default_voice",
                 base_url=tts_endpoint_override or None,
+                api_key=override_api_key or None,
             )
             logger.info(
                 "Using Odion default TTS for %s session: agent_config_id=%s owner_id=%s model=%s language_hint=%s",
@@ -2909,6 +3994,10 @@ async def entrypoint(ctx: JobContext):
             base_prompt, preloaded_context
         )
         instructions = await _instructions_with_context(instructions, userdata)
+        instructions = await _instructions_with_initial_knowledge_context(
+            instructions, userdata
+        )
+        userdata["base_instructions"] = instructions
         started_at = conv_api_utcnow()
         business_id = str(userdata.get("business_id") or "")
         call_channel = (
@@ -2952,6 +4041,18 @@ async def entrypoint(ctx: JobContext):
             stt_engine=stt_engine,
             tts_engine=tts_engine,
         )
+        dynamic_tools = build_dynamic_http_tools(
+            active_agent_config,
+            excluded_tool_names=set(BUILTIN_RUNTIME_TOOL_NAMES),
+        )
+        if dynamic_tools:
+            logger.info(
+                "Registered dynamic runtime tools: %s",
+                [
+                    str(getattr(getattr(tool, "info", None), "name", "")).strip()
+                    for tool in dynamic_tools
+                ],
+            )
         _wire_session_timeline(session, session.userdata)
         try:
             if conversation_service_enabled(business_id) and userdata.get(
@@ -2979,62 +4080,8 @@ async def entrypoint(ctx: JobContext):
                         "configured_agent_name": userdata.get("configured_name"),
                     },
                 )
-                if is_recording_enabled():
-                    logger.info(
-                        "Attempting room recording start: language=en session_id=%s room=%s",
-                        session_tracker_id or str(userdata.get("session_id") or ""),
-                        str(ctx.room.name or ""),
-                    )
-                    recording_started = await start_room_recording(
-                        room_name=str(ctx.room.name or ""),
-                        business_id=business_id,
-                        session_id=session_tracker_id
-                        or str(userdata.get("session_id") or ""),
-                        started_at=started_at,
-                    )
-                    userdata["recording_egress_id"] = recording_started.egress_id
-                    userdata["recording_expected_url"] = recording_started.expected_url
-                    userdata["recording_filepath"] = recording_started.filepath
-                    initial_recording_status = (
-                        "recording" if recording_started.egress_id else "failed"
-                    )
-                    await update_session_recording_remote(
-                        session_id=session_tracker_id,
-                        recording_status=initial_recording_status,
-                        recording_url=recording_started.expected_url
-                        if initial_recording_status == "recording"
-                        else None,
-                        business_id=business_id,
-                    )
-                    _persist_session_event_async(
-                        userdata,
-                        event_type="recording_started"
-                        if recording_started.egress_id
-                        else "recording_failed",
-                        role="system",
-                        title="Recording started"
-                        if recording_started.egress_id
-                        else "Recording failed",
-                        body=(
-                            f"Audio recording started for room {ctx.room.name}."
-                            if recording_started.egress_id
-                            else f"Audio recording could not start: {recording_started.detail or 'unknown error'}."
-                        ),
-                        payload={
-                            "recording_status": initial_recording_status,
-                            "egress_id": recording_started.egress_id,
-                            "recording_url": recording_started.expected_url,
-                            "filepath": recording_started.filepath,
-                            "detail": recording_started.detail,
-                        },
-                    )
-                else:
-                    logger.info(
-                        "Recording not enabled for this session: language=en business_id=%s",
-                        business_id,
-                    )
             await session.start(
-                agent=SalonAgent(instructions=instructions),
+                agent=SalonAgent(instructions=instructions, tools=dynamic_tools),
                 room=ctx.room,
                 room_options=room_io.RoomOptions(delete_room_on_close=True),
             )
@@ -3049,6 +4096,30 @@ async def entrypoint(ctx: JobContext):
             _trigger_first_turn(
                 session, language="en", business_use_case=business_use_case
             )
+            if is_recording_enabled():
+                async def _start_recording_after_join_en() -> None:
+                    try:
+                        await _start_session_recording_capture(
+                            ctx=ctx,
+                            userdata=userdata,
+                            business_id=business_id,
+                            session_tracker_id=str(userdata.get("session_tracker_id") or ""),
+                            started_at=started_at,
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        logger.exception(
+                            "Recording startup failed after English session join: business_id=%s session_id=%s error=%s",
+                            business_id,
+                            str(userdata.get("session_id") or ""),
+                            exc,
+                        )
+
+                _track_background_task(userdata, _start_recording_after_join_en())
+            else:
+                logger.info(
+                    "Recording not enabled for this session: language=en business_id=%s",
+                    business_id,
+                )
             shutdown_reason = await _wait_for_job_shutdown(ctx)
             logger.info(
                 "Session shutdown received (en): reason=%s",
@@ -3106,6 +4177,10 @@ async def entrypoint(ctx: JobContext):
             base_prompt, preloaded_context
         )
         instructions = await _instructions_with_context(instructions, userdata)
+        instructions = await _instructions_with_initial_knowledge_context(
+            instructions, userdata
+        )
+        userdata["base_instructions"] = instructions
         started_at = conv_api_utcnow()
         business_id = str(userdata.get("business_id") or "")
         call_channel = (
@@ -3147,6 +4222,18 @@ async def entrypoint(ctx: JobContext):
             stt_engine=stt_engine,
             tts_engine=tts_engine,
         )
+        dynamic_tools = build_dynamic_http_tools(
+            active_agent_config,
+            excluded_tool_names=set(BUILTIN_RUNTIME_TOOL_NAMES),
+        )
+        if dynamic_tools:
+            logger.info(
+                "Registered dynamic runtime tools: %s",
+                [
+                    str(getattr(getattr(tool, "info", None), "name", "")).strip()
+                    for tool in dynamic_tools
+                ],
+            )
         _wire_session_timeline(session, session.userdata)
         try:
             if conversation_service_enabled(business_id) and userdata.get(
@@ -3174,62 +4261,8 @@ async def entrypoint(ctx: JobContext):
                         "configured_agent_name": userdata.get("configured_name"),
                     },
                 )
-                if is_recording_enabled():
-                    logger.info(
-                        "Attempting room recording start: language=fr session_id=%s room=%s",
-                        session_tracker_id or str(userdata.get("session_id") or ""),
-                        str(ctx.room.name or ""),
-                    )
-                    recording_started = await start_room_recording(
-                        room_name=str(ctx.room.name or ""),
-                        business_id=business_id,
-                        session_id=session_tracker_id
-                        or str(userdata.get("session_id") or ""),
-                        started_at=started_at,
-                    )
-                    userdata["recording_egress_id"] = recording_started.egress_id
-                    userdata["recording_expected_url"] = recording_started.expected_url
-                    userdata["recording_filepath"] = recording_started.filepath
-                    initial_recording_status = (
-                        "recording" if recording_started.egress_id else "failed"
-                    )
-                    await update_session_recording_remote(
-                        session_id=session_tracker_id,
-                        recording_status=initial_recording_status,
-                        recording_url=recording_started.expected_url
-                        if initial_recording_status == "recording"
-                        else None,
-                        business_id=business_id,
-                    )
-                    _persist_session_event_async(
-                        userdata,
-                        event_type="recording_started"
-                        if recording_started.egress_id
-                        else "recording_failed",
-                        role="system",
-                        title="Recording started"
-                        if recording_started.egress_id
-                        else "Recording failed",
-                        body=(
-                            f"Audio recording started for room {ctx.room.name}."
-                            if recording_started.egress_id
-                            else f"Audio recording could not start: {recording_started.detail or 'unknown error'}."
-                        ),
-                        payload={
-                            "recording_status": initial_recording_status,
-                            "egress_id": recording_started.egress_id,
-                            "recording_url": recording_started.expected_url,
-                            "filepath": recording_started.filepath,
-                            "detail": recording_started.detail,
-                        },
-                    )
-                else:
-                    logger.info(
-                        "Recording not enabled for this session: language=fr business_id=%s",
-                        business_id,
-                    )
             await session.start(
-                agent=SalonAgent(instructions=instructions),
+                agent=SalonAgent(instructions=instructions, tools=dynamic_tools),
                 room=ctx.room,
                 room_options=room_io.RoomOptions(delete_room_on_close=True),
             )
@@ -3244,6 +4277,30 @@ async def entrypoint(ctx: JobContext):
             _trigger_first_turn(
                 session, language="fr", business_use_case=business_use_case
             )
+            if is_recording_enabled():
+                async def _start_recording_after_join_fr() -> None:
+                    try:
+                        await _start_session_recording_capture(
+                            ctx=ctx,
+                            userdata=userdata,
+                            business_id=business_id,
+                            session_tracker_id=str(userdata.get("session_tracker_id") or ""),
+                            started_at=started_at,
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        logger.exception(
+                            "Recording startup failed after French session join: business_id=%s session_id=%s error=%s",
+                            business_id,
+                            str(userdata.get("session_id") or ""),
+                            exc,
+                        )
+
+                _track_background_task(userdata, _start_recording_after_join_fr())
+            else:
+                logger.info(
+                    "Recording not enabled for this session: language=fr business_id=%s",
+                    business_id,
+                )
             shutdown_reason = await _wait_for_job_shutdown(ctx)
             logger.info(
                 "Session shutdown received (fr): reason=%s",
