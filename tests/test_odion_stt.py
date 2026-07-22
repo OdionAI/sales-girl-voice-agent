@@ -284,7 +284,7 @@ class OdionSTTTests(unittest.IsolatedAsyncioTestCase):
         tts_engine = object()
 
         with (
-            patch("main.openai.LLM", return_value=object()),
+            patch("main.openai.LLM", return_value=object()) as llm_mock,
             patch.object(main, "MAAS_API_KEY", "test-maas-key"),
             patch(
                 "main.AgentSession",

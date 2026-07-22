@@ -6,7 +6,10 @@ import main
 
 class LlmProviderTests(unittest.TestCase):
     def test_build_llm_defaults_to_google(self) -> None:
-        with patch.object(main, "LLM_PROVIDER", "google"):
+        with (
+            patch.object(main, "LLM_PROVIDER", "google"),
+            patch("main.google.LLM", side_effect=lambda **kwargs: object()),
+        ):
             llm_engine = main._build_llm_for_language(language="en")
             self.assertIsInstance(llm_engine, main.FallbackGoogleLLM)
             self.assertEqual(llm_engine.provider, "google")
