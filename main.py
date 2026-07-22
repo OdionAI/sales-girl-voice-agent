@@ -78,7 +78,7 @@ from agent.livekit_recording import (
     is_recording_enabled,
     start_room_recording,
 )
-from agent.salon_agent import SalonAgent
+from agent.salon_agent import SalonAgent, select_enabled_runtime_tools
 from prompts.en import SYSTEM_PROMPT_EN
 from prompts.fr import SYSTEM_PROMPT_FR
 
@@ -959,6 +959,7 @@ async def _finalize_session_cleanup(
                 context = await fetch_context_remote(
                     str(userdata.get("conversation_id") or ""),
                     limit=200,
+                    session_id=session_tracker_id,
                     business_id=business_id,
                 )
                 analysis = await analyze_messages(context.get("messages") or [], language=language)
@@ -3560,6 +3561,30 @@ def _build_session_for_language(
     )
 
 
+async def _build_configured_salon_agent(
+    *, instructions: str, dynamic_tools: list[Any], userdata: dict[str, Any]
+) -> SalonAgent:
+    agent = SalonAgent(instructions=instructions, tools=dynamic_tools)
+    selected_tools = select_enabled_runtime_tools(
+        agent.tools,
+        list(userdata.get("enabled_tool_names") or []),
+    )
+    await agent.update_tools(selected_tools)
+    logger.info(
+        "Exposing configured runtime tools only: %s",
+        [
+            tool_name
+            for tool in agent.tools
+            if (
+                tool_name := str(
+                    getattr(getattr(tool, "info", None), "name", "") or ""
+                ).strip()
+            )
+        ],
+    )
+    return agent
+
+
 def _trigger_first_turn(
     session: AgentSession, *, language: str, business_use_case: str
 ) -> None:
@@ -4080,8 +4105,13 @@ async def entrypoint(ctx: JobContext):
                         "configured_agent_name": userdata.get("configured_name"),
                     },
                 )
+            runtime_agent = await _build_configured_salon_agent(
+                instructions=instructions,
+                dynamic_tools=dynamic_tools,
+                userdata=userdata,
+            )
             await session.start(
-                agent=SalonAgent(instructions=instructions, tools=dynamic_tools),
+                agent=runtime_agent,
                 room=ctx.room,
                 room_options=room_io.RoomOptions(delete_room_on_close=True),
             )
@@ -4261,8 +4291,13 @@ async def entrypoint(ctx: JobContext):
                         "configured_agent_name": userdata.get("configured_name"),
                     },
                 )
+            runtime_agent = await _build_configured_salon_agent(
+                instructions=instructions,
+                dynamic_tools=dynamic_tools,
+                userdata=userdata,
+            )
             await session.start(
-                agent=SalonAgent(instructions=instructions, tools=dynamic_tools),
+                agent=runtime_agent,
                 room=ctx.room,
                 room_options=room_io.RoomOptions(delete_room_on_close=True),
             )
