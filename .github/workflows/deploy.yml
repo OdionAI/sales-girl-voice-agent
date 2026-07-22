@@ -136,7 +136,7 @@ jobs:
               echo "Deployment failed; restoring ${previous_target}"
               ln -sfn "${previous_target}" "${current_link}"
               cd "${stack_dir}"
-              "${compose[@]}" build --no-deps "${services[@]}" || true
+              "${compose[@]}" build "${services[@]}" || true
               "${compose[@]}" up -d --no-deps --force-recreate "${services[@]}" || true
             fi
             exit "${status}"
@@ -146,7 +146,7 @@ jobs:
           ln -sfn "${release_dir}" "${current_link}"
           cd "${stack_dir}"
           "${compose[@]}" config -q
-          "${compose[@]}" build --no-deps "${services[@]}"
+          "${compose[@]}" build "${services[@]}"
           "${compose[@]}" up -d --no-deps --force-recreate "${services[@]}"
 
           for service in "${services[@]}"; do
