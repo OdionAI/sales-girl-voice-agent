@@ -11,18 +11,18 @@ permissions:
   contents: read
 
 env:
-  IMAGE_NAME: sales-girl-voice-agent
+  REPO_DIR: sales-girl-voice-agent
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
     env:
       DEPLOY_ENV: ${{ github.ref_name == 'main' && 'prod' || 'staging' }}
-      GCP_PROJECT_ID: ${{ github.ref_name == 'main' && vars.GCP_PROJECT_ID_PROD || vars.GCP_PROJECT_ID_STAGING }}
-      GCP_REGION: ${{ vars.GCP_REGION || 'europe-west1' }}
-      GCP_ZONE: ${{ github.ref_name == 'main' && vars.GCP_ZONE_PROD || vars.GCP_ZONE_STAGING }}
-      ARTIFACT_REGISTRY_REPOSITORY: ${{ vars.ARTIFACT_REGISTRY_REPOSITORY || 'backend' }}
-      VM_USER: ${{ vars.VOICE_AGENT_VM_USER || 'ubuntu' }}
+      TARGET_HOST: ${{ github.ref_name == 'main' && secrets.HUAWEI_NODE_B_HOST_PROD || secrets.HUAWEI_NODE_B_HOST_STAGING }}
+      TARGET_USER: ${{ secrets.HUAWEI_SSH_USER || 'root' }}
+      TARGET_STACK_DIR: ${{ github.ref_name == 'main' && (vars.HUAWEI_NODE_B_STACK_DIR_PROD || '/opt/salesgirl/node-b-prod') || (vars.HUAWEI_NODE_B_STACK_DIR_STAGING || '/opt/salesgirl/node-b-staging') }}
+      TARGET_SRC_ROOT: ${{ vars.HUAWEI_SRC_ROOT || '/opt/salesgirl/src' }}
+      COMPOSE_PROJECT_NAME: ${{ github.ref_name == 'main' && (vars.HUAWEI_COMPOSE_PROJECT_PROD || 'salesgirl-prod') || (vars.HUAWEI_COMPOSE_PROJECT_STAGING || 'salesgirl-staging') }}
 
     steps:
       - name: Checkout
@@ -39,65 +39,41 @@ jobs:
           pip install -r requirements.txt
 
       - name: Run tests
+        env:
+          GOOGLE_API_KEY: dummy-test-key
         run: python -m unittest discover -s tests -p 'test_*.py'
 
       - name: Build image
-        run: docker build -t "${IMAGE_NAME}:ci" .
+        run: docker build -t sales-girl-voice-agent:ci .
 
-      - name: Authenticate to Google Cloud
-        uses: google-github-actions/auth@v3
-        with:
-          credentials_json: ${{ github.ref_name == 'main' && secrets.GCP_SA_KEY_PROD || secrets.GCP_SA_KEY_STAGING }}
-
-      - name: Setup gcloud
-        uses: google-github-actions/setup-gcloud@v3
-
-      - name: Configure Docker auth
-        run: gcloud auth configure-docker "${GCP_REGION}-docker.pkg.dev" --quiet
-
-      - name: Push release image
-        env:
-          GITHUB_SHA: ${{ github.sha }}
+      - name: Install SSH key
         run: |
-          IMAGE_BASE="${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT_ID}/${ARTIFACT_REGISTRY_REPOSITORY}/${IMAGE_NAME}"
-          IMAGE_SHA="${IMAGE_BASE}:${GITHUB_SHA}"
-          IMAGE_LATEST="${IMAGE_BASE}:${DEPLOY_ENV}-latest"
-          docker build -t "${IMAGE_SHA}" -t "${IMAGE_LATEST}" .
-          docker push "${IMAGE_SHA}"
-          docker push "${IMAGE_LATEST}"
+          test -n "${TARGET_HOST}" || (echo "Missing Huawei target host for ${DEPLOY_ENV}" && exit 1)
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "${{ secrets.HUAWEI_SSH_PRIVATE_KEY }}" > ~/.ssh/huawei_deploy_key
+          chmod 600 ~/.ssh/huawei_deploy_key
 
-      - name: Resolve VM Name
+      - name: Upload source and deploy voice workers
         run: |
-          VM_NAME="sales-girl-voice-agent-${DEPLOY_ENV}"
-          echo "VM_NAME=${VM_NAME}" >> "${GITHUB_ENV}"
+          set -euo pipefail
+          REMOTE_RELEASE="${TARGET_SRC_ROOT}/.releases/${REPO_DIR}/${GITHUB_SHA}"
+          REMOTE_CURRENT="${TARGET_SRC_ROOT}/${REPO_DIR}"
+          SSH=(ssh -i ~/.ssh/huawei_deploy_key -o StrictHostKeyChecking=no "${TARGET_USER}@${TARGET_HOST}")
 
-      - name: Deploy on VM
-        env:
-          REPO_URL: https://github.com/${{ github.repository }}.git
-          REPO_BRANCH: ${{ github.ref_name }}
-          REPO_TOKEN: ${{ github.token }}
-        run: |
-          gcloud compute ssh "${VM_NAME}" \
-            --project "${GCP_PROJECT_ID}" \
-            --zone "${GCP_ZONE}" \
-            --tunnel-through-iap \
-            --ssh-flag="-o StrictHostKeyChecking=no" \
-            --command "\
-            export ENVIRONMENT='${DEPLOY_ENV}' && \
-            export VM_USER='${VM_USER}' && \
-            export REPO_URL='${REPO_URL}' && \
-            export REPO_BRANCH='${REPO_BRANCH}' && \
-            export GITHUB_TOKEN='${REPO_TOKEN}' && \
-            sudo mkdir -p /opt/sales-girl-voice-agent && \
-            sudo chown -R ${VM_USER}:${VM_USER} /opt/sales-girl-voice-agent && \
-            sudo -u ${VM_USER} git config --global --add safe.directory /opt/sales-girl-voice-agent && \
-            cd /opt/sales-girl-voice-agent && \
-            sudo -u ${VM_USER} git fetch origin && \
-            sudo -u ${VM_USER} git checkout ${REPO_BRANCH} && \
-            sudo -u ${VM_USER} git stash push -m github-actions-predeploy-${{ github.sha }} || true && \
-            sudo -u ${VM_USER} git pull origin ${REPO_BRANCH} && \
-            if [ -x /opt/sales-girl-voice-agent/scripts/deploy.sh ]; then \
-              /opt/sales-girl-voice-agent/scripts/deploy.sh; \
-            else \
-              /opt/sales-girl-voice-agent/sales-girl-voice-agent/scripts/deploy.sh; \
-            fi"
+          "${SSH[@]}" "mkdir -p '${REMOTE_RELEASE}' '${TARGET_SRC_ROOT}'"
+          tar \
+            --exclude='.git' \
+            --exclude='.venv' \
+            --exclude='__pycache__' \
+            --exclude='.pytest_cache' \
+            -czf - . | "${SSH[@]}" "tar -xzf - -C '${REMOTE_RELEASE}'"
+
+          "${SSH[@]}" "\
+            set -euo pipefail && \
+            ln -sfn '${REMOTE_RELEASE}' '${REMOTE_CURRENT}' && \
+            cd '${TARGET_STACK_DIR}' && \
+            COMPOSE_PROJECT_NAME='${COMPOSE_PROJECT_NAME}' docker compose --env-file .env.node-b build voice-agent-en voice-agent-fr && \
+            COMPOSE_PROJECT_NAME='${COMPOSE_PROJECT_NAME}' docker compose --env-file .env.node-b up -d --no-deps --force-recreate voice-agent-en voice-agent-fr && \
+            COMPOSE_PROJECT_NAME='${COMPOSE_PROJECT_NAME}' docker compose --env-file .env.node-b ps voice-agent-en voice-agent-fr && \
+            docker image prune -f"
