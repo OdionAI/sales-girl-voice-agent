@@ -88,11 +88,19 @@ async def resolve_conversation(
     )
 
 
-async def fetch_context(conversation_id: str, limit: int = 30, business_id: str | None = None) -> dict[str, Any]:
+async def fetch_context(
+    conversation_id: str,
+    limit: int = 30,
+    session_id: str | None = None,
+    business_id: str | None = None,
+) -> dict[str, Any]:
+    params: dict[str, Any] = {"limit": limit}
+    if str(session_id or "").strip():
+        params["session_id"] = str(session_id).strip()
     return await _request_json(
         "GET",
         f"/v1/conversations/{conversation_id}/context",
-        params={"limit": limit},
+        params=params,
         business_id=business_id,
     )
 

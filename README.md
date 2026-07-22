@@ -50,6 +50,13 @@ Current stable contract:
 - dashboard-configured custom `http` tools are promoted into real callable
   runtime tools for the active agent at session start, not just appended to the
   prompt as text
+- each session exposes only the built-in and custom tools enabled by that
+  agent's active runtime config (plus scoped knowledge search); unrelated
+  built-in tools are not sent to the LLM
+- Huawei MaaS textual fallback calls in the exact
+  `<function>name{...}</function>` form are withheld from TTS and recovered as
+  structured calls only when the named tool is enabled; malformed or
+  unauthorized markup is never spoken to the caller
 - custom runtime tools use the saved tool description as part of the live
   contract, can expose request-schema fields when provided, and forward
   business/session metadata headers to downstream business endpoints
@@ -62,9 +69,11 @@ Current stable contract:
   fragments so dashboard and session transcripts reflect final replies cleanly
 - ticket follow-up reconciliation should not create a second ticket when a
   recent successful ticket already exists for the same caller turn flow
-- the cascade runtime should prefer Gemini `gemini-3-flash-preview` for English
-  and French sessions and automatically retry on Gemini
-  `gemini-3.1-flash-lite` when the primary model is unavailable
+- the production cascade runtime uses Huawei MaaS `glm-5.2` for English and
+  French sessions through the OpenAI-compatible endpoint
+- optional post-call summary/intent analysis also uses Huawei MaaS and reads
+  only messages belonging to the completed session, not older calls in the
+  same conversation
 - NG TTS is the default non-Deepgram TTS path for configured English sessions
 - deployed environments can switch the default direct-call STT/TTS path to
   Odion STT and NG TTS with `VOICE_AGENT_STT_PROVIDER`, `VOICE_AGENT_STT_MODEL`,
@@ -120,8 +129,16 @@ Create `.env` from `.env.example` before running locally.
 - `LIVEKIT_API_KEY`
 - `LIVEKIT_API_SECRET`
 - `DEEPGRAM_API_KEY`
-- `GOOGLE_API_KEY`
-- `LLM_PROVIDER` (`google` default, or `groq`)
+- `LLM_PROVIDER` (`maas` for the Huawei production runtime; `google` and
+  `groq` remain supported alternatives)
+- `MAAS_API_KEY`
+- `MAAS_BASE_URL`
+- `MAAS_LLM_MODEL_DEFAULT`
+- `MAAS_LLM_MODEL_EN`
+- `MAAS_LLM_MODEL_FR`
+- `CONVERSATION_ANALYSIS_ENABLED`
+- `CONVERSATION_ANALYSIS_MODEL`
+- `GOOGLE_API_KEY` (only required when the Google provider is selected)
 - `GROQ_API_KEY` (required when `LLM_PROVIDER=groq`)
 - `GROQ_LLM_MODEL_DEFAULT`
 - `GROQ_LLM_MODEL_EN`
