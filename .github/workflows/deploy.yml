@@ -30,7 +30,7 @@ jobs:
       HUAWEI_SSH_USER: ${{ vars.HUAWEI_SSH_USER || 'root' }}
       HUAWEI_SRC_ROOT: ${{ vars.HUAWEI_SRC_ROOT || '/opt/salesgirl/src' }}
       TARGET_STACK_DIR: ${{ github.ref_name == 'main' && (vars.HUAWEI_NODE_B_STACK_DIR_PROD || '/opt/salesgirl/node-b-prod') || (vars.HUAWEI_NODE_B_STACK_DIR_STAGING || '/opt/salesgirl/node-b-staging') }}
-      COMPOSE_PROJECT_NAME: ${{ github.ref_name == 'main' && (vars.HUAWEI_COMPOSE_PROJECT_PROD || 'salesgirl-prod') || (vars.HUAWEI_COMPOSE_PROJECT_STAGING || 'salesgirl-staging') }}
+      COMPOSE_PROJECT_NAME: ${{ github.ref_name == 'main' && (vars.HUAWEI_COMPOSE_PROJECT_PROD || 'node-b-prod') || (vars.HUAWEI_COMPOSE_PROJECT_STAGING || 'node-b-staging') }}
 
     steps:
       - name: Checkout
