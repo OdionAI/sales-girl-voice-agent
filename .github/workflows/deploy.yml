@@ -18,7 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       DEPLOY_ENV: ${{ github.ref_name == 'main' && 'prod' || 'staging' }}
-      TARGET_HOST: ${{ github.ref_name == 'main' && secrets.HUAWEI_NODE_B_HOST_PROD || secrets.HUAWEI_NODE_B_HOST_STAGING }}
+      TARGET_HOST: ${{ github.ref_name == 'main' && (secrets.HUAWEI_NODE_B_HOST_PROD || '80.238.244.47') || (secrets.HUAWEI_NODE_B_HOST_STAGING || '80.238.244.47') }}
       TARGET_USER: ${{ secrets.HUAWEI_SSH_USER || 'root' }}
       TARGET_STACK_DIR: ${{ github.ref_name == 'main' && (vars.HUAWEI_NODE_B_STACK_DIR_PROD || '/opt/salesgirl/node-b-prod') || (vars.HUAWEI_NODE_B_STACK_DIR_STAGING || '/opt/salesgirl/node-b-staging') }}
       TARGET_SRC_ROOT: ${{ vars.HUAWEI_SRC_ROOT || '/opt/salesgirl/src' }}
