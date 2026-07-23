@@ -157,6 +157,29 @@ class DynamicHttpToolsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(headers["X-Service-Token"], "runtime-only-token")
         self.assertEqual(headers["X-Service-Name"], "sales-girl-voice-agent")
 
+    async def test_post_call_caller_marker_can_be_hidden_from_live_runtime(self) -> None:
+        tools = build_dynamic_http_tools(
+            {
+                "tools": [
+                    {
+                        "name": "record_caller_details",
+                        "description": "Internal post-call caller intake marker.",
+                        "method": "POST",
+                        "url": "http://conversation-service:8091/v1/tools/caller-contacts",
+                    },
+                    {
+                        "name": "lookup_case",
+                        "description": "Look up a case when the caller asks for one.",
+                        "method": "POST",
+                        "url": "https://vendor.example.com/cases",
+                    },
+                ]
+            },
+            excluded_tool_names={"record_caller_details"},
+        )
+
+        self.assertEqual([tool.info.name for tool in tools], ["lookup_case"])
+
     async def test_runtime_service_auth_is_not_sent_to_external_tools(self) -> None:
         tools = build_dynamic_http_tools(
             {

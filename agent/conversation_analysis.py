@@ -124,6 +124,22 @@ def _optional_text(result: dict[str, Any], field: str) -> str | None:
     return normalized
 
 
+def _required_phone(result: dict[str, Any]) -> str:
+    phone = re.sub(r"[\s().-]+", "", _required_text(result, "phone_number"))
+    if phone.startswith("00"):
+        phone = f"+{phone[2:]}"
+    if not re.fullmatch(r"\+[1-9]\d{7,14}", phone):
+        raise ValueError("caller-record analysis returned an invalid phone number")
+    return phone
+
+
+def _required_email(result: dict[str, Any]) -> str:
+    email = _required_text(result, "email").lower()
+    if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
+        raise ValueError("caller-record analysis returned an invalid email")
+    return email
+
+
 async def analyze_messages(messages: list[dict[str, Any]], *, language: str = "en") -> dict[str, Any]:
     transcript = _transcript_text(messages)
     if not transcript:
@@ -151,14 +167,15 @@ Conversation:
 async def analyze_caller_record(
     messages: list[dict[str, Any]], *, language: str = "fr"
 ) -> dict[str, Any]:
-    """Classify operational sheet fields without asking the caller for them."""
+    """Extract caller identity and classify operational sheet fields."""
     transcript = _transcript_text(messages)
     if not transcript:
         raise ValueError("conversation has no analyzable messages")
     prompt = f"""You are the post-call quality-assurance analyst for a Benin consular support line.
 Do not answer the caller. Analyze the completed conversation and return JSON only with exactly these keys:
-theme, sub_theme, request_summary, treatment, treatment_comment, status,
-consular_registration_number, order_date, order_number, transferred_to_human.
+first_name, last_name, phone_number, email, theme, sub_theme, request_summary,
+treatment, treatment_comment, status, consular_registration_number, order_date,
+order_number, transferred_to_human.
 
 Use one exact theme value:
 {", ".join(sorted(CALLER_RECORD_THEMES))}
@@ -173,11 +190,15 @@ Use one exact status value:
 {", ".join(sorted(CALLER_RECORD_STATUSES))}
 
 Rules:
+- Extract first_name, last_name, phone_number, and email from the caller's confirmed details in the transcript.
+- Reconstruct names from spelling when the caller spells them. Use normal readable casing, not all caps.
+- Return phone_number in E.164 format with a leading + and digits only. Convert "00" international prefixes to "+" and remove spaces.
+- Return email in lowercase. Reconstruct spoken or spelled "arobase/at" and "point/dot" addresses only when the transcript is clear.
 - Write request_summary and treatment_comment in concise factual French.
 - Infer classification, treatment, and status from the conversation; never ask the caller for them.
 - transferred_to_human must be true only if the caller was actually transferred to a human during this call.
 - Use JSON null for consular_registration_number, order_date, or order_number unless the caller explicitly provided it.
-- Do not invent facts or treat the caller's phone number as a consular/order number.
+- Do not invent contact details, facts, or treat the caller's phone number as a consular/order number.
 - Conversation language is {language}.
 
 Conversation:
@@ -199,6 +220,10 @@ Conversation:
     if not isinstance(transferred_to_human, bool):
         raise ValueError("caller-record transferred_to_human must be a boolean")
     return {
+        "first_name": _required_text(result, "first_name"),
+        "last_name": _required_text(result, "last_name"),
+        "phone_number": _required_phone(result),
+        "email": _required_email(result),
         "theme": theme,
         "sub_theme": sub_theme,
         "request_summary": _required_text(result, "request_summary"),
