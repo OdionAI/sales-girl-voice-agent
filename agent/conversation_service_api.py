@@ -216,5 +216,40 @@ async def update_session_analysis(
     )
 
 
+async def finalize_caller_record(
+    *,
+    session_ref: str,
+    theme: str,
+    sub_theme: str,
+    request_summary: str,
+    treatment: str,
+    treatment_comment: str,
+    status: str,
+    consular_registration_number: str | None = None,
+    order_date: str | None = None,
+    order_number: str | None = None,
+    transferred_to_human: bool = False,
+    business_id: str | None = None,
+) -> dict[str, Any]:
+    return await _request_json(
+        "POST",
+        "/v1/tools/caller-records/finalize",
+        json={
+            "session_ref": session_ref,
+            "theme": theme,
+            "sub_theme": sub_theme,
+            "request_summary": request_summary,
+            "treatment": treatment,
+            "treatment_comment": treatment_comment,
+            "status": status,
+            "consular_registration_number": consular_registration_number,
+            "order_date": order_date,
+            "order_number": order_number,
+            "transferred_to_human": transferred_to_human,
+        },
+        business_id=business_id,
+    )
+
+
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
