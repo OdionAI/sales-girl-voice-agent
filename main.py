@@ -5,6 +5,7 @@ import re
 import asyncio
 import base64
 import hashlib
+import inspect
 from typing import Any
 import uuid
 from urllib.parse import urlparse
@@ -79,6 +80,12 @@ from agent.livekit_recording import (
     finalize_room_recording,
     is_recording_enabled,
     start_room_recording,
+)
+from agent.latency_trace import (
+    elapsed_ms,
+    emit as emit_latency_trace,
+    monotonic_ms,
+    new_trace_id,
 )
 from agent.salon_agent import SalonAgent, select_enabled_runtime_tools
 from prompts.en import SYSTEM_PROMPT_EN
@@ -211,6 +218,79 @@ def _summarize_tool_output(value: Any) -> str:
     return _short_text(str(value), 400)
 
 
+def _latency_metadata_from_userdata(userdata: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "runtime_agent": str(userdata.get("agent_id") or AGENT_NAME),
+        "agent_id": str(
+            userdata.get("agent_config_id") or userdata.get("agent_id") or AGENT_NAME
+        ),
+        "agent_config_id": str(userdata.get("agent_config_id") or ""),
+        "business_id": str(userdata.get("business_id") or ""),
+        "conversation_id": str(userdata.get("conversation_id") or ""),
+        "session_id": str(userdata.get("session_id") or ""),
+        "session_tracker_id": str(userdata.get("session_tracker_id") or ""),
+        "end_user_id": str(userdata.get("end_user_id") or ""),
+        "room_name": str(userdata.get("room_name") or ""),
+        "language": str(userdata.get("language") or ""),
+        "identity_type": str(userdata.get("identity_type") or ""),
+        "channel": (
+            "web"
+            if str(userdata.get("identity_type") or "").strip().lower() == "web"
+            else "voice"
+        ),
+        "turn_index": int(userdata.get("turn_index", 0)),
+        "latency_turn_id": str(userdata.get("latency_turn_id") or ""),
+    }
+
+
+def _emit_voice_latency(
+    userdata: dict[str, Any],
+    event: str,
+    **fields: Any,
+) -> None:
+    if not isinstance(userdata, dict):
+        return
+    emit_latency_trace(
+        event,
+        metadata=_latency_metadata_from_userdata(userdata),
+        **fields,
+    )
+
+
+def _latency_elapsed_fields(userdata: dict[str, Any]) -> dict[str, int]:
+    fields: dict[str, int] = {}
+    since_turn_start = elapsed_ms(userdata.get("latency_turn_started_ms"))
+    if since_turn_start is not None:
+        fields["ms_since_turn_start"] = since_turn_start
+    since_user_final = elapsed_ms(userdata.get("latency_user_final_ms"))
+    if since_user_final is not None:
+        fields["ms_since_user_final"] = since_user_final
+    return fields
+
+
+def _begin_latency_turn(
+    userdata: dict[str, Any],
+    *,
+    trigger: str,
+    content_chars: int = 0,
+    synthetic: bool = False,
+) -> str:
+    now_ms = monotonic_ms()
+    turn_id = new_trace_id(f"turn_{int(userdata.get('turn_index', 0))}")
+    userdata["latency_turn_id"] = turn_id
+    userdata["latency_turn_started_ms"] = now_ms
+    userdata["latency_user_final_ms"] = None if synthetic else now_ms
+    userdata["latency_llm_call_index"] = 0
+    _emit_voice_latency(
+        userdata,
+        "turn_started",
+        trigger=trigger,
+        synthetic=synthetic,
+        content_chars=max(0, int(content_chars or 0)),
+    )
+    return turn_id
+
+
 def _persist_session_event_async(
     userdata: dict[str, Any],
     *,
@@ -284,17 +364,26 @@ def _tool_metadata_from_userdata(userdata: dict[str, Any]) -> dict[str, Any]:
             or userdata.get("agent_id")
             or AGENT_NAME
         ),
+        "agent_config_id": str(userdata.get("agent_config_id") or ""),
+        "runtime_agent": str(userdata.get("agent_id") or AGENT_NAME),
         "business_id": str(userdata.get("business_id") or ""),
         "business_use_case": str(userdata.get("business_use_case") or ""),
         "knowledge_base_ids": list(userdata.get("knowledge_base_ids") or []),
         "live_data_endpoint": str(userdata.get("live_data_endpoint") or ""),
         "conversation_id": conversation_id,
         "session_id": session_id,
+        "session_tracker_id": str(userdata.get("session_tracker_id") or ""),
+        "room_name": str(userdata.get("room_name") or ""),
+        "language": str(userdata.get("language") or ""),
+        "identity_type": str(userdata.get("identity_type") or ""),
         "end_user_id": str(userdata.get("end_user_id") or ""),
         "end_user_name": str(userdata.get("end_user_name") or ""),
         "caller_phone_e164": str(userdata.get("caller_phone_e164") or ""),
         "enabled_tool_names": list(userdata.get("enabled_tool_names") or []),
         "turn_index": int(userdata.get("turn_index", 0)),
+        "latency_turn_id": str(userdata.get("latency_turn_id") or ""),
+        "latency_turn_started_ms": userdata.get("latency_turn_started_ms"),
+        "latency_user_final_ms": userdata.get("latency_user_final_ms"),
         "last_user_transcript": str(userdata.get("last_user_transcript") or ""),
         "last_assistant_message": str(userdata.get("last_assistant_message") or ""),
         "timeline_event_index": int(userdata.get("timeline_event_index", 0)),
@@ -970,6 +1059,12 @@ async def _finalize_session_cleanup(
             and conversation_analysis_enabled()
         ):
             context_messages: list[dict[str, Any]] | None = None
+            analysis_started_ms = monotonic_ms()
+            _emit_voice_latency(
+                userdata,
+                "post_session_analysis_started",
+                session_duration_seconds=duration,
+            )
             try:
                 await update_session_analysis_remote(
                     session_id=session_tracker_id,
@@ -997,7 +1092,22 @@ async def _finalize_session_cleanup(
                         session_tracker_id,
                         persisted_analysis.get("detail"),
                     )
+                _emit_voice_latency(
+                    userdata,
+                    "post_session_analysis_completed",
+                    duration_ms=elapsed_ms(analysis_started_ms),
+                    messages_count=len(context_messages)
+                    if isinstance(context_messages, list)
+                    else 0,
+                    analysis_status=str(analysis.get("analysis_status") or ""),
+                )
             except Exception as exc:  # noqa: BLE001
+                _emit_voice_latency(
+                    userdata,
+                    "post_session_analysis_failed",
+                    duration_ms=elapsed_ms(analysis_started_ms),
+                    error_type=type(exc).__name__,
+                )
                 logger.exception(
                     "Post-session analysis failed: session_id=%s error=%s",
                     session_tracker_id,
@@ -1025,6 +1135,11 @@ async def _finalize_session_cleanup(
                 "record_caller_details" in enabled_tool_names
                 and client_session_id
             ):
+                caller_record_started_ms = monotonic_ms()
+                _emit_voice_latency(
+                    userdata,
+                    "caller_record_analysis_started",
+                )
                 try:
                     if context_messages is None:
                         context = await fetch_context_remote(
@@ -1069,7 +1184,24 @@ async def _finalize_session_cleanup(
                             client_session_id,
                             caller_record_result.get("duplicate"),
                         )
+                    _emit_voice_latency(
+                        userdata,
+                        "caller_record_analysis_completed",
+                        duration_ms=elapsed_ms(caller_record_started_ms),
+                        messages_count=len(context_messages)
+                        if isinstance(context_messages, list)
+                        else 0,
+                        duplicate=caller_record_result.get("duplicate")
+                        if isinstance(caller_record_result, dict)
+                        else None,
+                    )
                 except Exception as exc:  # noqa: BLE001
+                    _emit_voice_latency(
+                        userdata,
+                        "caller_record_analysis_failed",
+                        duration_ms=elapsed_ms(caller_record_started_ms),
+                        error_type=type(exc).__name__,
+                    )
                     logger.exception(
                         "Post-call caller-record analysis failed: session_ref=%s error=%s",
                         client_session_id,
@@ -1547,6 +1679,228 @@ class _FallbackGroqLLMStream(llm.LLMStream):
         if last_error is not None:
             raise last_error
         raise APIConnectionError("No Groq model could be selected for this request.")
+
+
+def _llm_chunk_text(chunk: Any) -> str:
+    if isinstance(chunk, str):
+        return chunk
+    delta = getattr(chunk, "delta", None)
+    if delta is None:
+        return ""
+    content = getattr(delta, "content", None)
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            text = str(getattr(item, "text", "") or "").strip()
+            if text:
+                parts.append(text)
+        return " ".join(parts)
+    return ""
+
+
+def _chat_context_item_count(chat_ctx: Any) -> int:
+    for attr in ("items", "messages"):
+        value = getattr(chat_ctx, attr, None)
+        if isinstance(value, list):
+            return len(value)
+    return 0
+
+
+def _llm_chat_accepts_kw(wrapped: Any, kwarg_name: str) -> bool:
+    try:
+        parameters = inspect.signature(wrapped.chat).parameters
+    except (TypeError, ValueError, AttributeError):
+        return True
+    return kwarg_name in parameters or any(
+        param.kind == inspect.Parameter.VAR_KEYWORD
+        for param in parameters.values()
+    )
+
+
+class LatencyTracingLLM(llm.LLM):
+    def __init__(
+        self,
+        wrapped: llm.LLM,
+        *,
+        userdata: dict[str, Any],
+        language: str,
+    ) -> None:
+        super().__init__()
+        self._wrapped = wrapped
+        self._userdata = userdata
+        self._language = str(language or "").strip().lower()
+
+    @property
+    def model(self) -> str:
+        return str(getattr(self._wrapped, "model", "") or "unknown")
+
+    @property
+    def provider(self) -> str:
+        return str(getattr(self._wrapped, "provider", "") or LLM_PROVIDER or "unknown")
+
+    def prewarm(self) -> None:
+        prewarm = getattr(self._wrapped, "prewarm", None)
+        if callable(prewarm):
+            prewarm()
+
+    async def aclose(self) -> None:
+        close = getattr(self._wrapped, "aclose", None)
+        if callable(close):
+            await close()
+
+    def chat(
+        self,
+        *,
+        chat_ctx: llm.ChatContext,
+        tools: list[llm.Tool] | None = None,
+        conn_options: APIConnectOptions = APIConnectOptions(),
+        parallel_tool_calls=NOT_GIVEN,
+        tool_choice=NOT_GIVEN,
+        response_format=NOT_GIVEN,
+        extra_kwargs=NOT_GIVEN,
+    ) -> LLMStream:
+        self._userdata["latency_llm_call_index"] = (
+            int(self._userdata.get("latency_llm_call_index", 0)) + 1
+        )
+        call_index = int(self._userdata["latency_llm_call_index"])
+        llm_trace_id = new_trace_id(f"llm_{call_index}")
+        started_ms = monotonic_ms()
+        _emit_voice_latency(
+            self._userdata,
+            "llm_request_started",
+            llm_trace_id=llm_trace_id,
+            llm_call_index=call_index,
+            provider=self.provider,
+            model=self.model,
+            language=self._language,
+            tools_count=len(tools or []),
+            chat_context_items=_chat_context_item_count(chat_ctx),
+            **_latency_elapsed_fields(self._userdata),
+        )
+        return _LatencyTracingLLMStream(
+            self,
+            wrapped=self._wrapped,
+            userdata=self._userdata,
+            llm_trace_id=llm_trace_id,
+            llm_call_index=call_index,
+            started_ms=started_ms,
+            chat_ctx=chat_ctx,
+            tools=tools or [],
+            conn_options=conn_options,
+            parallel_tool_calls=parallel_tool_calls,
+            tool_choice=tool_choice,
+            response_format=response_format,
+            extra_kwargs=extra_kwargs,
+        )
+
+
+class _LatencyTracingLLMStream(llm.LLMStream):
+    def __init__(
+        self,
+        llm_v: LatencyTracingLLM,
+        *,
+        wrapped: llm.LLM,
+        userdata: dict[str, Any],
+        llm_trace_id: str,
+        llm_call_index: int,
+        started_ms: int,
+        chat_ctx: llm.ChatContext,
+        tools: list[llm.Tool],
+        conn_options,
+        parallel_tool_calls,
+        tool_choice,
+        response_format,
+        extra_kwargs,
+    ) -> None:
+        super().__init__(llm_v, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options)
+        self._wrapped = wrapped
+        self._userdata = userdata
+        self._llm_trace_id = llm_trace_id
+        self._llm_call_index = llm_call_index
+        self._started_ms = started_ms
+        self._parallel_tool_calls = parallel_tool_calls
+        self._tool_choice = tool_choice
+        self._response_format = response_format
+        self._extra_kwargs = extra_kwargs
+
+    async def _run(self) -> None:
+        first_chunk_ms: int | None = None
+        first_text_ms: int | None = None
+        chunk_count = 0
+        text_chars = 0
+        chat_kwargs = {
+            "chat_ctx": self._chat_ctx,
+            "tools": self._tools,
+            "conn_options": self._conn_options,
+            "parallel_tool_calls": self._parallel_tool_calls,
+            "tool_choice": self._tool_choice,
+            "extra_kwargs": self._extra_kwargs,
+        }
+        if _llm_chat_accepts_kw(self._wrapped, "response_format"):
+            chat_kwargs["response_format"] = self._response_format
+        stream = self._wrapped.chat(**chat_kwargs)
+        try:
+            async with stream:
+                async for chunk in stream:
+                    chunk_count += 1
+                    now_ms = monotonic_ms()
+                    if first_chunk_ms is None:
+                        first_chunk_ms = now_ms
+                        _emit_voice_latency(
+                            self._userdata,
+                            "llm_first_chunk",
+                            llm_trace_id=self._llm_trace_id,
+                            llm_call_index=self._llm_call_index,
+                            llm_first_chunk_ms=max(0, now_ms - self._started_ms),
+                            **_latency_elapsed_fields(self._userdata),
+                        )
+                    chunk_text = _llm_chunk_text(chunk)
+                    if chunk_text:
+                        text_chars += len(chunk_text)
+                        if first_text_ms is None:
+                            first_text_ms = now_ms
+                            _emit_voice_latency(
+                                self._userdata,
+                                "llm_first_text",
+                                llm_trace_id=self._llm_trace_id,
+                                llm_call_index=self._llm_call_index,
+                                llm_first_text_ms=max(0, now_ms - self._started_ms),
+                                **_latency_elapsed_fields(self._userdata),
+                            )
+                    self._event_ch.send_nowait(chunk)
+            _emit_voice_latency(
+                self._userdata,
+                "llm_stream_completed",
+                llm_trace_id=self._llm_trace_id,
+                llm_call_index=self._llm_call_index,
+                llm_total_ms=elapsed_ms(self._started_ms),
+                llm_first_chunk_ms=(
+                    max(0, first_chunk_ms - self._started_ms)
+                    if first_chunk_ms is not None
+                    else None
+                ),
+                llm_first_text_ms=(
+                    max(0, first_text_ms - self._started_ms)
+                    if first_text_ms is not None
+                    else None
+                ),
+                chunks=chunk_count,
+                text_chars=text_chars,
+                **_latency_elapsed_fields(self._userdata),
+            )
+        except Exception as exc:  # noqa: BLE001
+            _emit_voice_latency(
+                self._userdata,
+                "llm_stream_failed",
+                llm_trace_id=self._llm_trace_id,
+                llm_call_index=self._llm_call_index,
+                llm_total_ms=elapsed_ms(self._started_ms),
+                error_type=type(exc).__name__,
+                **_latency_elapsed_fields(self._userdata),
+            )
+            raise
 
 
 def _build_llm_for_language(*, language: str) -> llm.LLM:
@@ -2179,6 +2533,13 @@ def _wire_session_timeline(session: AgentSession, userdata: dict[str, Any]) -> N
         if not query or not base_instructions:
             return
 
+        started_ms = monotonic_ms()
+        _emit_voice_latency(
+            userdata,
+            "dynamic_knowledge_prefetch_started",
+            query_chars=len(query),
+            **_latency_elapsed_fields(userdata),
+        )
         try:
             result = await ops_search_business_knowledge(
                 query=query,
@@ -2186,11 +2547,29 @@ def _wire_session_timeline(session: AgentSession, userdata: dict[str, Any]) -> N
                 metadata=_ops_tool_metadata_from_userdata(userdata),
             )
         except Exception as exc:  # noqa: BLE001
+            _emit_voice_latency(
+                userdata,
+                "dynamic_knowledge_prefetch_failed",
+                duration_ms=elapsed_ms(started_ms),
+                error_type=type(exc).__name__,
+                **_latency_elapsed_fields(userdata),
+            )
             logger.warning("Dynamic knowledge prefetch failed for query=%s: %s", query, exc)
             return
 
         matches = result.get("matches") if isinstance(result, dict) else None
         if not isinstance(matches, list) or not matches:
+            _emit_voice_latency(
+                userdata,
+                "dynamic_knowledge_prefetch_completed",
+                duration_ms=elapsed_ms(started_ms),
+                status=str(result.get("status") or "unknown")
+                if isinstance(result, dict)
+                else "invalid",
+                matches_count=0,
+                instructions_updated=False,
+                **_latency_elapsed_fields(userdata),
+            )
             return
 
         snippets: list[str] = []
@@ -2216,6 +2595,17 @@ def _wire_session_timeline(session: AgentSession, userdata: dict[str, Any]) -> N
         )
         await _update_live_agent_instructions(enriched_instructions)
         userdata["last_dynamic_knowledge_query"] = query
+        _emit_voice_latency(
+            userdata,
+            "dynamic_knowledge_prefetch_completed",
+            duration_ms=elapsed_ms(started_ms),
+            status=str(result.get("status") or "unknown")
+            if isinstance(result, dict)
+            else "invalid",
+            matches_count=len(snippets),
+            instructions_updated=True,
+            **_latency_elapsed_fields(userdata),
+        )
         logger.info(
             "Dynamic knowledge context updated: turn=%s matches=%s query=%s",
             int(userdata.get("turn_index", 0)),
@@ -2229,6 +2619,12 @@ def _wire_session_timeline(session: AgentSession, userdata: dict[str, Any]) -> N
             return
         if query == str(userdata.get("last_dynamic_knowledge_query") or "").strip():
             return
+        _emit_voice_latency(
+            userdata,
+            "dynamic_knowledge_prefetch_scheduled",
+            query_chars=len(query),
+            **_latency_elapsed_fields(userdata),
+        )
         _track_background_task(userdata, _refresh_dynamic_knowledge_context(query))
 
     def _next_event_idx() -> int:
@@ -2245,6 +2641,11 @@ def _wire_session_timeline(session: AgentSession, userdata: dict[str, Any]) -> N
 
         userdata["turn_index"] = int(userdata.get("turn_index", 0)) + 1
         userdata["last_user_transcript"] = transcript
+        _begin_latency_turn(
+            userdata,
+            trigger="user_input_transcribed",
+            content_chars=len(transcript),
+        )
         _schedule_dynamic_knowledge_refresh(transcript)
         event_idx = _next_event_idx()
         trace_conversation_event(
@@ -2275,11 +2676,30 @@ def _wire_session_timeline(session: AgentSession, userdata: dict[str, Any]) -> N
         if not content:
             return
 
-        if role.lower() == "assistant":
+        role_l = role.lower()
+        if role_l == "assistant":
             userdata["last_assistant_message"] = content
-        elif role.lower() == "user":
+            _emit_voice_latency(
+                userdata,
+                "assistant_message_ready",
+                content_chars=len(content),
+                **_latency_elapsed_fields(userdata),
+            )
+        elif role_l == "user":
             if content != userdata.get("last_user_transcript"):
                 userdata["turn_index"] = int(userdata.get("turn_index", 0)) + 1
+                _begin_latency_turn(
+                    userdata,
+                    trigger="conversation_user_item_added",
+                    content_chars=len(content),
+                )
+            else:
+                _emit_voice_latency(
+                    userdata,
+                    "user_message_item_added",
+                    content_chars=len(content),
+                    **_latency_elapsed_fields(userdata),
+                )
             userdata["last_user_transcript"] = content
             _append_recent_user_message(userdata, content)
             _schedule_dynamic_knowledge_refresh(content)
@@ -2303,7 +2723,6 @@ def _wire_session_timeline(session: AgentSession, userdata: dict[str, Any]) -> N
             session_id=str(userdata.get("session_id") or ""),
         )
 
-        role_l = role.lower()
         if role_l == "assistant" and _should_skip_assistant_message_persist(userdata, content):
             return
 
@@ -2312,6 +2731,7 @@ def _wire_session_timeline(session: AgentSession, userdata: dict[str, Any]) -> N
             if conversation_service_enabled(business_id):
 
                 async def _persist_remote() -> None:
+                    persist_started_ms = monotonic_ms()
                     idempotency = _stable_id(
                         f"{userdata.get('session_id')}-{event_idx}-{role_l}",
                         prefix="msg",
@@ -2330,6 +2750,14 @@ def _wire_session_timeline(session: AgentSession, userdata: dict[str, Any]) -> N
                         business_id=business_id,
                     )
                     if str(persisted.get("status") or "") == "failed":
+                        _emit_voice_latency(
+                            userdata,
+                            "conversation_message_persist_failed",
+                            role=role_l,
+                            duration_ms=elapsed_ms(persist_started_ms),
+                            http_status=persisted.get("http_status"),
+                            **_latency_elapsed_fields(userdata),
+                        )
                         logger.error(
                             "Conversation message persist failed: conversation_id=%s role=%s detail=%s http_status=%s",
                             userdata.get("conversation_id"),
@@ -2337,8 +2765,16 @@ def _wire_session_timeline(session: AgentSession, userdata: dict[str, Any]) -> N
                             persisted.get("detail"),
                             persisted.get("http_status"),
                         )
-                    elif role_l == "assistant":
-                        userdata["last_persisted_assistant_content"] = content
+                    else:
+                        _emit_voice_latency(
+                            userdata,
+                            "conversation_message_persist_completed",
+                            role=role_l,
+                            duration_ms=elapsed_ms(persist_started_ms),
+                            **_latency_elapsed_fields(userdata),
+                        )
+                        if role_l == "assistant":
+                            userdata["last_persisted_assistant_content"] = content
 
                 _track_background_task(userdata, _persist_remote())
             else:
@@ -2376,6 +2812,16 @@ def _wire_session_timeline(session: AgentSession, userdata: dict[str, Any]) -> N
             return
 
         event_idx = _next_event_idx()
+        _emit_voice_latency(
+            userdata,
+            "function_tools_executed",
+            tools_count=len(calls),
+            tool_names=[
+                str(call.get("tool_name") or "").strip() or "unknown_tool"
+                for call in calls
+            ],
+            **_latency_elapsed_fields(userdata),
+        )
         trace_conversation_event(
             "function_tools_executed",
             payload={
@@ -2790,10 +3236,21 @@ async def _fetch_agent_runtime_config(
     config_agent_id = str(userdata.get("agent_config_id") or "").strip()
     if not business_id or not config_agent_id:
         return {}
+    started_ms = monotonic_ms()
+    _emit_voice_latency(
+        userdata,
+        "agent_runtime_config_fetch_started",
+    )
     payload = await get_agent_runtime_config(
         agent_id=config_agent_id, business_id=business_id
     )
     if str(payload.get("status") or "") == "failed":
+        _emit_voice_latency(
+            userdata,
+            "agent_runtime_config_fetch_failed",
+            duration_ms=elapsed_ms(started_ms),
+            http_status=payload.get("http_status"),
+        )
         logger.error(
             "Agent runtime config fetch failed: business_id=%s agent_id=%s detail=%s http_status=%s",
             business_id,
@@ -2802,6 +3259,18 @@ async def _fetch_agent_runtime_config(
             payload.get("http_status"),
         )
         return {}
+    _emit_voice_latency(
+        userdata,
+        "agent_runtime_config_fetch_completed",
+        duration_ms=elapsed_ms(started_ms),
+        instructions_chars=len(str(payload.get("instructions") or "")),
+        tools_count=len(payload.get("tools") or [])
+        if isinstance(payload.get("tools"), list)
+        else 0,
+        knowledge_base_count=len(payload.get("knowledge_base_ids") or [])
+        if isinstance(payload.get("knowledge_base_ids"), list)
+        else 0,
+    )
     logger.info(
         "Agent config loaded: agent_id=%s business_id=%s name=%s instructions_len=%s",
         config_agent_id,
@@ -3364,15 +3833,25 @@ def _effective_base_prompt(
 def _ops_tool_metadata_from_userdata(userdata: dict[str, Any]) -> dict[str, Any]:
     return {
         "client_id": os.getenv("AGENT_CLIENT_ID", "sales-girl-internal"),
+        "runtime_agent": str(userdata.get("agent_id") or AGENT_NAME),
         "agent_id": str(
             userdata.get("agent_config_id") or userdata.get("agent_id") or AGENT_NAME
         ),
+        "agent_config_id": str(userdata.get("agent_config_id") or ""),
         "business_id": str(userdata.get("business_id") or ""),
         "business_use_case": str(userdata.get("business_use_case") or ""),
         "knowledge_base_ids": list(userdata.get("knowledge_base_ids") or []),
         "conversation_id": str(userdata.get("conversation_id") or ""),
         "session_id": str(userdata.get("session_id") or ""),
+        "session_tracker_id": str(userdata.get("session_tracker_id") or ""),
+        "room_name": str(userdata.get("room_name") or ""),
+        "language": str(userdata.get("language") or ""),
+        "identity_type": str(userdata.get("identity_type") or ""),
         "end_user_id": str(userdata.get("end_user_id") or ""),
+        "turn_index": int(userdata.get("turn_index", 0)),
+        "latency_turn_id": str(userdata.get("latency_turn_id") or ""),
+        "latency_turn_started_ms": userdata.get("latency_turn_started_ms"),
+        "latency_user_final_ms": userdata.get("latency_user_final_ms"),
     }
 
 
@@ -3393,6 +3872,12 @@ async def _build_preloaded_ops_context(userdata: dict[str, Any]) -> str:
     }:
         return ""
 
+    started_ms = monotonic_ms()
+    _emit_voice_latency(
+        userdata,
+        "preloaded_ops_context_started",
+        business_use_case=business_use_case,
+    )
     if business_use_case == "fidelity":
         overview: dict[str, Any] = {}
         transactions_payload: dict[str, Any] = {}
@@ -3460,6 +3945,14 @@ async def _build_preloaded_ops_context(userdata: dict[str, Any]) -> str:
             caller_id,
             len(cards) if isinstance(cards, list) else 0,
             len(transactions) if isinstance(transactions, list) else 0,
+        )
+        _emit_voice_latency(
+            userdata,
+            "preloaded_ops_context_completed",
+            business_use_case=business_use_case,
+            duration_ms=elapsed_ms(started_ms),
+            cards_count=len(cards) if isinstance(cards, list) else 0,
+            transactions_count=len(transactions) if isinstance(transactions, list) else 0,
         )
         return (
             "Verified caller profile and banking context (fetched before this conversation starts):\n"
@@ -3575,6 +4068,14 @@ async def _build_preloaded_ops_context(userdata: dict[str, Any]) -> str:
         len(payment_items) if isinstance(payment_items, list) else 0,
         len(vend_items) if isinstance(vend_items, list) else 0,
     )
+    _emit_voice_latency(
+        userdata,
+        "preloaded_ops_context_completed",
+        business_use_case=business_use_case,
+        duration_ms=elapsed_ms(started_ms),
+        payment_count=len(payment_items) if isinstance(payment_items, list) else 0,
+        vending_count=len(vend_items) if isinstance(vend_items, list) else 0,
+    )
     return (
         "Verified caller profile and case context (fetched before this conversation starts):\n"
         "- This caller has already been identified from the authenticated session context.\n"
@@ -3609,6 +4110,11 @@ async def _instructions_with_initial_knowledge_context(
         "Summarize this business's services, products, qualification questions, "
         "FAQs, and the main facts the voice assistant should know."
     )
+    started_ms = monotonic_ms()
+    _emit_voice_latency(
+        userdata,
+        "initial_knowledge_context_started",
+    )
     try:
         result = await ops_search_business_knowledge(
             query=query,
@@ -3616,11 +4122,24 @@ async def _instructions_with_initial_knowledge_context(
             metadata=_ops_tool_metadata_from_userdata(userdata),
         )
     except Exception as exc:  # noqa: BLE001
+        _emit_voice_latency(
+            userdata,
+            "initial_knowledge_context_failed",
+            duration_ms=elapsed_ms(started_ms),
+            error_type=type(exc).__name__,
+        )
         logger.warning("Initial knowledge preload failed: %s", exc)
         return instructions
 
     matches = result.get("matches") if isinstance(result, dict) else None
     if not isinstance(matches, list) or not matches:
+        _emit_voice_latency(
+            userdata,
+            "initial_knowledge_context_completed",
+            duration_ms=elapsed_ms(started_ms),
+            matches_count=0,
+            instructions_updated=False,
+        )
         return instructions
 
     snippets: list[str] = []
@@ -3634,12 +4153,26 @@ async def _instructions_with_initial_knowledge_context(
         snippets.append(f"- {source_name}: {text[:900]}")
 
     if not snippets:
+        _emit_voice_latency(
+            userdata,
+            "initial_knowledge_context_completed",
+            duration_ms=elapsed_ms(started_ms),
+            matches_count=0,
+            instructions_updated=False,
+        )
         return instructions
 
     logger.info(
         "Initial knowledge context loaded: business_id=%s matches=%s",
         str(userdata.get("business_id") or ""),
         len(snippets),
+    )
+    _emit_voice_latency(
+        userdata,
+        "initial_knowledge_context_completed",
+        duration_ms=elapsed_ms(started_ms),
+        matches_count=len(snippets),
+        instructions_updated=True,
     )
     return (
         f"{instructions}\n\n"
@@ -3719,7 +4252,11 @@ def _build_session_for_language(
 ) -> AgentSession:
     if stt_engine is None:
         stt_engine = _build_stt_engine_for_language(language=language, userdata=userdata)
-    session_llm = _build_llm_for_language(language=language)
+    session_llm = LatencyTracingLLM(
+        _build_llm_for_language(language=language),
+        userdata=userdata,
+        language=language,
+    )
     if language == "fr":
         return AgentSession(
             stt=stt_engine,
@@ -3775,6 +4312,13 @@ def _trigger_first_turn(
     enabled_tool_names: list[str] | set[str] | tuple[str, ...] = (),
 ) -> None:
     try:
+        userdata = getattr(session, "userdata", None)
+        if isinstance(userdata, dict):
+            _begin_latency_turn(
+                userdata,
+                trigger="synthetic_kickoff",
+                synthetic=True,
+            )
         # Huawei MaaS rejects an LLM request whose conversation contains only
         # the system instructions. Build a one-off context with a synthetic
         # user turn so GLM can generate the opening greeting. Passing the turn
@@ -3800,7 +4344,21 @@ def _trigger_first_turn(
             ),
             input_modality="text",
         )
+        if isinstance(userdata, dict):
+            _emit_voice_latency(
+                userdata,
+                "kickoff_generate_reply_called",
+                **_latency_elapsed_fields(userdata),
+            )
     except Exception as exc:  # noqa: BLE001
+        userdata = getattr(session, "userdata", None)
+        if isinstance(userdata, dict):
+            _emit_voice_latency(
+                userdata,
+                "kickoff_generate_reply_failed",
+                error_type=type(exc).__name__,
+                **_latency_elapsed_fields(userdata),
+            )
         logger.warning("Failed to trigger first assistant turn (%s): %s", language, exc)
 
 
@@ -3919,6 +4477,16 @@ def _build_stt_engine_for_language(*, language: str, userdata: dict[str, Any]) -
             model=model,
             base_url=resolved_base_url,
         )
+        _emit_voice_latency(
+            userdata,
+            "stt_engine_selected",
+            provider="odion_stt",
+            model=model,
+            language=lang,
+            endpoint_host=urlparse(resolved_base_url).netloc
+            or urlparse(resolved_base_url).path,
+            runtime_override=bool(overrides.get("stt_provider") or overrides.get("stt_base_url")),
+        )
         return stt.StreamAdapter(
             stt=odion_stt,
             vad=silero.VAD.load(),
@@ -3942,6 +4510,15 @@ def _build_stt_engine_for_language(*, language: str, userdata: dict[str, Any]) -
             lang,
         )
 
+    _emit_voice_latency(
+        userdata,
+        "stt_engine_selected",
+        provider="custom_deepgram" if provider == "custom" else "deepgram",
+        model=model,
+        language=lang,
+        endpoint_host=urlparse(base_url).netloc if base_url else "",
+        runtime_override=bool(overrides.get("stt_provider") or overrides.get("stt_base_url")),
+    )
     return deepgram.STT(**stt_kwargs)
 
 
@@ -4006,6 +4583,15 @@ def _build_tts_engine_for_language(
                 override_model,
                 lang,
             )
+        _emit_voice_latency(
+            userdata,
+            "tts_engine_selected",
+            provider="custom_deepgram" if override_provider == "custom" else "deepgram",
+            model=resolved_override_model,
+            language=lang,
+            endpoint_host=urlparse(override_base_url).netloc if override_base_url else "",
+            runtime_override=True,
+        )
         return deepgram.TTS(**tts_kwargs)
 
     if saved_provider == "deepgram" and not runtime_odion_tts_requested:
@@ -4019,6 +4605,15 @@ def _build_tts_engine_for_language(
             saved_model,
             lang,
             userdata.get("agent_config_id"),
+        )
+        _emit_voice_latency(
+            userdata,
+            "tts_engine_selected",
+            provider="deepgram",
+            model=saved_model,
+            language=lang,
+            runtime_override=False,
+            saved_provider=True,
         )
         return deepgram.TTS(model=saved_model)
 
@@ -4088,6 +4683,15 @@ def _build_tts_engine_for_language(
             "FR" if is_fr else "EN",
             fallback_label,
         )
+        _emit_voice_latency(
+            userdata,
+            "tts_engine_selected",
+            provider="deepgram",
+            model=_deepgram_tts_model_for_language(lang),
+            language=lang,
+            runtime_override=False,
+            odion_enabled=False,
+        )
         return fallback_tts
     if not odion_enabled and runtime_odion_tts_requested:
         logger.info(
@@ -4119,6 +4723,18 @@ def _build_tts_engine_for_language(
                 tts_model_override,
                 ODION_TTS_CLONE_SEED,
             )
+            _emit_voice_latency(
+                userdata,
+                "tts_engine_selected",
+                provider="odion_tts",
+                mode="cloned_voice",
+                model=tts_model_override,
+                language=lang,
+                endpoint_host=urlparse(tts_endpoint_override).netloc
+                if tts_endpoint_override
+                else "",
+                runtime_override=runtime_odion_tts_requested,
+            )
             return tts_engine
         if use_odion_default:
             tts_engine = OdionTTS(
@@ -4138,6 +4754,18 @@ def _build_tts_engine_for_language(
                 tts_owner_id or business_id,
                 tts_model_override,
                 tts_language_hint,
+            )
+            _emit_voice_latency(
+                userdata,
+                "tts_engine_selected",
+                provider="odion_tts",
+                mode="default_voice",
+                model=tts_model_override,
+                language=lang,
+                endpoint_host=urlparse(tts_endpoint_override).netloc
+                if tts_endpoint_override
+                else "",
+                runtime_override=runtime_odion_tts_requested,
             )
             return tts_engine
     except Exception as exc:  # noqa: BLE001
@@ -4164,6 +4792,15 @@ def _build_tts_engine_for_language(
             fallback_label,
             exc,
         )
+    _emit_voice_latency(
+        userdata,
+        "tts_engine_selected",
+        provider="deepgram",
+        model=_deepgram_tts_model_for_language(lang),
+        language=lang,
+        runtime_override=False,
+        fallback_after_error=True,
+    )
     return fallback_tts
 
 

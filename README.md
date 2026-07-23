@@ -155,6 +155,9 @@ Create `.env` from `.env.example` before running locally.
 - `MAAS_LLM_MODEL_FR`
 - `CONVERSATION_ANALYSIS_ENABLED`
 - `CONVERSATION_ANALYSIS_MODEL`
+- `VOICE_LATENCY_TRACE_ENABLED`
+- `VOICE_LATENCY_TRACE_AGENT_IDS`
+- `VOICE_LATENCY_TRACE_BUSINESS_IDS`
 - `GOOGLE_API_KEY` (only required when the Google provider is selected)
 - `GROQ_API_KEY` (required when `LLM_PROVIDER=groq`)
 - `GROQ_LLM_MODEL_DEFAULT`
@@ -217,6 +220,29 @@ Create `.env` from `.env.example` before running locally.
 - `LIVEKIT_RECORDING_S3_ENDPOINT`
 - `LIVEKIT_RECORDING_S3_FORCE_PATH_STYLE`
 - `LIVEKIT_RECORDING_PUBLIC_BASE_URL`
+
+## Latency tracing
+
+The voice worker emits observe-only structured timing logs prefixed with
+`VOICE_LATENCY_TRACE`. These records are safe for staging/prod logs: they include
+IDs, provider/model labels, stage names, durations, counts, and hashed caller or
+conversation references, but not transcript content, phone numbers, emails, names,
+tool arguments, or API keys.
+
+Useful events include:
+
+- `turn_started`
+- `llm_request_started`, `llm_first_chunk`, `llm_first_text`, `llm_stream_completed`
+- `knowledge_lookup_completed`
+- `dynamic_knowledge_prefetch_completed`
+- `assistant_message_ready`
+- `conversation_message_persist_completed`
+- `post_session_analysis_completed`
+- `caller_record_analysis_completed`
+
+Filter by `turn_id` to reconstruct one caller turn. To reduce log volume, set
+`VOICE_LATENCY_TRACE_AGENT_IDS` or `VOICE_LATENCY_TRACE_BUSINESS_IDS` to a
+comma-separated allowlist.
 
 Deployed staging and production VM environments must set
 `KNOWLEDGE_SERVICE_BASE_URL` explicitly. Knowledge lookup may fall back to
