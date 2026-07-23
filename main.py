@@ -37,6 +37,7 @@ from agent.conversation_service_api import (
     append_message as append_message_remote,
     create_session_event as create_session_event_remote,
     end_session as end_session_remote,
+    finalize_caller_record as finalize_caller_record_remote,
     fetch_context as fetch_context_remote,
     is_enabled as conversation_service_enabled,
     resolve_conversation as resolve_conversation_remote,
@@ -46,6 +47,7 @@ from agent.conversation_service_api import (
     utcnow as conv_api_utcnow,
 )
 from agent.conversation_analysis import (
+    analyze_caller_record,
     analyze_messages,
     is_enabled as conversation_analysis_enabled,
 )
@@ -961,7 +963,12 @@ async def _finalize_session_cleanup(
                     exc,
                 )
 
-        if conversation_service_enabled(business_id) and session_tracker_id and conversation_analysis_enabled():
+        if (
+            conversation_service_enabled(business_id)
+            and session_tracker_id
+            and conversation_analysis_enabled()
+        ):
+            context_messages: list[dict[str, Any]] | None = None
             try:
                 await update_session_analysis_remote(
                     session_id=session_tracker_id,
@@ -974,7 +981,10 @@ async def _finalize_session_cleanup(
                     session_id=session_tracker_id,
                     business_id=business_id,
                 )
-                analysis = await analyze_messages(context.get("messages") or [], language=language)
+                context_messages = context.get("messages") or []
+                analysis = await analyze_messages(
+                    context_messages, language=language
+                )
                 persisted_analysis = await update_session_analysis_remote(
                     session_id=session_tracker_id,
                     business_id=business_id,
@@ -1002,6 +1012,60 @@ async def _finalize_session_cleanup(
                     logger.exception(
                         "Failed to persist analysis failure state: session_id=%s",
                         session_tracker_id,
+                    )
+
+            enabled_tool_names = {
+                str(name or "").strip()
+                for name in (userdata.get("enabled_tool_names") or [])
+                if str(name or "").strip()
+            }
+            client_session_id = str(userdata.get("session_id") or "").strip()
+            if (
+                "record_caller_details" in enabled_tool_names
+                and client_session_id
+            ):
+                try:
+                    if context_messages is None:
+                        context = await fetch_context_remote(
+                            str(userdata.get("conversation_id") or ""),
+                            limit=200,
+                            session_id=session_tracker_id,
+                            business_id=business_id,
+                        )
+                        context_messages = context.get("messages") or []
+                    caller_record_analysis = await analyze_caller_record(
+                        context_messages,
+                        language=language,
+                    )
+                    finalized_record = await finalize_caller_record_remote(
+                        session_ref=client_session_id,
+                        business_id=business_id,
+                        **caller_record_analysis,
+                    )
+                    if _conversation_write_failed(finalized_record):
+                        log_method = (
+                            logger.info
+                            if finalized_record.get("http_status") == 404
+                            else logger.error
+                        )
+                        log_method(
+                            "Post-call caller-record finalization skipped or failed: "
+                            "session_ref=%s detail=%s http_status=%s",
+                            client_session_id,
+                            finalized_record.get("detail"),
+                            finalized_record.get("http_status"),
+                        )
+                    else:
+                        logger.info(
+                            "Post-call caller record finalized: session_ref=%s duplicate=%s",
+                            client_session_id,
+                            finalized_record.get("duplicate"),
+                        )
+                except Exception as exc:  # noqa: BLE001
+                    logger.exception(
+                        "Post-call caller-record analysis failed: session_ref=%s error=%s",
+                        client_session_id,
+                        exc,
                     )
 
 
@@ -2378,14 +2442,38 @@ def _instructions_with_resume_context(
 
 
 async def _instructions_with_context(base_prompt: str, userdata: dict[str, Any]) -> str:
-    base_prompt = (
-        f"{base_prompt}\n\n"
-        "Closing behavior:\n"
-        "- End the conversation naturally once the caller's request is handled.\n"
-        "- Do not give a forced recap of the whole interaction at the end of every successful call.\n"
-        "- Only give a short summary when the caller explicitly asks for one or when a brief confirmation is genuinely useful.\n"
-        "- If the caller says thank you, says they are done, or clearly signals the conversation is over, respond naturally and close politely.\n"
-    )
+    enabled_tool_names = {
+        str(name or "").strip()
+        for name in (userdata.get("enabled_tool_names") or [])
+        if str(name or "").strip()
+    }
+    if "record_caller_details" in enabled_tool_names:
+        base_prompt = (
+            f"{base_prompt}\n\n"
+            "COLLECTE OBLIGATOIRE DES COORDONNÉES AU DÉBUT DE L’APPEL :\n"
+            "- Immédiatement après votre salutation initiale, et avant de traiter la demande, expliquez brièvement que vous devez enregistrer les coordonnées de l’appelant pour le suivi.\n"
+            "- Demandez les informations une par une, jamais toutes dans la même question, dans cet ordre : prénom, nom de famille, numéro de téléphone avec indicatif pays, adresse e-mail.\n"
+            "- Pour le prénom puis le nom, demandez à l’appelant de les épeler. Répétez chaque valeur et obtenez une confirmation explicite.\n"
+            "- Pour le téléphone, répétez clairement l’indicatif et les chiffres. Pour l’e-mail, faites épeler les éléments ambigus puis répétez l’adresse complète. Corrigez toute valeur non confirmée.\n"
+            "- N’appelez record_caller_details qu’après confirmation des quatre champs. Envoyez uniquement first_name, last_name, phone_number et email.\n"
+            "- Attendez le succès de l’outil. Ensuite seulement, remerciez l’appelant et demandez comment vous pouvez l’aider.\n"
+            "- Ne demandez jamais à l’appelant le thème, le sous-thème, le résumé, le traitement, le statut, la durée, le nom de l’agent ou les identifiants de session : ces champs seront produits automatiquement après l’appel.\n"
+            "- Si l’appelant refuse explicitement de donner ses coordonnées, n’insistez pas de manière répétée ; continuez à l’aider sans prétendre avoir enregistré ses informations.\n\n"
+            "COMPORTEMENT DE CLÔTURE :\n"
+            "- Une fois les coordonnées enregistrées (ou explicitement refusées) et la demande traitée, terminez naturellement la conversation.\n"
+            "- Ne donnez pas de récapitulatif forcé à la fin de chaque appel réussi.\n"
+            "- Ne résumez que si l’appelant le demande ou si une confirmation brève est réellement utile.\n"
+            "- Si l’appelant remercie, indique qu’il a terminé ou prend congé après ces étapes, répondez naturellement et concluez poliment.\n"
+        )
+    else:
+        base_prompt = (
+            f"{base_prompt}\n\n"
+            "Closing behavior:\n"
+            "- End the conversation naturally once the caller's request is handled.\n"
+            "- Do not give a forced recap of the whole interaction at the end of every successful call.\n"
+            "- Only give a short summary when the caller explicitly asks for one or when a brief confirmation is genuinely useful.\n"
+            "- If the caller says thank you, says they are done, or clearly signals the conversation is over, respond naturally and close politely.\n"
+        )
     guest_context = str(userdata.get("guest_context") or "").strip()
     if guest_context:
         # Shared platform agents (for example the Help Center guide) are injected
@@ -2406,11 +2494,6 @@ async def _instructions_with_context(base_prompt: str, userdata: dict[str, Any])
     business_use_case = (
         str(userdata.get("business_use_case") or "ekedc").strip().lower()
     )
-    enabled_tool_names = {
-        str(name or "").strip()
-        for name in (userdata.get("enabled_tool_names") or [])
-        if str(name or "").strip()
-    }
     configured_agent_name = str(userdata.get("configured_agent_name") or "").strip()
     if configured_agent_name:
         logger.info(
@@ -3563,15 +3646,28 @@ def _kickoff_prompt_for_language(
     language: str,
     business_use_case: str,
     configured_agent_name: str = "",
+    enabled_tool_names: list[str] | set[str] | tuple[str, ...] = (),
 ) -> str:
     lang = str(language or "").strip().lower()
     agent_name = str(configured_agent_name or "").strip()
+    contact_first = "record_caller_details" in {
+        str(name or "").strip()
+        for name in enabled_tool_names
+        if str(name or "").strip()
+    }
     if lang == "fr":
         identity_rule = (
             f"Votre nom est exactement « {agent_name} ». Utilisez ce prénom et aucun autre."
             if agent_name
             else ""
         )
+        if contact_first:
+            return (
+                "Commencez la conversation maintenant. Saluez l'appelant en français et présentez-vous brièvement par votre nom. "
+                f"{identity_rule} "
+                "Expliquez en une phrase que vous allez d'abord enregistrer ses coordonnées pour assurer le suivi, puis demandez uniquement son prénom et demandez-lui de l'épeler. "
+                "Ne demandez pas encore son nom, son téléphone, son e-mail ou le motif de son appel dans cette même réponse."
+            )
         return (
             "Commencez la conversation maintenant. Saluez l'appelant en français. Présentez-vous brièvement par votre nom et proposez votre aide de manière naturelle, en fonction de votre rôle spécifique. "
             f"{identity_rule} "
@@ -3583,6 +3679,13 @@ def _kickoff_prompt_for_language(
         if agent_name
         else ""
     )
+    if contact_first:
+        return (
+            "Start the conversation now. Greet the caller in English and introduce yourself briefly by name. "
+            f"{identity_rule} "
+            "Explain in one sentence that you will first record their contact details for follow-up, then ask only for their first name and ask them to spell it. "
+            "Do not ask for their last name, phone, email, or reason for calling in the same response."
+        )
     return (
         "Start the conversation now. Greet the caller first in English. Introduce yourself briefly by name and offer assistance naturally based on your specific role and instructions. "
         f"{identity_rule} "
@@ -3653,6 +3756,7 @@ def _trigger_first_turn(
     language: str,
     business_use_case: str,
     configured_agent_name: str = "",
+    enabled_tool_names: list[str] | set[str] | tuple[str, ...] = (),
 ) -> None:
     try:
         # Huawei MaaS rejects an LLM request whose conversation contains only
@@ -3676,6 +3780,7 @@ def _trigger_first_turn(
                 language,
                 business_use_case,
                 configured_agent_name,
+                enabled_tool_names,
             ),
             input_modality="text",
         )
@@ -4216,6 +4321,9 @@ async def entrypoint(ctx: JobContext):
                 configured_agent_name=str(
                     userdata.get("configured_agent_name") or ""
                 ),
+                enabled_tool_names=list(
+                    userdata.get("enabled_tool_names") or []
+                ),
             )
             if is_recording_enabled():
                 async def _start_recording_after_join_en() -> None:
@@ -4406,6 +4514,9 @@ async def entrypoint(ctx: JobContext):
                 business_use_case=business_use_case,
                 configured_agent_name=str(
                     userdata.get("configured_agent_name") or ""
+                ),
+                enabled_tool_names=list(
+                    userdata.get("enabled_tool_names") or []
                 ),
             )
             if is_recording_enabled():

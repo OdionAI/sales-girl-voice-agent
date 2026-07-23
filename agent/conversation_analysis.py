@@ -19,6 +19,41 @@ ANALYSIS_BASE_URL = str(
 ANALYSIS_API_KEY = str(
     os.getenv("CONVERSATION_ANALYSIS_API_KEY") or os.getenv("MAAS_API_KEY") or ""
 ).strip()
+CALLER_RECORD_THEMES = {
+    "Document de voyage",
+    "Documents d’identité",
+    "Attestations et certificats",
+    "Vie familiale et statut civil",
+    "Documents juridiques",
+    "Autres",
+}
+CALLER_RECORD_SUB_THEMES = {
+    "Laissez-passer consulaire",
+    "Passeport",
+    "Passeport biométrique",
+    "Certificat de coutume et de célibat",
+    "Immatriculation consulaire",
+    "RAVIP",
+    "Procuration",
+    "Autorisation parentale",
+    "Autres",
+}
+CALLER_RECORD_TREATMENTS = {
+    "Information",
+    "Information et assistance",
+    "Redirection",
+    "Remontée",
+    "Création de ticket",
+    "Envoi d’email",
+    "Autre",
+}
+CALLER_RECORD_STATUSES = {
+    "Terminé",
+    "Escaladé",
+    "Ticket créé",
+    "En attente",
+    "Échec",
+}
 
 
 def is_enabled() -> bool:
@@ -50,22 +85,13 @@ def _parse_json(text: str) -> dict[str, Any]:
     return value
 
 
-async def analyze_messages(messages: list[dict[str, Any]], *, language: str = "en") -> dict[str, Any]:
-    transcript = _transcript_text(messages)
-    if not transcript:
-        raise ValueError("conversation has no analyzable messages")
-    prompt = f"""Analyze this customer-support conversation. Return JSON only with these keys:
-summary (2-4 concise factual sentences), primary_intent (English snake_case), intent_confidence (0 to 1), sentiment (positive, neutral, frustrated, angry, or urgent), resolution_status (resolved, unresolved, escalated, or unknown).
-Do not invent facts. Write summary in the conversation language ({language}).
-
-Conversation:
-{transcript[:30000]}"""
+async def _complete_json(prompt: str, *, max_tokens: int) -> dict[str, Any]:
     url = f"{ANALYSIS_BASE_URL}/chat/completions"
     payload = {
         "model": ANALYSIS_MODEL,
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0.1,
-        "max_tokens": 1200,
+        "max_tokens": max_tokens,
         "chat_template_kwargs": {"thinking": False},
     }
     async with httpx.AsyncClient(timeout=ANALYSIS_TIMEOUT_SECONDS) as client:
@@ -78,8 +104,37 @@ Conversation:
         body = response.json()
     choices = body.get("choices") or []
     message = ((choices[0] or {}).get("message") or {}) if choices else {}
-    text = str(message.get("content") or "")
-    result = _parse_json(text)
+    return _parse_json(str(message.get("content") or ""))
+
+
+def _required_text(result: dict[str, Any], field: str) -> str:
+    value = str(result.get(field) or "").strip()
+    if not value:
+        raise ValueError(f"caller-record analysis field '{field}' is required")
+    return value
+
+
+def _optional_text(result: dict[str, Any], field: str) -> str | None:
+    value = result.get(field)
+    if value is None:
+        return None
+    normalized = str(value).strip()
+    if normalized.lower() in {"", "absent", "null", "none", "non mentionné"}:
+        return None
+    return normalized
+
+
+async def analyze_messages(messages: list[dict[str, Any]], *, language: str = "en") -> dict[str, Any]:
+    transcript = _transcript_text(messages)
+    if not transcript:
+        raise ValueError("conversation has no analyzable messages")
+    prompt = f"""Analyze this customer-support conversation. Return JSON only with these keys:
+summary (2-4 concise factual sentences), primary_intent (English snake_case), intent_confidence (0 to 1), sentiment (positive, neutral, frustrated, angry, or urgent), resolution_status (resolved, unresolved, escalated, or unknown).
+Do not invent facts. Write summary in the conversation language ({language}).
+
+Conversation:
+{transcript[:30000]}"""
+    result = await _complete_json(prompt, max_tokens=1200)
     confidence = float(result.get("intent_confidence"))
     if not 0 <= confidence <= 1:
         raise ValueError("intent confidence must be between 0 and 1")
@@ -90,4 +145,70 @@ Conversation:
         "intent_confidence": confidence,
         "sentiment": str(result.get("sentiment") or "").strip().lower() or None,
         "resolution_status": str(result.get("resolution_status") or "").strip().lower() or None,
+    }
+
+
+async def analyze_caller_record(
+    messages: list[dict[str, Any]], *, language: str = "fr"
+) -> dict[str, Any]:
+    """Classify operational sheet fields without asking the caller for them."""
+    transcript = _transcript_text(messages)
+    if not transcript:
+        raise ValueError("conversation has no analyzable messages")
+    prompt = f"""You are the post-call quality-assurance analyst for a Benin consular support line.
+Do not answer the caller. Analyze the completed conversation and return JSON only with exactly these keys:
+theme, sub_theme, request_summary, treatment, treatment_comment, status,
+consular_registration_number, order_date, order_number, transferred_to_human.
+
+Use one exact theme value:
+{", ".join(sorted(CALLER_RECORD_THEMES))}
+
+Use one exact sub_theme value:
+{", ".join(sorted(CALLER_RECORD_SUB_THEMES))}
+
+Use one exact treatment value:
+{", ".join(sorted(CALLER_RECORD_TREATMENTS))}
+
+Use one exact status value:
+{", ".join(sorted(CALLER_RECORD_STATUSES))}
+
+Rules:
+- Write request_summary and treatment_comment in concise factual French.
+- Infer classification, treatment, and status from the conversation; never ask the caller for them.
+- transferred_to_human must be true only if the caller was actually transferred to a human during this call.
+- Use JSON null for consular_registration_number, order_date, or order_number unless the caller explicitly provided it.
+- Do not invent facts or treat the caller's phone number as a consular/order number.
+- Conversation language is {language}.
+
+Conversation:
+{transcript[:30000]}"""
+    result = await _complete_json(prompt, max_tokens=1600)
+    theme = _required_text(result, "theme")
+    sub_theme = _required_text(result, "sub_theme")
+    treatment = _required_text(result, "treatment")
+    status = _required_text(result, "status")
+    if theme not in CALLER_RECORD_THEMES:
+        raise ValueError("caller-record analysis returned an unsupported theme")
+    if sub_theme not in CALLER_RECORD_SUB_THEMES:
+        raise ValueError("caller-record analysis returned an unsupported sub-theme")
+    if treatment not in CALLER_RECORD_TREATMENTS:
+        raise ValueError("caller-record analysis returned an unsupported treatment")
+    if status not in CALLER_RECORD_STATUSES:
+        raise ValueError("caller-record analysis returned an unsupported status")
+    transferred_to_human = result.get("transferred_to_human")
+    if not isinstance(transferred_to_human, bool):
+        raise ValueError("caller-record transferred_to_human must be a boolean")
+    return {
+        "theme": theme,
+        "sub_theme": sub_theme,
+        "request_summary": _required_text(result, "request_summary"),
+        "treatment": treatment,
+        "treatment_comment": _required_text(result, "treatment_comment"),
+        "status": status,
+        "consular_registration_number": _optional_text(
+            result, "consular_registration_number"
+        ),
+        "order_date": _optional_text(result, "order_date"),
+        "order_number": _optional_text(result, "order_number"),
+        "transferred_to_human": transferred_to_human,
     }
