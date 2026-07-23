@@ -11,6 +11,7 @@ from agent.dynamic_tools import _normalize_schema
 from agent.salon_agent import (
     SalonAgent,
     parse_textual_function_call,
+    sanitize_voice_output_text,
     select_enabled_runtime_tools,
 )
 from agent.tool_schema_compat import (
@@ -174,6 +175,42 @@ class ToolSchemaCompatTests(unittest.TestCase):
 
 
 class TextualToolCallStreamTests(unittest.IsolatedAsyncioTestCase):
+    async def test_voice_output_removes_markdown_and_emojis(self) -> None:
+        async def formatted_stream():
+            yield llm.ChatChunk(
+                id="chunk-voice-1",
+                delta=llm.ChoiceDelta(
+                    role="assistant",
+                    content="Hello, I am **Sonia** 😊.\n# Details\n",
+                ),
+            )
+            yield llm.ChatChunk(
+                id="chunk-voice-1",
+                delta=llm.ChoiceDelta(
+                    content="• Visit [ePass](https://epass.bj)."
+                ),
+            )
+
+        agent = SalonAgent(instructions="test")
+        with patch.object(Agent.default, "llm_node", return_value=formatted_stream()):
+            output = [
+                chunk
+                async for chunk in agent.llm_node(
+                    llm.ChatContext.empty(), [], model_settings=None
+                )
+            ]
+
+        text = "".join(
+            str(chunk.delta.content or "")
+            for chunk in output
+            if isinstance(chunk, llm.ChatChunk) and chunk.delta is not None
+        )
+        self.assertEqual(text, "Hello, I am Sonia.\nDetails\nVisit ePass.")
+        self.assertEqual(
+            sanitize_voice_output_text("The code is **ZEBRA-7742** ✅"),
+            "The code is ZEBRA-7742 ",
+        )
+
     async def test_knowledge_raw_tool_forwards_top_level_arguments(self) -> None:
         agent = SalonAgent(instructions="test")
         tool = next(

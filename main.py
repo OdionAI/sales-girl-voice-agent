@@ -3226,6 +3226,7 @@ def _effective_base_prompt(
             f"{configured_instructions.rstrip()}\n\n"
             f"{runtime_tool_guidance}\n\n"
             "Voice response rules:\n"
+            "- These runtime voice rules override any conflicting formatting or style examples above.\n"
             "- Speak in short, natural sentences suitable for a phone call.\n"
             "- Never output Markdown headings, bullet markers, numbered-list markers, emphasis markers, tables, or emojis.\n"
             "- Do not read retrieved knowledge snippets verbatim. Summarize the relevant facts conversationally.\n"

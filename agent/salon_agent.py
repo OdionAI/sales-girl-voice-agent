@@ -55,6 +55,18 @@ _TEXTUAL_FUNCTION_CALL_PATTERN = re.compile(
     re.DOTALL | re.IGNORECASE,
 )
 _TEXTUAL_FUNCTION_MARKER = "<function>"
+_MARKDOWN_LINK_PATTERN = re.compile(r"\[([^\]]+)\]\([^\)]+\)")
+_EMOJI_PATTERN = re.compile(
+    "["
+    "\U0001F1E6-\U0001F1FF"
+    "\U0001F300-\U0001FAFF"
+    "\u2600-\u26FF"
+    "\u2700-\u27BF"
+    "\uFE0F"
+    "\u200D"
+    "]+",
+    flags=re.UNICODE,
+)
 
 
 def _runtime_tool_name(tool: Any) -> str:
@@ -99,6 +111,35 @@ def _text_from_llm_chunk(chunk: Any) -> str:
     if isinstance(chunk, llm.ChatChunk) and chunk.delta is not None:
         return str(chunk.delta.content or "")
     return ""
+
+
+def sanitize_voice_output_text(text: str) -> str:
+    """Remove visual-only formatting before text reaches TTS or transcripts."""
+    sanitized = _MARKDOWN_LINK_PATTERN.sub(r"\1", str(text or ""))
+    sanitized = _EMOJI_PATTERN.sub("", sanitized)
+    sanitized = re.sub(
+        r"(?m)^[ \t]*(?:#{1,6}[ \t]*|[-+•][ \t]+|\d+[.)][ \t]+)",
+        "",
+        sanitized,
+    )
+    sanitized = sanitized.translate(str.maketrans("", "", "*`#"))
+    sanitized = sanitized.replace("•", " ").replace("|", " ")
+    sanitized = re.sub(r"[ \t]{2,}", " ", sanitized)
+    sanitized = re.sub(r"[ \t]+([,.;:!?])", r"\1", sanitized)
+    return sanitized
+
+
+def _sanitize_voice_output_chunk(chunk: Any) -> Any:
+    if isinstance(chunk, str):
+        return sanitize_voice_output_text(chunk)
+    if not isinstance(chunk, llm.ChatChunk) or chunk.delta is None:
+        return chunk
+    if chunk.delta.content is None:
+        return chunk
+    sanitized_delta = chunk.delta.model_copy(
+        update={"content": sanitize_voice_output_text(chunk.delta.content)}
+    )
+    return chunk.model_copy(update={"delta": sanitized_delta})
 
 
 def _is_possible_textual_function_prefix(text: str) -> bool:
@@ -236,7 +277,7 @@ class SalonAgent(Agent):
                     continue
 
             if not probing:
-                yield chunk
+                yield _sanitize_voice_output_chunk(chunk)
                 continue
 
             pending.append(chunk)
@@ -245,7 +286,7 @@ class SalonAgent(Agent):
                 continue
 
             for buffered_chunk in pending:
-                yield buffered_chunk
+                yield _sanitize_voice_output_chunk(buffered_chunk)
             pending.clear()
             probing = False
 
@@ -301,7 +342,7 @@ class SalonAgent(Agent):
             return
 
         for buffered_chunk in pending:
-            yield buffered_chunk
+            yield _sanitize_voice_output_chunk(buffered_chunk)
 
     @function_tool(raw_schema=SEARCH_BUSINESS_KNOWLEDGE_RAW_SCHEMA)
     async def search_business_knowledge(
