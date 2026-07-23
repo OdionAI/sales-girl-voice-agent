@@ -168,20 +168,26 @@ def _tool_metadata(ctx: RunContext) -> dict:
     session_id = str(session_userdata.get("session_id") or conversation_id)
     return {
         "client_id": AGENT_CLIENT_ID,
+        "runtime_agent": str(session_userdata.get("agent_id") or AGENT_NAME),
         "agent_id": str(
             session_userdata.get("agent_config_id")
             or session_userdata.get("agent_id")
             or AGENT_NAME
         ),
+        "agent_config_id": str(session_userdata.get("agent_config_id") or ""),
         "business_id": str(session_userdata.get("business_id") or ""),
         "business_use_case": str(session_userdata.get("business_use_case") or ""),
         "knowledge_base_ids": list(session_userdata.get("knowledge_base_ids") or []),
         "live_data_endpoint": str(session_userdata.get("live_data_endpoint") or ""),
         "conversation_id": conversation_id,
         "session_id": session_id,
+        "session_tracker_id": str(session_userdata.get("session_tracker_id") or ""),
         "end_user_id": str(session_userdata.get("end_user_id") or ""),
         "enabled_tool_names": list(session_userdata.get("enabled_tool_names") or []),
         "turn_index": int(session_userdata.get("turn_index", 0)),
+        "latency_turn_id": str(session_userdata.get("latency_turn_id") or ""),
+        "latency_turn_started_ms": session_userdata.get("latency_turn_started_ms"),
+        "latency_user_final_ms": session_userdata.get("latency_user_final_ms"),
         "last_user_transcript": str(session_userdata.get("last_user_transcript") or ""),
         "last_assistant_message": str(
             session_userdata.get("last_assistant_message") or ""

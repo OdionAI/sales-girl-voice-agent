@@ -9,6 +9,7 @@ from urllib.parse import urlparse
 import httpx
 from livekit import api
 
+from .latency_trace import elapsed_ms, emit as emit_latency_trace, monotonic_ms
 from .observability import observe, trace_tool, update_observation
 
 # Default aligns with platform port convention in AGENTS.md:
@@ -48,6 +49,14 @@ AICC_TRANSFER_FROM_NUMBER = str(
     os.getenv("AICC_TRANSFER_FROM_NUMBER") or AICC_TEST_ACCESS_CODE
 ).strip()
 logger = logging.getLogger(__name__)
+
+
+def _emit_tool_latency(
+    metadata: dict[str, Any] | None,
+    event: str,
+    **fields: Any,
+) -> None:
+    emit_latency_trace(event, metadata=metadata or {}, **fields)
 
 
 def _read_conversation_api_base_url() -> str:
@@ -267,10 +276,21 @@ async def _request_json(
     metadata: dict[str, Any] | None = None,
     base_url: str | None = None,
 ) -> dict[str, Any]:
+    started_ms = monotonic_ms()
     resolved_override = str(base_url or "").strip()
     base_url = resolved_override or _ops_base_url(metadata)
     if not str(base_url or "").strip():
         output = {"status": "failed", "message": "Hotel ops backend is not configured."}
+        _emit_tool_latency(
+            metadata,
+            "tool_http_completed",
+            service="ops",
+            method=method,
+            path=path,
+            status="failed",
+            duration_ms=elapsed_ms(started_ms),
+            failure_reason="missing_base_url",
+        )
         update_observation(output=output)
         return output
     url = f"{base_url}{path}"
@@ -280,6 +300,16 @@ async def _request_json(
             "status": "failed",
             "message": "Missing business scope for ops request.",
         }
+        _emit_tool_latency(
+            metadata,
+            "tool_http_completed",
+            service="ops",
+            method=method,
+            path=path,
+            status="failed",
+            duration_ms=elapsed_ms(started_ms),
+            failure_reason="missing_business_scope",
+        )
         update_observation(output=output)
         return output
     update_observation(
@@ -309,10 +339,28 @@ async def _request_json(
             )
     except httpx.TimeoutException:
         output = {"status": "failed", "message": "Ops backend request timed out."}
+        _emit_tool_latency(
+            metadata,
+            "tool_http_completed",
+            service="ops",
+            method=method,
+            path=path,
+            status="timeout",
+            duration_ms=elapsed_ms(started_ms),
+        )
         update_observation(output=output)
         return output
     except httpx.HTTPError:
         output = {"status": "failed", "message": "Ops backend is unavailable."}
+        _emit_tool_latency(
+            metadata,
+            "tool_http_completed",
+            service="ops",
+            method=method,
+            path=path,
+            status="http_error",
+            duration_ms=elapsed_ms(started_ms),
+        )
         update_observation(output=output)
         return output
 
@@ -331,21 +379,63 @@ async def _request_json(
             "message": detail,
             "http_status": response.status_code,
         }
+        _emit_tool_latency(
+            metadata,
+            "tool_http_completed",
+            service="ops",
+            method=method,
+            path=path,
+            status="failed",
+            http_status=response.status_code,
+            duration_ms=elapsed_ms(started_ms),
+        )
         update_observation(output=output)
         return output
 
     if isinstance(payload, dict):
         logger.info("OPS response %s %s -> %s", method, path, payload)
         payload["status"] = "success"
+        _emit_tool_latency(
+            metadata,
+            "tool_http_completed",
+            service="ops",
+            method=method,
+            path=path,
+            status="success",
+            http_status=response.status_code,
+            duration_ms=elapsed_ms(started_ms),
+        )
         update_observation(output=payload)
         return payload
     if isinstance(payload, list):
         output = {"status": "success", "items": payload}
         logger.info("OPS response %s %s -> %s", method, path, output)
+        _emit_tool_latency(
+            metadata,
+            "tool_http_completed",
+            service="ops",
+            method=method,
+            path=path,
+            status="success",
+            http_status=response.status_code,
+            duration_ms=elapsed_ms(started_ms),
+            items_count=len(payload),
+        )
         update_observation(output=output)
         return output
 
     output = {"status": "failed", "message": "Invalid response from ops backend."}
+    _emit_tool_latency(
+        metadata,
+        "tool_http_completed",
+        service="ops",
+        method=method,
+        path=path,
+        status="failed",
+        http_status=response.status_code,
+        duration_ms=elapsed_ms(started_ms),
+        failure_reason="invalid_payload",
+    )
     update_observation(output=output)
     return output
 
@@ -358,12 +448,23 @@ async def _request_conversation_service_json(
     json_body: dict[str, Any] | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    started_ms = monotonic_ms()
     base_url = _read_conversation_api_base_url()
     if not base_url:
         output = {
             "status": "failed",
             "message": "Conversation service is not configured for tickets.",
         }
+        _emit_tool_latency(
+            metadata,
+            "tool_http_completed",
+            service="conversation",
+            method=method,
+            path=path,
+            status="failed",
+            duration_ms=elapsed_ms(started_ms),
+            failure_reason="missing_base_url",
+        )
         update_observation(output=output)
         return output
     url = f"{base_url}{path}"
@@ -373,6 +474,16 @@ async def _request_conversation_service_json(
             "status": "failed",
             "message": "Missing business scope for ticket request.",
         }
+        _emit_tool_latency(
+            metadata,
+            "tool_http_completed",
+            service="conversation",
+            method=method,
+            path=path,
+            status="failed",
+            duration_ms=elapsed_ms(started_ms),
+            failure_reason="missing_business_scope",
+        )
         update_observation(output=output)
         return output
     update_observation(
@@ -405,6 +516,15 @@ async def _request_conversation_service_json(
             "status": "failed",
             "message": "Conversation service ticket request timed out.",
         }
+        _emit_tool_latency(
+            metadata,
+            "tool_http_completed",
+            service="conversation",
+            method=method,
+            path=path,
+            status="timeout",
+            duration_ms=elapsed_ms(started_ms),
+        )
         update_observation(output=output)
         return output
     except httpx.HTTPError:
@@ -412,6 +532,15 @@ async def _request_conversation_service_json(
             "status": "failed",
             "message": "Conversation service is unavailable.",
         }
+        _emit_tool_latency(
+            metadata,
+            "tool_http_completed",
+            service="conversation",
+            method=method,
+            path=path,
+            status="http_error",
+            duration_ms=elapsed_ms(started_ms),
+        )
         update_observation(output=output)
         return output
 
@@ -430,16 +559,47 @@ async def _request_conversation_service_json(
             "message": detail,
             "http_status": response.status_code,
         }
+        _emit_tool_latency(
+            metadata,
+            "tool_http_completed",
+            service="conversation",
+            method=method,
+            path=path,
+            status="failed",
+            http_status=response.status_code,
+            duration_ms=elapsed_ms(started_ms),
+        )
         update_observation(output=output)
         return output
 
     if isinstance(payload, dict):
         logger.info("Conversation ticket response %s %s -> %s", method, path, payload)
         payload["status"] = "success"
+        _emit_tool_latency(
+            metadata,
+            "tool_http_completed",
+            service="conversation",
+            method=method,
+            path=path,
+            status="success",
+            http_status=response.status_code,
+            duration_ms=elapsed_ms(started_ms),
+        )
         update_observation(output=payload)
         return payload
 
     output = {"status": "failed", "message": "Invalid response from conversation service."}
+    _emit_tool_latency(
+        metadata,
+        "tool_http_completed",
+        service="conversation",
+        method=method,
+        path=path,
+        status="failed",
+        http_status=response.status_code,
+        duration_ms=elapsed_ms(started_ms),
+        failure_reason="invalid_payload",
+    )
     update_observation(output=output)
     return output
 
@@ -463,6 +623,7 @@ async def search_business_knowledge(
     top_k: int = 4,
     metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    started_ms = monotonic_ms()
     caller_id = str((metadata or {}).get("end_user_id") or "")
     _trace("search_business_knowledge", metadata, user_id=caller_id)
     base_url = str(KNOWLEDGE_SERVICE_BASE_URL or "").strip()
@@ -471,6 +632,13 @@ async def search_business_knowledge(
             "status": "failed",
             "message": "Business knowledge lookup is not configured.",
         }
+        _emit_tool_latency(
+            metadata,
+            "knowledge_lookup_completed",
+            status="failed",
+            duration_ms=elapsed_ms(started_ms),
+            failure_reason="missing_base_url",
+        )
         update_observation(output=output)
         return output
 
@@ -480,6 +648,13 @@ async def search_business_knowledge(
             "status": "failed",
             "message": "Missing business scope for knowledge lookup.",
         }
+        _emit_tool_latency(
+            metadata,
+            "knowledge_lookup_completed",
+            status="failed",
+            duration_ms=elapsed_ms(started_ms),
+            failure_reason="missing_business_scope",
+        )
         update_observation(output=output)
         return output
 
@@ -512,10 +687,26 @@ async def search_business_knowledge(
             )
     except httpx.TimeoutException:
         output = {"status": "failed", "message": "Knowledge lookup timed out."}
+        _emit_tool_latency(
+            metadata,
+            "knowledge_lookup_completed",
+            status="timeout",
+            duration_ms=elapsed_ms(started_ms),
+            requested_top_k=request_body["top_k"],
+            knowledge_base_count=len(knowledge_base_ids),
+        )
         update_observation(output=output)
         return output
     except httpx.HTTPError:
         output = {"status": "failed", "message": "Knowledge lookup is unavailable."}
+        _emit_tool_latency(
+            metadata,
+            "knowledge_lookup_completed",
+            status="http_error",
+            duration_ms=elapsed_ms(started_ms),
+            requested_top_k=request_body["top_k"],
+            knowledge_base_count=len(knowledge_base_ids),
+        )
         update_observation(output=output)
         return output
 
@@ -530,6 +721,15 @@ async def search_business_knowledge(
             "status": "failed",
             "message": str(detail or "Knowledge lookup failed."),
         }
+        _emit_tool_latency(
+            metadata,
+            "knowledge_lookup_completed",
+            status="failed",
+            http_status=response.status_code,
+            duration_ms=elapsed_ms(started_ms),
+            requested_top_k=request_body["top_k"],
+            knowledge_base_count=len(knowledge_base_ids),
+        )
         update_observation(output=output)
         return output
 
@@ -540,6 +740,16 @@ async def search_business_knowledge(
             "matches": [],
             "message": "No matching business knowledge was found.",
         }
+        _emit_tool_latency(
+            metadata,
+            "knowledge_lookup_completed",
+            status="success",
+            http_status=response.status_code,
+            duration_ms=elapsed_ms(started_ms),
+            matches_count=0,
+            requested_top_k=request_body["top_k"],
+            knowledge_base_count=len(knowledge_base_ids),
+        )
         update_observation(output=output)
         return output
 
@@ -557,6 +767,16 @@ async def search_business_knowledge(
         )
 
     output = {"status": "success", "matches": normalized_matches}
+    _emit_tool_latency(
+        metadata,
+        "knowledge_lookup_completed",
+        status="success",
+        http_status=response.status_code,
+        duration_ms=elapsed_ms(started_ms),
+        matches_count=len(normalized_matches),
+        requested_top_k=request_body["top_k"],
+        knowledge_base_count=len(knowledge_base_ids),
+    )
     update_observation(output=output)
     return output
 

@@ -10,6 +10,7 @@ import httpx
 
 from livekit.agents import RunContext, function_tool
 
+from .latency_trace import elapsed_ms, emit as emit_latency_trace, monotonic_ms
 from .tool_schema_compat import strictify_schema_for_groq
 
 from .salon_agent import _is_tool_enabled, _tool_metadata
@@ -27,6 +28,14 @@ HTTP_TOOL_ALLOWED_METHODS = {
     "DELETE",
     "HEAD",
 }
+
+
+def _emit_dynamic_tool_latency(
+    metadata: dict[str, Any] | None,
+    event: str,
+    **fields: Any,
+) -> None:
+    emit_latency_trace(event, metadata=metadata or {}, **fields)
 
 
 def _active_tool_records(active_agent_config: dict[str, Any] | None) -> list[dict[str, Any]]:
@@ -280,12 +289,22 @@ async def invoke_dynamic_http_tool(
     raw_arguments: dict[str, Any],
     metadata: dict[str, Any],
 ) -> dict[str, Any]:
+    started_ms = monotonic_ms()
     tool_name = str(tool.get("name") or "").strip() or "dynamic_tool"
     method = str(tool.get("method") or "POST").strip().upper() or "POST"
     url = str(tool.get("url") or "").strip()
     schema = _normalize_schema(tool.get("request_schema"))
     validation_error = _validate_arguments(schema, raw_arguments)
     if validation_error:
+        _emit_dynamic_tool_latency(
+            metadata,
+            "dynamic_tool_completed",
+            tool_name=tool_name,
+            method=method,
+            status="failed",
+            duration_ms=elapsed_ms(started_ms),
+            failure_reason="validation_error",
+        )
         return _failure_payload(
             tool_name,
             "I couldn't complete that request with the information provided.",
@@ -293,12 +312,30 @@ async def invoke_dynamic_http_tool(
         )
 
     if method not in HTTP_TOOL_ALLOWED_METHODS:
+        _emit_dynamic_tool_latency(
+            metadata,
+            "dynamic_tool_completed",
+            tool_name=tool_name,
+            method=method,
+            status="failed",
+            duration_ms=elapsed_ms(started_ms),
+            failure_reason="unsupported_method",
+        )
         return _failure_payload(
             tool_name,
             "I couldn't complete that request right now.",
             detail=f"Unsupported HTTP method: {method}",
         )
     if not url.startswith(("http://", "https://")):
+        _emit_dynamic_tool_latency(
+            metadata,
+            "dynamic_tool_completed",
+            tool_name=tool_name,
+            method=method,
+            status="failed",
+            duration_ms=elapsed_ms(started_ms),
+            failure_reason="invalid_url",
+        )
         return _failure_payload(
             tool_name,
             "I couldn't complete that request right now.",
@@ -328,6 +365,14 @@ async def invoke_dynamic_http_tool(
             response = await client.request(**request_kwargs)
     except httpx.TimeoutException:
         logger.warning("[TOOL] dynamic_http_tool timeout name=%s url=%s", tool_name, url)
+        _emit_dynamic_tool_latency(
+            metadata,
+            "dynamic_tool_completed",
+            tool_name=tool_name,
+            method=method,
+            status="timeout",
+            duration_ms=elapsed_ms(started_ms),
+        )
         return _failure_payload(
             tool_name,
             "I couldn't complete that request right now.",
@@ -339,6 +384,15 @@ async def invoke_dynamic_http_tool(
             tool_name,
             url,
             exc,
+        )
+        _emit_dynamic_tool_latency(
+            metadata,
+            "dynamic_tool_completed",
+            tool_name=tool_name,
+            method=method,
+            status="http_error",
+            duration_ms=elapsed_ms(started_ms),
+            error_type=type(exc).__name__,
         )
         return _failure_payload(
             tool_name,
@@ -355,6 +409,15 @@ async def invoke_dynamic_http_tool(
             url,
         )
         detail = payload if isinstance(payload, dict) else str(payload).strip()
+        _emit_dynamic_tool_latency(
+            metadata,
+            "dynamic_tool_completed",
+            tool_name=tool_name,
+            method=method,
+            status="failed",
+            http_status=response.status_code,
+            duration_ms=elapsed_ms(started_ms),
+        )
         return _failure_payload(
             tool_name,
             "I couldn't complete that request right now.",
@@ -367,6 +430,15 @@ async def invoke_dynamic_http_tool(
         tool_name,
         method,
         response.status_code,
+    )
+    _emit_dynamic_tool_latency(
+        metadata,
+        "dynamic_tool_completed",
+        tool_name=tool_name,
+        method=method,
+        status="success",
+        http_status=response.status_code,
+        duration_ms=elapsed_ms(started_ms),
     )
     return _success_payload(tool_name, response, payload)
 
