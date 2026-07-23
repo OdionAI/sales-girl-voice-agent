@@ -45,12 +45,18 @@ async def _request_json(
     json: dict | None = None,
     params: dict | None = None,
     business_id: str | None = None,
+    headers: dict[str, str | None] | None = None,
 ) -> dict[str, Any]:
     if not is_enabled(business_id):
         return {"status": "disabled"}
     url = f"{BASE_URL}{path}"
+    request_headers = _headers(business_id)
+    if headers:
+        request_headers.update(
+            {key: str(value) for key, value in headers.items() if str(value or "").strip()}
+        )
     async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT_SECONDS) as client:
-        response = await client.request(method, url, headers=_headers(business_id), json=json, params=params)
+        response = await client.request(method, url, headers=request_headers, json=json, params=params)
     try:
         payload = response.json()
     except ValueError:
@@ -212,6 +218,57 @@ async def update_session_analysis(
         json={"analysis_status": analysis_status, "summary": summary,
               "primary_intent": primary_intent, "intent_confidence": intent_confidence,
               "sentiment": sentiment, "resolution_status": resolution_status},
+        business_id=business_id,
+    )
+
+
+async def create_caller_record(
+    *,
+    first_name: str,
+    last_name: str,
+    phone_number: str,
+    email: str,
+    theme: str,
+    sub_theme: str,
+    request_summary: str,
+    treatment: str,
+    treatment_comment: str,
+    status: str,
+    session_ref: str,
+    agent_id: str | None = None,
+    conversation_ref: str | None = None,
+    end_user_ref: str | None = None,
+    consular_registration_number: str | None = None,
+    order_date: str | None = None,
+    order_number: str | None = None,
+    transferred_to_human: bool = False,
+    business_id: str | None = None,
+) -> dict[str, Any]:
+    return await _request_json(
+        "POST",
+        "/v1/tools/caller-records",
+        json={
+            "first_name": first_name,
+            "last_name": last_name,
+            "phone_number": phone_number,
+            "email": email,
+            "theme": theme,
+            "sub_theme": sub_theme,
+            "request_summary": request_summary,
+            "treatment": treatment,
+            "treatment_comment": treatment_comment,
+            "status": status,
+            "consular_registration_number": consular_registration_number,
+            "order_date": order_date,
+            "order_number": order_number,
+            "transferred_to_human": transferred_to_human,
+        },
+        headers={
+            "X-Agent-Id": agent_id,
+            "X-Conversation-Id": conversation_ref,
+            "X-Session-Id": session_ref,
+            "X-End-User-Id": end_user_ref,
+        },
         business_id=business_id,
     )
 

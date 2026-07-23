@@ -43,7 +43,10 @@ class _CallerRecordResponse:
                 {
                     "message": {
                         "content": (
-                            '{"theme":"Document de voyage","sub_theme":"Passeport",'
+                            '{"first_name":"Aïcha","last_name":"Dossou",'
+                            '"phone_number":"+2290197000000",'
+                            '"email":"aicha.dossou@example.com",'
+                            '"theme":"Document de voyage","sub_theme":"Passeport",'
                             '"request_summary":"Le requérant demande le suivi de son passeport.",'
                             '"treatment":"Information et assistance",'
                             '"treatment_comment":"Sonia a indiqué la procédure de suivi ePass.",'
@@ -102,6 +105,10 @@ class ConversationAnalysisTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result["theme"], "Document de voyage")
         self.assertEqual(result["sub_theme"], "Passeport")
+        self.assertEqual(result["first_name"], "Aïcha")
+        self.assertEqual(result["last_name"], "Dossou")
+        self.assertEqual(result["phone_number"], "+2290197000000")
+        self.assertEqual(result["email"], "aicha.dossou@example.com")
         self.assertEqual(result["treatment"], "Information et assistance")
         self.assertIsNone(result["order_number"])
         self.assertFalse(result["transferred_to_human"])
