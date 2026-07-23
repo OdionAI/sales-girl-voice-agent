@@ -307,12 +307,18 @@ class SalonAgent(Agent):
     async def search_business_knowledge(
         self,
         ctx: RunContext,
-        query: str,
-        top_k: int | str | None = 4,
+        raw_arguments: dict | None = None,
     ) -> dict:
+        args = raw_arguments if isinstance(raw_arguments, dict) else {}
+        query = str(args.get("query") or "").strip()
+        if not query:
+            return {
+                "status": "failed",
+                "message": "Please provide what you want me to look up.",
+            }
         result = await search_business_knowledge_api(
             query=query,
-            top_k=normalize_top_k(top_k),
+            top_k=normalize_top_k(args.get("top_k")),
             metadata=_tool_metadata(ctx),
         )
         if result.get("status") != "failed":
@@ -468,20 +474,34 @@ class SalonAgent(Agent):
     async def create_booking(
         self,
         ctx: RunContext,
-        room_type: str,
-        check_in_date: str,
-        check_out_date: str,
-        guest_count: int = 1,
-        guest_name: str | None = None,
-        special_requests: str | None = None,
-        price_snapshot: dict | None = None,
-        customer_identifier: str | None = None,
+        raw_arguments: dict | None = None,
     ) -> dict:
         if not _is_tool_enabled(ctx, "create_booking"):
             return {
                 "status": "failed",
                 "message": "I can't create a booking from this agent right now.",
             }
+        args = raw_arguments if isinstance(raw_arguments, dict) else {}
+        room_type = str(args.get("room_type") or "").strip()
+        check_in_date = str(args.get("check_in_date") or "").strip()
+        check_out_date = str(args.get("check_out_date") or "").strip()
+        if not room_type or not check_in_date or not check_out_date:
+            return {
+                "status": "failed",
+                "message": (
+                    "I need the room type, check-in date, and check-out date "
+                    "before I can create the booking."
+                ),
+            }
+        try:
+            guest_count = max(1, int(args.get("guest_count") or 1))
+        except (TypeError, ValueError):
+            guest_count = 1
+        guest_name = str(args.get("guest_name") or "").strip() or None
+        special_requests = str(args.get("special_requests") or "").strip() or None
+        customer_identifier = (
+            str(args.get("customer_identifier") or "").strip() or None
+        )
         result = await create_booking_api(
             customer_identifier=customer_identifier,
             guest_name=guest_name,
@@ -490,7 +510,7 @@ class SalonAgent(Agent):
             check_out_date=check_out_date,
             guest_count=guest_count,
             special_requests=special_requests,
-            price_snapshot=normalize_price_snapshot(price_snapshot),
+            price_snapshot=normalize_price_snapshot(args.get("price_snapshot")),
             metadata=_tool_metadata(ctx),
         )
         if result.get("status") != "failed":
@@ -505,27 +525,33 @@ class SalonAgent(Agent):
     async def create_order(
         self,
         ctx: RunContext,
-        item_name: str = "",
-        quantity: int = 1,
-        items: list[dict] | None = None,
-        customer_name: str | None = None,
-        notes: str | None = None,
-        price_snapshot: dict | None = None,
-        customer_identifier: str | None = None,
+        raw_arguments: dict | None = None,
     ) -> dict:
         if not _is_tool_enabled(ctx, "create_order"):
             return {
                 "status": "failed",
                 "message": "I can't create an order from this agent right now.",
             }
+        args = raw_arguments if isinstance(raw_arguments, dict) else {}
+        item_name = str(args.get("item_name") or "").strip()
+        try:
+            quantity = max(1, int(args.get("quantity") or 1))
+        except (TypeError, ValueError):
+            quantity = 1
+        items = normalize_order_items(args.get("items"))
+        customer_name = str(args.get("customer_name") or "").strip() or None
+        notes = str(args.get("notes") or "").strip() or None
+        customer_identifier = (
+            str(args.get("customer_identifier") or "").strip() or None
+        )
         result = await create_order_api(
             customer_identifier=customer_identifier,
             customer_name=customer_name,
             item_name=item_name,
             quantity=quantity,
-            items=normalize_order_items(items),
+            items=items,
             notes=notes,
-            price_snapshot=normalize_price_snapshot(price_snapshot),
+            price_snapshot=normalize_price_snapshot(args.get("price_snapshot")),
             metadata=_tool_metadata(ctx),
         )
         if result.get("status") != "failed":
