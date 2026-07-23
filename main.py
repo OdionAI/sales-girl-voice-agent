@@ -35,9 +35,9 @@ from agent.conversation_memory import (
 )
 from agent.conversation_service_api import (
     append_message as append_message_remote,
+    create_caller_record as create_caller_record_remote,
     create_session_event as create_session_event_remote,
     end_session as end_session_remote,
-    finalize_caller_record as finalize_caller_record_remote,
     fetch_context as fetch_context_remote,
     is_enabled as conversation_service_enabled,
     resolve_conversation as resolve_conversation_remote,
@@ -185,6 +185,7 @@ BUILTIN_RUNTIME_TOOL_NAMES = frozenset(
     for tool in find_function_tools(SalonAgent)
     if getattr(getattr(tool, "info", None), "name", None)
 )
+POST_CALL_ONLY_TOOL_NAMES = frozenset({"record_caller_details"})
 
 
 class UsageMeter:
@@ -1037,29 +1038,36 @@ async def _finalize_session_cleanup(
                         context_messages,
                         language=language,
                     )
-                    finalized_record = await finalize_caller_record_remote(
+                    caller_record_result = await create_caller_record_remote(
                         session_ref=client_session_id,
+                        agent_id=str(
+                            userdata.get("agent_config_id")
+                            or userdata.get("agent_id")
+                            or ""
+                        ),
+                        conversation_ref=str(userdata.get("conversation_id") or ""),
+                        end_user_ref=str(userdata.get("end_user_id") or ""),
                         business_id=business_id,
                         **caller_record_analysis,
                     )
-                    if _conversation_write_failed(finalized_record):
+                    if _conversation_write_failed(caller_record_result):
                         log_method = (
                             logger.info
-                            if finalized_record.get("http_status") == 404
+                            if caller_record_result.get("http_status") == 404
                             else logger.error
                         )
                         log_method(
-                            "Post-call caller-record finalization skipped or failed: "
+                            "Post-call caller-record export skipped or failed: "
                             "session_ref=%s detail=%s http_status=%s",
                             client_session_id,
-                            finalized_record.get("detail"),
-                            finalized_record.get("http_status"),
+                            caller_record_result.get("detail"),
+                            caller_record_result.get("http_status"),
                         )
                     else:
                         logger.info(
-                            "Post-call caller record finalized: session_ref=%s duplicate=%s",
+                            "Post-call caller record exported: session_ref=%s duplicate=%s",
                             client_session_id,
-                            finalized_record.get("duplicate"),
+                            caller_record_result.get("duplicate"),
                         )
                 except Exception as exc:  # noqa: BLE001
                     logger.exception(
@@ -2451,16 +2459,16 @@ async def _instructions_with_context(base_prompt: str, userdata: dict[str, Any])
         base_prompt = (
             f"{base_prompt}\n\n"
             "COLLECTE OBLIGATOIRE DES COORDONNÉES AU DÉBUT DE L’APPEL :\n"
-            "- Immédiatement après votre salutation initiale, et avant de traiter la demande, expliquez brièvement que vous devez enregistrer les coordonnées de l’appelant pour le suivi.\n"
+            "- Immédiatement après votre salutation initiale, et avant de traiter la demande, expliquez brièvement que vous devez recueillir les coordonnées de l’appelant pour le suivi.\n"
             "- Demandez les informations une par une, jamais toutes dans la même question, dans cet ordre : prénom, nom de famille, numéro de téléphone avec indicatif pays, adresse e-mail.\n"
             "- Pour le prénom puis le nom, demandez à l’appelant de les épeler. Répétez chaque valeur et obtenez une confirmation explicite.\n"
             "- Pour le téléphone, répétez clairement l’indicatif et les chiffres. Pour l’e-mail, faites épeler les éléments ambigus puis répétez l’adresse complète. Corrigez toute valeur non confirmée.\n"
-            "- N’appelez record_caller_details qu’après confirmation des quatre champs. Envoyez uniquement first_name, last_name, phone_number et email.\n"
-            "- Attendez le succès de l’outil. Ensuite seulement, remerciez l’appelant et demandez comment vous pouvez l’aider.\n"
+            "- Après confirmation des quatre champs, remerciez l’appelant et demandez comment vous pouvez l’aider.\n"
+            "- Ne dites pas que vous avez appelé un outil, mis à jour une feuille, créé un dossier, ou enregistré les informations dans un système pendant l’appel.\n"
             "- Ne demandez jamais à l’appelant le thème, le sous-thème, le résumé, le traitement, le statut, la durée, le nom de l’agent ou les identifiants de session : ces champs seront produits automatiquement après l’appel.\n"
             "- Si l’appelant refuse explicitement de donner ses coordonnées, n’insistez pas de manière répétée ; continuez à l’aider sans prétendre avoir enregistré ses informations.\n\n"
             "COMPORTEMENT DE CLÔTURE :\n"
-            "- Une fois les coordonnées enregistrées (ou explicitement refusées) et la demande traitée, terminez naturellement la conversation.\n"
+            "- Une fois les coordonnées confirmées (ou explicitement refusées) et la demande traitée, terminez naturellement la conversation.\n"
             "- Ne donnez pas de récapitulatif forcé à la fin de chaque appel réussi.\n"
             "- Ne résumez que si l’appelant le demande ou si une confirmation brève est réellement utile.\n"
             "- Si l’appelant remercie, indique qu’il a terminé ou prend congé après ces étapes, répondez naturellement et concluez poliment.\n"
@@ -2943,8 +2951,16 @@ def _runtime_tool_guidance(
     active_agent_config: dict[str, Any] | None, business_use_case: str
 ) -> str:
     tools = _active_tool_records(active_agent_config)
-    enabled_names = {str(tool.get("name") or "").strip() for tool in tools}
-    by_name = {str(tool.get("name") or "").strip(): tool for tool in tools}
+    enabled_names = {
+        str(tool.get("name") or "").strip()
+        for tool in tools
+        if str(tool.get("name") or "").strip() not in POST_CALL_ONLY_TOOL_NAMES
+    }
+    by_name = {
+        str(tool.get("name") or "").strip(): tool
+        for tool in tools
+        if str(tool.get("name") or "").strip() not in POST_CALL_ONLY_TOOL_NAMES
+    }
     lines = [
         "Enabled tools for this agent right now:",
         "- Only the tools described here are available in this conversation.",
@@ -3665,7 +3681,7 @@ def _kickoff_prompt_for_language(
             return (
                 "Commencez la conversation maintenant. Saluez l'appelant en français et présentez-vous brièvement par votre nom. "
                 f"{identity_rule} "
-                "Expliquez en une phrase que vous allez d'abord enregistrer ses coordonnées pour assurer le suivi, puis demandez uniquement son prénom et demandez-lui de l'épeler. "
+                "Expliquez en une phrase que vous allez d'abord recueillir ses coordonnées pour assurer le suivi, puis demandez uniquement son prénom et demandez-lui de l'épeler. "
                 "Ne demandez pas encore son nom, son téléphone, son e-mail ou le motif de son appel dans cette même réponse."
             )
         return (
@@ -3683,7 +3699,7 @@ def _kickoff_prompt_for_language(
         return (
             "Start the conversation now. Greet the caller in English and introduce yourself briefly by name. "
             f"{identity_rule} "
-            "Explain in one sentence that you will first record their contact details for follow-up, then ask only for their first name and ask them to spell it. "
+            "Explain in one sentence that you will first collect their contact details for follow-up, then ask only for their first name and ask them to spell it. "
             "Do not ask for their last name, phone, email, or reason for calling in the same response."
         )
     return (
@@ -4259,7 +4275,8 @@ async def entrypoint(ctx: JobContext):
         )
         dynamic_tools = build_dynamic_http_tools(
             active_agent_config,
-            excluded_tool_names=set(BUILTIN_RUNTIME_TOOL_NAMES),
+            excluded_tool_names=set(BUILTIN_RUNTIME_TOOL_NAMES)
+            | set(POST_CALL_ONLY_TOOL_NAMES),
         )
         if dynamic_tools:
             logger.info(
@@ -4453,7 +4470,8 @@ async def entrypoint(ctx: JobContext):
         )
         dynamic_tools = build_dynamic_http_tools(
             active_agent_config,
-            excluded_tool_names=set(BUILTIN_RUNTIME_TOOL_NAMES),
+            excluded_tool_names=set(BUILTIN_RUNTIME_TOOL_NAMES)
+            | set(POST_CALL_ONLY_TOOL_NAMES),
         )
         if dynamic_tools:
             logger.info(
