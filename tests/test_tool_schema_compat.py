@@ -1,6 +1,8 @@
+import inspect
 import os
 import unittest
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 from livekit.agents import Agent, llm
 from livekit.agents.llm.tool_context import find_function_tools
@@ -9,6 +11,7 @@ from agent.dynamic_tools import _normalize_schema
 from agent.salon_agent import (
     SalonAgent,
     parse_textual_function_call,
+    sanitize_voice_output_text,
     select_enabled_runtime_tools,
 )
 from agent.tool_schema_compat import (
@@ -132,6 +135,13 @@ class ToolSchemaCompatTests(unittest.TestCase):
         self.assertTrue(
             _object_has_additional_properties_false(transfer_schema["parameters"])
         )
+        for name in (
+            "search_business_knowledge",
+            "create_booking",
+            "create_order",
+            "transfer_to_aicc",
+        ):
+            self.assertIn("raw_arguments", inspect.signature(by_name[name]).parameters)
 
     def test_runtime_tool_selection_exposes_only_enabled_tools_and_knowledge(self) -> None:
         tools = find_function_tools(SalonAgent)
@@ -165,6 +175,121 @@ class ToolSchemaCompatTests(unittest.TestCase):
 
 
 class TextualToolCallStreamTests(unittest.IsolatedAsyncioTestCase):
+    async def test_voice_output_removes_markdown_and_emojis(self) -> None:
+        async def formatted_stream():
+            yield llm.ChatChunk(
+                id="chunk-voice-1",
+                delta=llm.ChoiceDelta(
+                    role="assistant",
+                    content="Hello, I am **Sonia** 😊.\n# Details\n",
+                ),
+            )
+            yield llm.ChatChunk(
+                id="chunk-voice-1",
+                delta=llm.ChoiceDelta(
+                    content="• Visit [ePass](https://epass.bj)."
+                ),
+            )
+
+        agent = SalonAgent(instructions="test")
+        with patch.object(Agent.default, "llm_node", return_value=formatted_stream()):
+            output = [
+                chunk
+                async for chunk in agent.llm_node(
+                    llm.ChatContext.empty(), [], model_settings=None
+                )
+            ]
+
+        text = "".join(
+            str(chunk.delta.content or "")
+            for chunk in output
+            if isinstance(chunk, llm.ChatChunk) and chunk.delta is not None
+        )
+        self.assertEqual(text, "Hello, I am Sonia.\nDetails\nVisit ePass.")
+        self.assertEqual(
+            sanitize_voice_output_text("The code is **ZEBRA-7742** ✅"),
+            "The code is ZEBRA-7742 ",
+        )
+
+    async def test_knowledge_raw_tool_forwards_top_level_arguments(self) -> None:
+        agent = SalonAgent(instructions="test")
+        tool = next(
+            tool
+            for tool in agent.tools
+            if tool.info.name == "search_business_knowledge"
+        )
+        ctx = SimpleNamespace(
+            userdata={
+                "enabled_tool_names": ["search_business_knowledge"],
+                "business_id": "business-123",
+                "end_user_id": "caller@example.com",
+            },
+            room=SimpleNamespace(name="room-123"),
+        )
+
+        with patch(
+            "agent.salon_agent.search_business_knowledge_api",
+            AsyncMock(return_value={"status": "success", "matches": []}),
+        ) as search_api:
+            result = await tool(
+                ctx=ctx,
+                raw_arguments={"query": "passeport expiré", "top_k": "4"},
+            )
+
+        self.assertEqual(result["status"], "success")
+        search_api.assert_awaited_once()
+        self.assertEqual(search_api.await_args.kwargs["query"], "passeport expiré")
+        self.assertEqual(search_api.await_args.kwargs["top_k"], 4)
+
+    async def test_booking_and_order_raw_tools_forward_top_level_arguments(self) -> None:
+        agent = SalonAgent(instructions="test")
+        tools = {tool.info.name: tool for tool in agent.tools}
+        ctx = SimpleNamespace(
+            userdata={
+                "enabled_tool_names": ["create_booking", "create_order"],
+                "business_id": "business-123",
+                "end_user_id": "caller@example.com",
+            },
+            room=SimpleNamespace(name="room-123"),
+        )
+
+        with (
+            patch(
+                "agent.salon_agent.create_booking_api",
+                AsyncMock(return_value={"status": "success", "id": "booking-1"}),
+            ) as booking_api,
+            patch(
+                "agent.salon_agent.create_order_api",
+                AsyncMock(return_value={"status": "success", "id": "order-1"}),
+            ) as order_api,
+        ):
+            booking_result = await tools["create_booking"](
+                ctx=ctx,
+                raw_arguments={
+                    "room_type": "Suite",
+                    "check_in_date": "2026-08-01",
+                    "check_out_date": "2026-08-03",
+                    "guest_count": 2,
+                },
+            )
+            order_result = await tools["create_order"](
+                ctx=ctx,
+                raw_arguments={
+                    "items": [{"item_name": "Rice", "quantity": 2}],
+                    "customer_name": "Ada",
+                },
+            )
+
+        self.assertEqual(booking_result["status"], "success")
+        self.assertEqual(booking_api.await_args.kwargs["guest_count"], 2)
+        self.assertEqual(booking_api.await_args.kwargs["room_type"], "Suite")
+        self.assertEqual(order_result["status"], "success")
+        self.assertEqual(
+            order_api.await_args.kwargs["items"],
+            [{"item_name": "Rice", "quantity": 2}],
+        )
+        self.assertEqual(order_api.await_args.kwargs["customer_name"], "Ada")
+
     async def test_llm_node_converts_split_text_markup_before_tts(self) -> None:
         async def textual_stream():
             yield llm.ChatChunk(

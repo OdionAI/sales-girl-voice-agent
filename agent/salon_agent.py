@@ -55,6 +55,18 @@ _TEXTUAL_FUNCTION_CALL_PATTERN = re.compile(
     re.DOTALL | re.IGNORECASE,
 )
 _TEXTUAL_FUNCTION_MARKER = "<function>"
+_MARKDOWN_LINK_PATTERN = re.compile(r"\[([^\]]+)\]\([^\)]+\)")
+_EMOJI_PATTERN = re.compile(
+    "["
+    "\U0001F1E6-\U0001F1FF"
+    "\U0001F300-\U0001FAFF"
+    "\u2600-\u26FF"
+    "\u2700-\u27BF"
+    "\uFE0F"
+    "\u200D"
+    "]+",
+    flags=re.UNICODE,
+)
 
 
 def _runtime_tool_name(tool: Any) -> str:
@@ -99,6 +111,35 @@ def _text_from_llm_chunk(chunk: Any) -> str:
     if isinstance(chunk, llm.ChatChunk) and chunk.delta is not None:
         return str(chunk.delta.content or "")
     return ""
+
+
+def sanitize_voice_output_text(text: str) -> str:
+    """Remove visual-only formatting before text reaches TTS or transcripts."""
+    sanitized = _MARKDOWN_LINK_PATTERN.sub(r"\1", str(text or ""))
+    sanitized = _EMOJI_PATTERN.sub("", sanitized)
+    sanitized = re.sub(
+        r"(?m)^[ \t]*(?:#{1,6}[ \t]*|[-+•][ \t]+|\d+[.)][ \t]+)",
+        "",
+        sanitized,
+    )
+    sanitized = sanitized.translate(str.maketrans("", "", "*`#"))
+    sanitized = sanitized.replace("•", " ").replace("|", " ")
+    sanitized = re.sub(r"[ \t]{2,}", " ", sanitized)
+    sanitized = re.sub(r"[ \t]+([,.;:!?])", r"\1", sanitized)
+    return sanitized
+
+
+def _sanitize_voice_output_chunk(chunk: Any) -> Any:
+    if isinstance(chunk, str):
+        return sanitize_voice_output_text(chunk)
+    if not isinstance(chunk, llm.ChatChunk) or chunk.delta is None:
+        return chunk
+    if chunk.delta.content is None:
+        return chunk
+    sanitized_delta = chunk.delta.model_copy(
+        update={"content": sanitize_voice_output_text(chunk.delta.content)}
+    )
+    return chunk.model_copy(update={"delta": sanitized_delta})
 
 
 def _is_possible_textual_function_prefix(text: str) -> bool:
@@ -236,7 +277,7 @@ class SalonAgent(Agent):
                     continue
 
             if not probing:
-                yield chunk
+                yield _sanitize_voice_output_chunk(chunk)
                 continue
 
             pending.append(chunk)
@@ -245,7 +286,7 @@ class SalonAgent(Agent):
                 continue
 
             for buffered_chunk in pending:
-                yield buffered_chunk
+                yield _sanitize_voice_output_chunk(buffered_chunk)
             pending.clear()
             probing = False
 
@@ -301,18 +342,24 @@ class SalonAgent(Agent):
             return
 
         for buffered_chunk in pending:
-            yield buffered_chunk
+            yield _sanitize_voice_output_chunk(buffered_chunk)
 
     @function_tool(raw_schema=SEARCH_BUSINESS_KNOWLEDGE_RAW_SCHEMA)
     async def search_business_knowledge(
         self,
         ctx: RunContext,
-        query: str,
-        top_k: int | str | None = 4,
+        raw_arguments: dict | None = None,
     ) -> dict:
+        args = raw_arguments if isinstance(raw_arguments, dict) else {}
+        query = str(args.get("query") or "").strip()
+        if not query:
+            return {
+                "status": "failed",
+                "message": "Please provide what you want me to look up.",
+            }
         result = await search_business_knowledge_api(
             query=query,
-            top_k=normalize_top_k(top_k),
+            top_k=normalize_top_k(args.get("top_k")),
             metadata=_tool_metadata(ctx),
         )
         if result.get("status") != "failed":
@@ -468,20 +515,34 @@ class SalonAgent(Agent):
     async def create_booking(
         self,
         ctx: RunContext,
-        room_type: str,
-        check_in_date: str,
-        check_out_date: str,
-        guest_count: int = 1,
-        guest_name: str | None = None,
-        special_requests: str | None = None,
-        price_snapshot: dict | None = None,
-        customer_identifier: str | None = None,
+        raw_arguments: dict | None = None,
     ) -> dict:
         if not _is_tool_enabled(ctx, "create_booking"):
             return {
                 "status": "failed",
                 "message": "I can't create a booking from this agent right now.",
             }
+        args = raw_arguments if isinstance(raw_arguments, dict) else {}
+        room_type = str(args.get("room_type") or "").strip()
+        check_in_date = str(args.get("check_in_date") or "").strip()
+        check_out_date = str(args.get("check_out_date") or "").strip()
+        if not room_type or not check_in_date or not check_out_date:
+            return {
+                "status": "failed",
+                "message": (
+                    "I need the room type, check-in date, and check-out date "
+                    "before I can create the booking."
+                ),
+            }
+        try:
+            guest_count = max(1, int(args.get("guest_count") or 1))
+        except (TypeError, ValueError):
+            guest_count = 1
+        guest_name = str(args.get("guest_name") or "").strip() or None
+        special_requests = str(args.get("special_requests") or "").strip() or None
+        customer_identifier = (
+            str(args.get("customer_identifier") or "").strip() or None
+        )
         result = await create_booking_api(
             customer_identifier=customer_identifier,
             guest_name=guest_name,
@@ -490,7 +551,7 @@ class SalonAgent(Agent):
             check_out_date=check_out_date,
             guest_count=guest_count,
             special_requests=special_requests,
-            price_snapshot=normalize_price_snapshot(price_snapshot),
+            price_snapshot=normalize_price_snapshot(args.get("price_snapshot")),
             metadata=_tool_metadata(ctx),
         )
         if result.get("status") != "failed":
@@ -505,27 +566,33 @@ class SalonAgent(Agent):
     async def create_order(
         self,
         ctx: RunContext,
-        item_name: str = "",
-        quantity: int = 1,
-        items: list[dict] | None = None,
-        customer_name: str | None = None,
-        notes: str | None = None,
-        price_snapshot: dict | None = None,
-        customer_identifier: str | None = None,
+        raw_arguments: dict | None = None,
     ) -> dict:
         if not _is_tool_enabled(ctx, "create_order"):
             return {
                 "status": "failed",
                 "message": "I can't create an order from this agent right now.",
             }
+        args = raw_arguments if isinstance(raw_arguments, dict) else {}
+        item_name = str(args.get("item_name") or "").strip()
+        try:
+            quantity = max(1, int(args.get("quantity") or 1))
+        except (TypeError, ValueError):
+            quantity = 1
+        items = normalize_order_items(args.get("items"))
+        customer_name = str(args.get("customer_name") or "").strip() or None
+        notes = str(args.get("notes") or "").strip() or None
+        customer_identifier = (
+            str(args.get("customer_identifier") or "").strip() or None
+        )
         result = await create_order_api(
             customer_identifier=customer_identifier,
             customer_name=customer_name,
             item_name=item_name,
             quantity=quantity,
-            items=normalize_order_items(items),
+            items=items,
             notes=notes,
-            price_snapshot=normalize_price_snapshot(price_snapshot),
+            price_snapshot=normalize_price_snapshot(args.get("price_snapshot")),
             metadata=_tool_metadata(ctx),
         )
         if result.get("status") != "failed":

@@ -57,6 +57,9 @@ Current stable contract:
   `<function>name{...}</function>` form are withheld from TTS and recovered as
   structured calls only when the named tool is enabled; malformed or
   unauthorized markup is never spoken to the caller
+- built-in tools that publish explicit raw JSON schemas receive the model's
+  top-level JSON object through LiveKit's `raw_arguments` contract before the
+  worker validates and forwards individual fields
 - custom runtime tools use the saved tool description as part of the live
   contract, can expose request-schema fields when provided, and forward
   business/session metadata headers to downstream business endpoints
@@ -74,6 +77,12 @@ Current stable contract:
 - optional post-call summary/intent analysis also uses Huawei MaaS and reads
   only messages belonging to the completed session, not older calls in the
   same conversation
+- conversation-service mutation responses use domain statuses such as
+  `active`, `ended`, and `ready`; the worker treats only explicit failure
+  markers as failed writes
+- configured agent names are pinned into the first-turn instruction, and
+  generic/custom voice responses are kept concise and free of Markdown syntax
+  before they reach TTS
 - NG TTS is the default non-Deepgram TTS path for configured English sessions
 - deployed environments can switch the default direct-call STT/TTS path to
   Odion STT and NG TTS with `VOICE_AGENT_STT_PROVIDER`, `VOICE_AGENT_STT_MODEL`,

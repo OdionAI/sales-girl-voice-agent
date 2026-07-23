@@ -51,6 +51,7 @@ class LlmProviderTests(unittest.TestCase):
             session,
             language="fr",
             business_use_case="generic",
+            configured_agent_name="Sonia",
         )
 
         kwargs = session.generate_reply_kwargs
@@ -61,6 +62,22 @@ class LlmProviderTests(unittest.TestCase):
         self.assertEqual(messages[0].extra, {"synthetic_kickoff": True})
         self.assertNotIn("user_input", kwargs)
         self.assertIn("Saluez l'appelant en français", kwargs["instructions"])
+        self.assertIn("Votre nom est exactement « Sonia »", kwargs["instructions"])
+
+    def test_generic_prompt_enforces_plain_concise_voice_output(self) -> None:
+        prompt = main._effective_base_prompt(
+            static_prompt="fallback",
+            active_agent_config={
+                "instructions": "Vous êtes Sonia, agente du service consulaire.",
+                "tools": [],
+            },
+            business_use_case="generic",
+            language="fr",
+        )
+
+        self.assertIn("Never output Markdown headings", prompt)
+        self.assertIn("two to four concise sentences", prompt)
+        self.assertIn("never invent or switch to another personal name", prompt)
 
 
 if __name__ == "__main__":
