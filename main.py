@@ -782,6 +782,18 @@ async def _report_billing_final_usage(
         userdata["last_billing_report"] = result
 
 
+def _conversation_write_failed(payload: dict[str, Any] | None) -> bool:
+    """Treat conversation-service domain statuses as successful writes.
+
+    Session mutation endpoints return states such as ``ended``, ``ready``, or
+    ``available`` in their ``status`` field. Only transport/service failure
+    markers (or a missing status) indicate that the write failed.
+    """
+
+    status = str((payload or {}).get("status") or "").strip().lower()
+    return not status or status in {"failed", "disabled", "error"}
+
+
 async def _finalize_session_cleanup(
     *,
     userdata: dict[str, Any],
@@ -869,7 +881,7 @@ async def _finalize_session_cleanup(
                     recording_duration_seconds=recording_duration_seconds,
                     business_id=business_id,
                 )
-                if str(persisted.get("status") or "") != "success":
+                if _conversation_write_failed(persisted):
                     logger.error(
                         "Recording metadata persist failed: session_id=%s detail=%s http_status=%s",
                         session_tracker_id,
@@ -935,7 +947,7 @@ async def _finalize_session_cleanup(
                     duration_seconds=duration,
                     business_id=business_id,
                 )
-                if str(ended.get("status") or "") != "success":
+                if _conversation_write_failed(ended):
                     logger.error(
                         "End session persist failed: session_id=%s detail=%s http_status=%s",
                         session_tracker_id,
@@ -968,7 +980,7 @@ async def _finalize_session_cleanup(
                     business_id=business_id,
                     **analysis,
                 )
-                if str(persisted_analysis.get("status") or "") != "success":
+                if _conversation_write_failed(persisted_analysis):
                     logger.error(
                         "Session analysis persist failed: session_id=%s detail=%s",
                         session_tracker_id,
@@ -2584,7 +2596,8 @@ async def _instructions_with_context(base_prompt: str, userdata: dict[str, Any])
             channel=channel,
             business_id=business_id,
         )
-        if str(resolved.get("status") or "") == "failed":
+        resolve_failed = str(resolved.get("status") or "") == "failed"
+        if resolve_failed:
             logger.error(
                 "Conversation resolve failed: business_id=%s agent_id=%s end_user_id=%s detail=%s http_status=%s",
                 business_id,
@@ -2594,11 +2607,30 @@ async def _instructions_with_context(base_prompt: str, userdata: dict[str, Any])
                 resolved.get("http_status"),
             )
         conv_id = str(resolved.get("conversation_id") or "")
+        context_failed = False
         if conv_id:
             userdata["conversation_id"] = conv_id
             context_payload = await fetch_context_remote(
                 conv_id, limit=30, business_id=business_id
             )
+            context_failed = (
+                str(context_payload.get("status") or "") == "failed"
+                if isinstance(context_payload, dict)
+                else True
+            )
+            if context_failed:
+                logger.error(
+                    "Conversation context fetch failed: business_id=%s conversation_id=%s end_user_id=%s detail=%s http_status=%s",
+                    business_id,
+                    conv_id,
+                    end_user_id,
+                    context_payload.get("detail")
+                    if isinstance(context_payload, dict)
+                    else "invalid response",
+                    context_payload.get("http_status")
+                    if isinstance(context_payload, dict)
+                    else None,
+                )
             msgs = (
                 context_payload.get("messages")
                 if isinstance(context_payload, dict)
@@ -2628,7 +2660,13 @@ async def _instructions_with_context(base_prompt: str, userdata: dict[str, Any])
                         "Most recent saved conversation snippets:\n"
                         f"{memory_text}\n"
                     )
-        if CONVERSATION_SERVICE_REQUIRED:
+            if not context_failed:
+                # A newly resolved conversation normally has no history yet.
+                # That is a valid remote response, not a strict-mode fallback.
+                return base_prompt
+        if CONVERSATION_SERVICE_REQUIRED and (
+            resolve_failed or not conv_id or context_failed
+        ):
             logger.error(
                 "Conversation strict mode fallback: proceeding without remote context. business_id=%s agent_id=%s end_user_id=%s",
                 business_id,
@@ -3187,6 +3225,12 @@ def _effective_base_prompt(
         return (
             f"{configured_instructions.rstrip()}\n\n"
             f"{runtime_tool_guidance}\n\n"
+            "Voice response rules:\n"
+            "- Speak in short, natural sentences suitable for a phone call.\n"
+            "- Never output Markdown headings, bullet markers, numbered-list markers, emphasis markers, tables, or emojis.\n"
+            "- Do not read retrieved knowledge snippets verbatim. Summarize the relevant facts conversationally.\n"
+            "- Give the direct answer in two to four concise sentences first, then ask whether the caller wants more detail.\n"
+            "- Keep using the configured agent name throughout the call and never invent or switch to another personal name.\n\n"
             "Built-in tool rule:\n"
             "- search_business_knowledge is a built-in runtime tool for every agent, even when it is not part of the dashboard-configured tool list.\n"
             "- Use business knowledge search before saying you do not have enough information.\n"
@@ -3514,16 +3558,33 @@ def _instructions_with_preloaded_ops_context(
     return f"{base_prompt}\n\n{preloaded_context}\n"
 
 
-def _kickoff_prompt_for_language(language: str, business_use_case: str) -> str:
+def _kickoff_prompt_for_language(
+    language: str,
+    business_use_case: str,
+    configured_agent_name: str = "",
+) -> str:
     lang = str(language or "").strip().lower()
+    agent_name = str(configured_agent_name or "").strip()
     if lang == "fr":
+        identity_rule = (
+            f"Votre nom est exactement « {agent_name} ». Utilisez ce prénom et aucun autre."
+            if agent_name
+            else ""
+        )
         return (
             "Commencez la conversation maintenant. Saluez l'appelant en français. Présentez-vous brièvement par votre nom et proposez votre aide de manière naturelle, en fonction de votre rôle spécifique. "
+            f"{identity_rule} "
             "Ne demandez pas d'abord l'email ou d'autres informations d'identification. "
             "N'énumérez pas immédiatement tout le profil de l'appelant ; saluez d'abord puis attendez sa demande."
         )
+    identity_rule = (
+        f"Your name is exactly \"{agent_name}\". Use that name and no other name."
+        if agent_name
+        else ""
+    )
     return (
         "Start the conversation now. Greet the caller first in English. Introduce yourself briefly by name and offer assistance naturally based on your specific role and instructions. "
+        f"{identity_rule} "
         "Do not ask for email or other identifiers as your first move. Do not dump the caller profile immediately; greet first and wait for the caller's request."
     )
 
@@ -3586,7 +3647,11 @@ async def _build_configured_salon_agent(
 
 
 def _trigger_first_turn(
-    session: AgentSession, *, language: str, business_use_case: str
+    session: AgentSession,
+    *,
+    language: str,
+    business_use_case: str,
+    configured_agent_name: str = "",
 ) -> None:
     try:
         # Huawei MaaS rejects an LLM request whose conversation contains only
@@ -3606,7 +3671,11 @@ def _trigger_first_turn(
         )
         session.generate_reply(
             chat_ctx=kickoff_context,
-            instructions=_kickoff_prompt_for_language(language, business_use_case),
+            instructions=_kickoff_prompt_for_language(
+                language,
+                business_use_case,
+                configured_agent_name,
+            ),
             input_modality="text",
         )
     except Exception as exc:  # noqa: BLE001
@@ -4140,7 +4209,12 @@ async def entrypoint(ctx: JobContext):
                 call_channel=call_channel,
             )
             _trigger_first_turn(
-                session, language="en", business_use_case=business_use_case
+                session,
+                language="en",
+                business_use_case=business_use_case,
+                configured_agent_name=str(
+                    userdata.get("configured_agent_name") or ""
+                ),
             )
             if is_recording_enabled():
                 async def _start_recording_after_join_en() -> None:
@@ -4326,7 +4400,12 @@ async def entrypoint(ctx: JobContext):
                 call_channel=call_channel,
             )
             _trigger_first_turn(
-                session, language="fr", business_use_case=business_use_case
+                session,
+                language="fr",
+                business_use_case=business_use_case,
+                configured_agent_name=str(
+                    userdata.get("configured_agent_name") or ""
+                ),
             )
             if is_recording_enabled():
                 async def _start_recording_after_join_fr() -> None:
