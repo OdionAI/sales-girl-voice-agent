@@ -77,6 +77,13 @@ Current stable contract:
 - optional post-call summary/intent analysis also uses Huawei MaaS and reads
   only messages belonging to the completed session, not older calls in the
   same conversation
+- agents configured with `record_caller_details` collect and verify only first
+  name, last name, phone number, and email at the beginning of the call; the
+  contact tool persists a draft without exporting an incomplete sheet row
+- after those calls end, a separate GLM-5.2 analysis pass derives the
+  sheet-specific theme, sub-theme, request summary, treatment, status, optional
+  consular/order references, and transfer outcome, then asks conversation
+  service to finalize and export the record
 - conversation-service mutation responses use domain statuses such as
   `active`, `ended`, and `ready`; the worker treats only explicit failure
   markers as failed writes
