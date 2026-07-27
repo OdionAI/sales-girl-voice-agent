@@ -19,7 +19,9 @@ from livekit.agents import (
     AgentServer,
     AgentSession,
     JobContext,
+    TurnHandlingOptions,
     cli,
+    inference,
     room_io,
 )
 from livekit.agents import llm, stt
@@ -1142,6 +1144,9 @@ CONVERSATION_SERVICE_REQUIRED = (
 )
 ENABLE_ODION_TTS_EN = os.getenv("ENABLE_ODION_TTS_EN", "true").lower() == "true"
 ENABLE_ODION_TTS_FR = os.getenv("ENABLE_ODION_TTS_FR", "false").lower() == "true"
+VOICE_AGENT_TTS_PROVIDER = (
+    str(os.getenv("VOICE_AGENT_TTS_PROVIDER") or "").strip().lower()
+)
 ODION_TTS_EXPERIMENT_OWNER_ID = str(
     os.getenv("ODION_TTS_EXPERIMENT_OWNER_ID") or ""
 ).strip()
@@ -1149,7 +1154,7 @@ ODION_TTS_EXPERIMENT_VOICE_ID = str(
     os.getenv("ODION_TTS_EXPERIMENT_VOICE_ID") or ""
 ).strip()
 FORCE_ODION_TTS_EXPERIMENT_VOICE = (
-    os.getenv("FORCE_ODION_TTS_EXPERIMENT_VOICE", "false").lower() == "true"
+    os.getenv("FORCE_ODION_TTS_EXPERIMENT_VOICE", "true").lower() == "true"
 )
 ODION_TTS_EXPERIMENT_LANGUAGE_HINT = (
     str(os.getenv("ODION_TTS_EXPERIMENT_LANGUAGE_HINT") or "English").strip()
@@ -1190,12 +1195,12 @@ def _float_env(name: str, default: float, *, min_value: float) -> float:
 
 TURN_MIN_ENDPOINTING_DELAY = _float_env(
     "TURN_MIN_ENDPOINTING_DELAY",
-    0.45,
+    0.25,
     min_value=0.1,
 )
 TURN_MAX_ENDPOINTING_DELAY = _float_env(
     "TURN_MAX_ENDPOINTING_DELAY",
-    1.2,
+    0.75,
     min_value=0.2,
 )
 if TURN_MAX_ENDPOINTING_DELAY < TURN_MIN_ENDPOINTING_DELAY:
@@ -1210,8 +1215,75 @@ TURN_MIN_INTERRUPTION_DURATION = _float_env(
     min_value=0.1,
 )
 
+VOICE_AGENT_STT_ENDPOINTING_MS = int(
+    os.getenv("VOICE_AGENT_STT_ENDPOINTING_MS", "300") or "300"
+)
+if VOICE_AGENT_STT_ENDPOINTING_MS < 100:
+    logger.warning(
+        "VOICE_AGENT_STT_ENDPOINTING_MS=%s is below 100ms; using 100ms.",
+        VOICE_AGENT_STT_ENDPOINTING_MS,
+    )
+    VOICE_AGENT_STT_ENDPOINTING_MS = 100
+VOICE_AGENT_STT_INTERIM_RESULTS = (
+    os.getenv("VOICE_AGENT_STT_INTERIM_RESULTS", "true").strip().lower()
+    == "true"
+)
+VOICE_AGENT_STT_NO_DELAY = (
+    os.getenv("VOICE_AGENT_STT_NO_DELAY", "true").strip().lower() == "true"
+)
+
+VOICE_AGENT_TURN_DETECTOR = (
+    str(os.getenv("VOICE_AGENT_TURN_DETECTOR") or "v1-mini").strip().lower()
+    or "v1-mini"
+)
+if VOICE_AGENT_TURN_DETECTOR not in {"v1-mini", "v1", "stt", "vad", "disabled"}:
+    logger.warning(
+        "Unsupported VOICE_AGENT_TURN_DETECTOR=%r; using v1-mini.",
+        VOICE_AGENT_TURN_DETECTOR,
+    )
+    VOICE_AGENT_TURN_DETECTOR = "v1-mini"
+
+
+def _turn_handling_options() -> TurnHandlingOptions:
+    if VOICE_AGENT_TURN_DETECTOR in {"disabled", "vad"}:
+        turn_detection: Any = "vad"
+        interruption_mode = "vad"
+    elif VOICE_AGENT_TURN_DETECTOR == "stt":
+        turn_detection = "stt"
+        interruption_mode = "vad"
+    else:
+        turn_detector_cls = getattr(inference, "TurnDetector", None)
+        if turn_detector_cls is None:
+            logger.warning(
+                "LiveKit inference.TurnDetector is unavailable; falling back to VAD turn handling."
+            )
+            turn_detection = "vad"
+            interruption_mode = "vad"
+        else:
+            turn_detection = turn_detector_cls(version=VOICE_AGENT_TURN_DETECTOR)
+            interruption_mode = "adaptive"
+
+    logger.info(
+        "Using LiveKit turn detector: mode=%s min_endpointing=%.3fs max_endpointing=%.3fs interruption=%s",
+        VOICE_AGENT_TURN_DETECTOR,
+        TURN_MIN_ENDPOINTING_DELAY,
+        TURN_MAX_ENDPOINTING_DELAY,
+        interruption_mode,
+    )
+    return TurnHandlingOptions(
+        turn_detection=turn_detection,
+        endpointing={
+            "min_delay": TURN_MIN_ENDPOINTING_DELAY,
+            "max_delay": TURN_MAX_ENDPOINTING_DELAY,
+        },
+        interruption={
+            "mode": interruption_mode,
+            "min_duration": TURN_MIN_INTERRUPTION_DURATION,
+        },
+    )
+
 VOICE_AGENT_LLM_PROVIDER = str(
-    os.getenv("VOICE_AGENT_LLM_PROVIDER") or os.getenv("LLM_PROVIDER") or "maas"
+    os.getenv("VOICE_AGENT_LLM_PROVIDER") or os.getenv("LLM_PROVIDER") or "google"
 ).strip().lower()
 MAAS_API_KEY = str(os.getenv("MAAS_API_KEY") or os.getenv("HUAWEI_MAAS_API_KEY") or "").strip()
 MAAS_BASE_URL = str(
@@ -1222,8 +1294,8 @@ MAAS_LLM_MODEL_EN = str(os.getenv("MAAS_LLM_MODEL_EN") or MAAS_LLM_MODEL_DEFAULT
 MAAS_LLM_MODEL_FR = str(os.getenv("MAAS_LLM_MODEL_FR") or MAAS_LLM_MODEL_DEFAULT).strip() or MAAS_LLM_MODEL_DEFAULT
 
 GOOGLE_LLM_MODEL_DEFAULT = (
-    str(os.getenv("GOOGLE_LLM_MODEL_DEFAULT") or "gemini-3-flash-preview").strip()
-    or "gemini-3-flash-preview"
+    str(os.getenv("GOOGLE_LLM_MODEL_DEFAULT") or "gemini-3.5-flash-lite").strip()
+    or "gemini-3.5-flash-lite"
 )
 GOOGLE_LLM_MODEL_EN = (
     str(os.getenv("GOOGLE_LLM_MODEL_EN") or GOOGLE_LLM_MODEL_DEFAULT).strip()
@@ -1247,8 +1319,8 @@ GOOGLE_LLM_BACKUP_MODEL_FR = (
 )
 
 LLM_PROVIDER = str(
-    os.getenv("LLM_PROVIDER") or os.getenv("VOICE_AGENT_LLM_PROVIDER") or "maas"
-).strip().lower() or "maas"
+    os.getenv("LLM_PROVIDER") or os.getenv("VOICE_AGENT_LLM_PROVIDER") or "google"
+).strip().lower() or "google"
 GROQ_LLM_MODEL_DEFAULT = (
     str(
         os.getenv("GROQ_LLM_MODEL_DEFAULT")
@@ -3720,15 +3792,14 @@ def _build_session_for_language(
     if stt_engine is None:
         stt_engine = _build_stt_engine_for_language(language=language, userdata=userdata)
     session_llm = _build_llm_for_language(language=language)
+    turn_handling = _turn_handling_options()
     if language == "fr":
         return AgentSession(
             stt=stt_engine,
             tts=tts_engine or deepgram.TTS(model="aura-2-agathe-fr"),
             llm=session_llm,
             userdata=userdata,
-            min_endpointing_delay=TURN_MIN_ENDPOINTING_DELAY,
-            max_endpointing_delay=TURN_MAX_ENDPOINTING_DELAY,
-            min_interruption_duration=TURN_MIN_INTERRUPTION_DURATION,
+            turn_handling=turn_handling,
         )
 
     return AgentSession(
@@ -3736,9 +3807,7 @@ def _build_session_for_language(
         tts=tts_engine,
         llm=session_llm,
         userdata=userdata,
-        min_endpointing_delay=TURN_MIN_ENDPOINTING_DELAY,
-        max_endpointing_delay=TURN_MAX_ENDPOINTING_DELAY,
-        min_interruption_duration=TURN_MIN_INTERRUPTION_DURATION,
+        turn_handling=turn_handling,
     )
 
 
@@ -3926,6 +3995,9 @@ def _build_stt_engine_for_language(*, language: str, userdata: dict[str, Any]) -
     stt_kwargs: dict[str, Any] = {
         "language": _deepgram_stt_language_for_language(lang),
         "model": model,
+        "interim_results": VOICE_AGENT_STT_INTERIM_RESULTS,
+        "endpointing_ms": VOICE_AGENT_STT_ENDPOINTING_MS,
+        "no_delay": VOICE_AGENT_STT_NO_DELAY,
     }
     if provider == "custom" and base_url:
         stt_kwargs["base_url"] = base_url
@@ -3973,10 +4045,11 @@ def _build_tts_engine_for_language(
     tts_endpoint_override = _normalize_tts_endpoint(
         userdata.get("tts_endpoint") or ""
     ) or _normalize_tts_endpoint(override_base_url)
-    runtime_odion_tts_requested = bool(tts_endpoint_override) or override_provider in {
-        "odion_tts",
-        "odion",
-    }
+    runtime_odion_tts_requested = (
+        bool(tts_endpoint_override)
+        or override_provider in {"odion_tts", "odion"}
+        or VOICE_AGENT_TTS_PROVIDER in {"odion_tts", "odion"}
+    )
 
     if override_provider == "deepgram" or (
         override_provider == "custom" and not runtime_odion_tts_requested

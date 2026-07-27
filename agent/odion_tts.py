@@ -14,7 +14,7 @@ from livekit.agents._exceptions import APIConnectionError, APIStatusError, APITi
 
 logger = logging.getLogger("salesgirl.ng_tts")
 
-DEFAULT_NG_TTS_BASE_URL = "https://ng-tts.odion.ai"
+DEFAULT_NG_TTS_BASE_URL = "https://tts-ng.odion.ai"
 DEFAULT_ODION_TTS_BASE_URL = DEFAULT_NG_TTS_BASE_URL
 DEFAULT_ODION_TTS_STREAM_PATH = "/api/v1/tts/stream"
 _PCM16_BYTES_PER_SAMPLE = 2
@@ -24,6 +24,7 @@ _DEFAULT_NPU_INITIAL_BUFFER_MS = 0
 _DEFAULT_OUTPUT_SAMPLE_RATE = 24000
 _SUPPORTED_OUTPUT_SAMPLE_RATES = {24000, 48000}
 _NPU_ENDPOINT_HOSTS = {
+    "tts-ng.odion.ai",
     "ng-tts.odion.ai",
     "102.140.102.211",
     "10.130.151.11",

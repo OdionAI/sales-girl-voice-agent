@@ -284,8 +284,9 @@ class OdionSTTTests(unittest.IsolatedAsyncioTestCase):
         tts_engine = object()
 
         with (
-            patch("main.openai.LLM", return_value=object()) as llm_mock,
-            patch.object(main, "MAAS_API_KEY", "test-maas-key"),
+            patch("main.google.LLM", return_value=object()) as llm_mock,
+            patch.object(main, "VOICE_AGENT_LLM_PROVIDER", "google"),
+            patch.object(main, "LLM_PROVIDER", "google"),
             patch(
                 "main.AgentSession",
                 side_effect=lambda **kwargs: SimpleNamespace(**kwargs),
@@ -301,13 +302,11 @@ class OdionSTTTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIs(session.stt, stt_engine)
         self.assertIs(session.tts, tts_engine)
-        llm_mock.assert_called_once()
-        self.assertEqual(llm_mock.call_args.kwargs["model"], main.MAAS_LLM_MODEL_EN)
-        self.assertEqual(llm_mock.call_args.kwargs["base_url"], main.MAAS_BASE_URL)
-        self.assertEqual(llm_mock.call_args.kwargs["api_key"], "test-maas-key")
+        self.assertEqual(llm_mock.call_count, 2)
+        self.assertEqual(llm_mock.call_args_list[0].kwargs["model"], main.GOOGLE_LLM_MODEL_EN)
         self.assertEqual(
-            llm_mock.call_args.kwargs["extra_body"],
-            {"chat_template_kwargs": {"thinking": False}},
+            llm_mock.call_args_list[1].kwargs["model"],
+            main.GOOGLE_LLM_BACKUP_MODEL_EN,
         )
 
 

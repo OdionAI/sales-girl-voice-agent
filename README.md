@@ -99,7 +99,7 @@ Current stable contract:
 - staging Voice Lab sessions can apply temporary per-call STT/TTS overrides,
   including the Odion STT adapter for `eu-stt.odion.ai`, without changing
   saved agent configuration
-- NG TTS should use `NG_TTS_BASE_URL=https://ng-tts.odion.ai` on Huawei;
+- NG TTS should use `NG_TTS_BASE_URL=https://tts-ng.odion.ai` on Huawei;
   the adapter appends `/api/v1/tts/stream` for base URLs and uses a full stream
   endpoint exactly when one is explicitly supplied
 - `ODION_TTS_BASE_URL` remains a backward-compatible alias for older deploy

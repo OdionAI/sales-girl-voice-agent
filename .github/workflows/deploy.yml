@@ -31,6 +31,7 @@ jobs:
       HUAWEI_SRC_ROOT: ${{ vars.HUAWEI_SRC_ROOT || '/opt/salesgirl/src' }}
       TARGET_STACK_DIR: ${{ github.ref_name == 'main' && (vars.HUAWEI_NODE_B_STACK_DIR_PROD || '/opt/salesgirl/node-b-prod') || (vars.HUAWEI_NODE_B_STACK_DIR_STAGING || '/opt/salesgirl/node-b-staging') }}
       COMPOSE_PROJECT_NAME: ${{ github.ref_name == 'main' && (vars.HUAWEI_COMPOSE_PROJECT_PROD || 'node-b-prod') || (vars.HUAWEI_COMPOSE_PROJECT_STAGING || 'node-b-staging') }}
+      REFERENCE_GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
 
     steps:
       - name: Checkout
@@ -97,6 +98,7 @@ jobs:
           set -euo pipefail
           remote_release="${HUAWEI_SRC_ROOT}/.releases/${DEPLOY_ENV}/${REPO_DIR}/${GITHUB_SHA}"
           remote_current="${HUAWEI_SRC_ROOT}/${DEPLOY_ENV}/${REPO_DIR}"
+          reference_google_api_key_b64="$(printf '%s' "${REFERENCE_GOOGLE_API_KEY}" | base64 -w 0)"
 
           ssh huawei-node-b "mkdir -p '${remote_release}' '${HUAWEI_SRC_ROOT}/${DEPLOY_ENV}'"
           tar \
@@ -112,7 +114,8 @@ jobs:
             "${TARGET_STACK_DIR}" \
             "${COMPOSE_PROJECT_NAME}" \
             "${COMPOSE_SERVICES}" \
-            "${HEALTH_PORT}" <<'REMOTE'
+            "${HEALTH_PORT}" \
+            "${reference_google_api_key_b64}" <<'REMOTE'
           set -Eeuo pipefail
 
           release_dir="$1"
@@ -121,6 +124,7 @@ jobs:
           project_name="$4"
           service_list="$5"
           health_port="$6"
+          google_api_key_b64="${7:-}"
           IFS=',' read -r -a services <<< "${service_list}"
           export COMPOSE_PROJECT_NAME="${project_name}"
           compose=(docker compose --env-file .env.node-b)
@@ -145,6 +149,65 @@ jobs:
 
           ln -sfn "${release_dir}" "${current_link}"
           cd "${stack_dir}"
+          cp .env.node-b ".env.node-b.bak.reference-baseline-$(date +%Y%m%d%H%M%S)"
+          python3 - "${google_api_key_b64}" <<'PY'
+          import base64
+          import sys
+          from pathlib import Path
+
+          env_path = Path(".env.node-b")
+          google_api_key = ""
+          if len(sys.argv) > 1 and sys.argv[1]:
+              google_api_key = base64.b64decode(sys.argv[1]).decode().strip()
+
+          desired = {
+              "VOICE_AGENT_LLM_PROVIDER": "google",
+              "LLM_PROVIDER": "google",
+              "GOOGLE_LLM_MODEL_DEFAULT": "gemini-3.5-flash-lite",
+              "GOOGLE_LLM_MODEL_EN": "gemini-3.5-flash-lite",
+              "VOICE_AGENT_STT_PROVIDER": "deepgram",
+              "VOICE_AGENT_STT_MODEL": "nova-3",
+              "VOICE_AGENT_STT_INTERIM_RESULTS": "true",
+              "VOICE_AGENT_STT_ENDPOINTING_MS": "300",
+              "VOICE_AGENT_STT_NO_DELAY": "true",
+              "ENABLE_ODION_TTS_EN": "true",
+              "FORCE_ODION_TTS_EXPERIMENT_VOICE": "true",
+              "ODION_TTS_EXPERIMENT_OWNER_ID": "mavinomichael@gmail.com",
+              "ODION_TTS_EXPERIMENT_VOICE_ID": "d270a5cec6914373b9deed1d1c3cbade",
+              "ODION_TTS_EXPERIMENT_LANGUAGE_HINT": "English",
+              "ODION_TTS_EXPERIMENT_SEED": "0",
+              "NG_TTS_BASE_URL": "https://tts-ng.odion.ai",
+              "ODION_TTS_BASE_URL": "https://tts-ng.odion.ai",
+              "VOICE_AGENT_TURN_DETECTOR": "v1-mini",
+              "TURN_MIN_ENDPOINTING_DELAY": "0.25",
+              "TURN_MAX_ENDPOINTING_DELAY": "0.75",
+              "TURN_MIN_INTERRUPTION_DURATION": "0.7",
+          }
+          if google_api_key:
+              desired["GOOGLE_API_KEY"] = google_api_key
+
+          lines = env_path.read_text().splitlines()
+          seen = set()
+          updated = []
+          for line in lines:
+              if not line or line.lstrip().startswith("#") or "=" not in line:
+                  updated.append(line)
+                  continue
+              key = line.split("=", 1)[0]
+              if key in desired:
+                  updated.append(f"{key}={desired[key]}")
+                  seen.add(key)
+              else:
+                  updated.append(line)
+
+          for key, value in desired.items():
+              if key not in seen:
+                  updated.append(f"{key}={value}")
+
+          env_path.write_text("\n".join(updated) + "\n")
+          public_keys = [key for key in sorted(desired) if key != "GOOGLE_API_KEY"]
+          print("Applied reference baseline voice config keys:", ",".join(public_keys))
+          PY
           "${compose[@]}" config -q
           "${compose[@]}" build "${services[@]}"
           "${compose[@]}" up -d --no-deps --force-recreate "${services[@]}"
