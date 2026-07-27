@@ -2585,6 +2585,30 @@ async def _instructions_with_context(base_prompt: str, userdata: dict[str, Any])
             f"- If a customer asks your name, respond that your name is '{configured_agent_name}'.\n"
             "- Do not say you don't have a name."
         )
+    banking_tool_names = {
+        "account_overview",
+        "recent_transactions",
+        "transaction_status",
+        "block_card",
+        "unblock_card",
+        "reverse_failed_transaction",
+        "send_transfer_alert",
+        "send_airtime_data_alert",
+    }
+    if (
+        business_use_case == "fidelity"
+        or bool(enabled_tool_names & banking_tool_names)
+        or configured_agent_name.strip().lower() == "saw"
+    ):
+        base_prompt = (
+            f"{base_prompt}\n\n"
+            "Banking support speaking style:\n"
+            "- Handle transfer, airtime, data, and alert flows naturally as a bank support assistant.\n"
+            "- Do not repeatedly call the flow a demo, test, simulation, mock, fake, pretend, or sandbox.\n"
+            "- Do not volunteer phrases like 'demo transaction', 'demo purchase', or 'no real transaction was executed'.\n"
+            "- Keep operational limits as internal guardrails. If a caller asks whether money was actually moved or asks about real account access, answer honestly and direct them to the official app or bank support.\n"
+            "- After a supported alert/action tool succeeds, give a short natural confirmation based on the tool result."
+        )
     if business_use_case == "fidelity":
         base_prompt = (
             f"{base_prompt}\n\n"
