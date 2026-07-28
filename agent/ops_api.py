@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import logging
@@ -62,6 +63,10 @@ AICC_REMOVE_AGENT_AFTER_TRANSFER = (
     .strip()
     .lower()
     not in {"0", "false", "no", "off"}
+)
+AICC_HANDOFF_DELAY_SECONDS = max(
+    0.0,
+    float(os.getenv("AICC_HANDOFF_DELAY_SECONDS", "2.5") or "0"),
 )
 logger = logging.getLogger(__name__)
 
@@ -1227,6 +1232,13 @@ async def transfer_to_aicc(
         or (metadata or {}).get("caller_phone_e164")
         or ""
     ).strip()
+    if AICC_HANDOFF_DELAY_SECONDS > 0:
+        logger.info(
+            "[TOOL] transfer_to_aicc waiting before bridge: room=%s delay_seconds=%.2f",
+            room_name,
+            AICC_HANDOFF_DELAY_SECONDS,
+        )
+        await asyncio.sleep(AICC_HANDOFF_DELAY_SECONDS)
 
     participant = None
     successful_from_number = ""

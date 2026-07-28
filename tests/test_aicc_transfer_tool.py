@@ -49,6 +49,7 @@ class AiccTransferToolTests(unittest.IsolatedAsyncioTestCase):
             patch.object(ops_api, "AICC_TRANSFER_TARGET_NUMBER", "02014114559"),
             patch.object(ops_api, "AICC_TRANSFER_FROM_NUMBER", "02014114559"),
             patch.object(ops_api, "AICC_TRANSFER_CALLER_ID_MODE", "caller_then_configured"),
+            patch.object(ops_api, "AICC_HANDOFF_DELAY_SECONDS", 0),
         ):
             result = await ops_api.transfer_to_aicc(
                 reason_summary="customer asked for a human",
@@ -92,6 +93,7 @@ class AiccTransferToolTests(unittest.IsolatedAsyncioTestCase):
             patch.object(ops_api, "AICC_TRANSFER_FROM_NUMBER", "02014114559"),
             patch.object(ops_api, "AICC_TRANSFER_CALLER_ID_MODE", "caller_then_configured"),
             patch.object(ops_api, "AICC_TRANSFER_NORMALIZE_NG_CALLER", False),
+            patch.object(ops_api, "AICC_HANDOFF_DELAY_SECONDS", 0),
         ):
             result = await ops_api.transfer_to_aicc(
                 reason_summary="customer asked for a human",
