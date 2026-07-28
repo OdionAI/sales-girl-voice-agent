@@ -48,6 +48,21 @@ AICC_TRANSFER_TARGET_NUMBER = str(
 AICC_TRANSFER_FROM_NUMBER = str(
     os.getenv("AICC_TRANSFER_FROM_NUMBER") or AICC_TEST_ACCESS_CODE
 ).strip()
+AICC_TRANSFER_CALLER_ID_MODE = str(
+    os.getenv("AICC_TRANSFER_CALLER_ID_MODE", "caller_then_configured") or ""
+).strip().lower()
+AICC_TRANSFER_NORMALIZE_NG_CALLER = (
+    str(os.getenv("AICC_TRANSFER_NORMALIZE_NG_CALLER", "true") or "")
+    .strip()
+    .lower()
+    not in {"0", "false", "no", "off"}
+)
+AICC_REMOVE_AGENT_AFTER_TRANSFER = (
+    str(os.getenv("AICC_REMOVE_AGENT_AFTER_TRANSFER", "true") or "")
+    .strip()
+    .lower()
+    not in {"0", "false", "no", "off"}
+)
 logger = logging.getLogger(__name__)
 
 
@@ -57,6 +72,80 @@ def _emit_tool_latency(
     **fields: Any,
 ) -> None:
     emit_latency_trace(event, metadata=metadata or {}, **fields)
+
+
+def _phone_like_from_value(value: Any) -> str:
+    raw = str(value or "").strip()
+    if not raw or "@" in raw:
+        return ""
+    digits = "".join(ch for ch in raw if ch.isdigit())
+    if len(digits) < 5:
+        return ""
+    return f"+{digits}" if raw.startswith("+") else digits
+
+
+def _aicc_transfer_from_number(metadata: dict[str, Any] | None) -> str:
+    md = metadata or {}
+    for key in (
+        "sip_caller_number",
+        "caller_phone_e164",
+        "caller_phone",
+        "end_user_phone",
+        "original_caller_number",
+        "caller_number",
+        "from_number",
+        "end_user_id",
+    ):
+        candidate = _phone_like_from_value(md.get(key))
+        if candidate:
+            return candidate
+    return AICC_TRANSFER_FROM_NUMBER.strip()
+
+
+def _unique_non_empty(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    unique: list[str] = []
+    for value in values:
+        normalized = str(value or "").strip()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        unique.append(normalized)
+    return unique
+
+
+def _ng_caller_id_variants(number: str) -> list[str]:
+    """Return caller-ID formats Huawei/AICC may accept for Nigerian mobiles."""
+    if not AICC_TRANSFER_NORMALIZE_NG_CALLER:
+        return []
+
+    raw = str(number or "").strip()
+    digits = "".join(ch for ch in raw if ch.isdigit())
+    variants: list[str] = []
+    if len(digits) == 10 and digits[0] in {"7", "8", "9"}:
+        variants.extend([f"0{digits}", f"+234{digits}", f"234{digits}"])
+    elif len(digits) == 11 and digits.startswith("0"):
+        variants.extend([f"+234{digits[1:]}", f"234{digits[1:]}"])
+    elif len(digits) == 13 and digits.startswith("234"):
+        variants.extend([f"+{digits}", f"0{digits[3:]}"])
+    return _unique_non_empty(variants)
+
+
+def _aicc_transfer_from_number_candidates(metadata: dict[str, Any] | None) -> list[str]:
+    configured = _phone_like_from_value(AICC_TRANSFER_FROM_NUMBER)
+    caller = _aicc_transfer_from_number(metadata)
+    if caller == configured:
+        caller = ""
+
+    if AICC_TRANSFER_CALLER_ID_MODE in {"configured", "fixed", "access_code"}:
+        return _unique_non_empty([configured])
+
+    if AICC_TRANSFER_CALLER_ID_MODE in {"caller", "original"}:
+        return _unique_non_empty([caller, *_ng_caller_id_variants(caller)])
+
+    return _unique_non_empty(
+        [caller, *_ng_caller_id_variants(caller), configured]
+    )
 
 
 def _read_conversation_api_base_url() -> str:
@@ -205,6 +294,32 @@ async def _resolve_aicc_outbound_trunk() -> api.SIPOutboundTrunkInfo | None:
             if str(getattr(item, "name", "") or "").strip() == AICC_OUTBOUND_TRUNK_NAME:
                 return item
     return items[0] if len(items) == 1 else None
+
+
+def _is_voice_agent_participant(identity: str) -> bool:
+    normalized = str(identity or "").strip()
+    return normalized.startswith("agent-")
+
+
+async def _remove_voice_agent_participants(room_name: str) -> list[str]:
+    removed: list[str] = []
+    target_room = str(room_name or "").strip()
+    if not target_room:
+        return removed
+
+    async with _livekit_api() as lkapi:
+        participants = await lkapi.room.list_participants(
+            api.ListParticipantsRequest(room=target_room)
+        )
+        for participant in list(getattr(participants, "participants", []) or []):
+            identity = str(getattr(participant, "identity", "") or "").strip()
+            if not _is_voice_agent_participant(identity):
+                continue
+            await lkapi.room.remove_participant(
+                api.RoomParticipantIdentity(room=target_room, identity=identity)
+            )
+            removed.append(identity)
+    return removed
 
 
 def _normalize_http_url(value: str | None) -> str:
@@ -1089,7 +1204,9 @@ async def transfer_to_aicc(
         }
 
     target_number = AICC_TRANSFER_TARGET_NUMBER.strip()
-    from_number = AICC_TRANSFER_FROM_NUMBER.strip() or target_number
+    from_number_candidates = _aicc_transfer_from_number_candidates(metadata)
+    if not from_number_candidates:
+        from_number_candidates = [target_number]
     if not target_number:
         return {
             "status": "failed",
@@ -1105,46 +1222,142 @@ async def transfer_to_aicc(
 
     session_ref = str((metadata or {}).get("session_id") or "").strip() or "session"
     turn_ref = str((metadata or {}).get("turn_index") or "").strip() or "0"
-    participant_identity = f"aicc_bridge_{session_ref}_{turn_ref}"
-    participant_metadata = {
-        "direction": "outbound",
-        "target_number": target_number,
-        "owner": "voice_agent",
-    }
-    if reason_summary:
-        participant_metadata["reason_summary"] = str(reason_summary).strip()[:240]
+    original_caller_number = str(
+        (metadata or {}).get("sip_caller_number")
+        or (metadata or {}).get("caller_phone_e164")
+        or ""
+    ).strip()
 
-    request = api.CreateSIPParticipantRequest(
-        sip_trunk_id=str(getattr(outbound_trunk, "sip_trunk_id", "") or "").strip(),
-        sip_call_to=target_number,
-        sip_number=from_number,
-        room_name=room_name,
-        participant_identity=participant_identity,
-        participant_name="AICC bridge",
-        display_name="AICC bridge",
-        participant_metadata=json.dumps(participant_metadata),
-        participant_attributes={
-            "call_role": "aicc_bridge",
-            "route_number": target_number,
-        },
-        headers={
-            "X-Odion-Entry-Surface": "voice-agent",
-            "X-Odion-Room-Name": room_name,
-        },
-        play_dialtone=True,
-        hide_phone_number=False,
-    )
+    participant = None
+    successful_from_number = ""
+    attempt_errors: list[dict[str, str]] = []
+    try:
+        async with _livekit_api() as lkapi:
+            for attempt_index, from_number in enumerate(from_number_candidates, start=1):
+                participant_identity = (
+                    f"aicc_bridge_{session_ref}_{turn_ref}_{attempt_index}"
+                )
+                participant_metadata = {
+                    "direction": "outbound",
+                    "target_number": target_number,
+                    "from_number": from_number,
+                    "original_caller_number": original_caller_number,
+                    "caller_id_attempt": attempt_index,
+                    "caller_id_candidates": from_number_candidates,
+                    "owner": "voice_agent",
+                }
+                if reason_summary:
+                    participant_metadata["reason_summary"] = str(reason_summary).strip()[:240]
 
-    async with _livekit_api() as lkapi:
-        participant = await lkapi.sip.create_sip_participant(request)
+                request = api.CreateSIPParticipantRequest(
+                    sip_trunk_id=str(
+                        getattr(outbound_trunk, "sip_trunk_id", "") or ""
+                    ).strip(),
+                    sip_call_to=target_number,
+                    sip_number=from_number,
+                    room_name=room_name,
+                    participant_identity=participant_identity,
+                    participant_name="AICC bridge",
+                    display_name="AICC bridge",
+                    participant_metadata=json.dumps(participant_metadata),
+                    participant_attributes={
+                        "call_role": "aicc_bridge",
+                        "route_number": target_number,
+                        "from_number": from_number,
+                        "original_caller_number": original_caller_number,
+                    },
+                    headers={
+                        "X-Odion-Entry-Surface": "voice-agent",
+                        "X-Odion-Room-Name": room_name,
+                        "X-Odion-Caller-Number": original_caller_number or from_number,
+                        "X-Odion-Caller-ID-Attempt": str(attempt_index),
+                    },
+                    play_dialtone=True,
+                    wait_until_answered=True,
+                    hide_phone_number=False,
+                )
+
+                try:
+                    participant = await lkapi.sip.create_sip_participant(request)
+                    successful_from_number = from_number
+                    if attempt_index > 1:
+                        logger.info(
+                            "[TOOL] transfer_to_aicc succeeded after retry: room=%s target=%s from=%s attempts=%s",
+                            room_name,
+                            target_number,
+                            from_number,
+                            from_number_candidates[:attempt_index],
+                        )
+                    break
+                except Exception as exc:
+                    error_message = str(exc).strip()
+                    attempt_errors.append(
+                        {"from_number": from_number, "error": error_message[:500]}
+                    )
+                    logger.warning(
+                        "[TOOL] transfer_to_aicc attempt failed: room=%s target=%s from=%s attempt=%s/%s trunk=%s error=%s",
+                        room_name,
+                        target_number,
+                        from_number,
+                        attempt_index,
+                        len(from_number_candidates),
+                        str(getattr(outbound_trunk, "name", "") or "").strip(),
+                        error_message,
+                    )
+
+            if participant is None:
+                raise RuntimeError(
+                    "; ".join(
+                        f"{item['from_number']}: {item['error']}"
+                        for item in attempt_errors
+                    )
+                    or "AICC transfer failed before a SIP participant was created"
+                )
+    except Exception:
+        return {
+            "status": "failed",
+            "message": (
+                "I could not connect a colleague right now. "
+                "Please stay on the line while I continue helping."
+            ),
+            "room_name": room_name,
+            "target_number": target_number,
+            "from_number": from_number_candidates[0],
+            "attempted_from_numbers": from_number_candidates,
+            "outbound_trunk_name": str(
+                getattr(outbound_trunk, "name", "") or ""
+            ).strip(),
+            "outbound_trunk_id": str(
+                getattr(outbound_trunk, "sip_trunk_id", "") or ""
+            ).strip(),
+            "errors": attempt_errors,
+            "error": (attempt_errors[-1]["error"] if attempt_errors else "")[:500],
+        }
+
+    removed_agent_participants: list[str] = []
+    remove_agent_error = ""
+    if AICC_REMOVE_AGENT_AFTER_TRANSFER:
+        try:
+            removed_agent_participants = await _remove_voice_agent_participants(
+                room_name
+            )
+        except Exception as exc:
+            remove_agent_error = str(exc)
+            logger.warning(
+                "[TOOL] transfer_to_aicc bridge started but agent removal failed: room=%s error=%s",
+                room_name,
+                remove_agent_error,
+            )
 
     result = {
         "status": "success",
         "message": "AICC transfer has started.",
         "room_name": room_name,
         "target_number": target_number,
+        "from_number": successful_from_number,
+        "attempted_from_numbers": from_number_candidates,
         "participant_identity": str(
-            getattr(participant, "participant_identity", "") or participant_identity
+            getattr(participant, "participant_identity", "") or ""
         ).strip(),
         "participant_id": str(getattr(participant, "participant_id", "") or "").strip(),
         "sip_call_id": str(getattr(participant, "sip_call_id", "") or "").strip(),
@@ -1152,12 +1365,18 @@ async def transfer_to_aicc(
         "outbound_trunk_id": str(
             getattr(outbound_trunk, "sip_trunk_id", "") or ""
         ).strip(),
+        "agent_removed": bool(removed_agent_participants),
+        "removed_agent_participants": removed_agent_participants,
     }
+    if remove_agent_error:
+        result["agent_remove_error"] = remove_agent_error
     logger.info(
-        "[TOOL] transfer_to_aicc room=%s target=%s trunk=%s",
+        "[TOOL] transfer_to_aicc room=%s target=%s from=%s trunk=%s agent_removed=%s",
         room_name,
         target_number,
+        successful_from_number,
         result["outbound_trunk_name"],
+        bool(removed_agent_participants),
     )
     return result
 
