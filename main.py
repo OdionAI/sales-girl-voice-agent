@@ -4958,7 +4958,7 @@ async def entrypoint(ctx: JobContext):
             await session.start(
                 agent=runtime_agent,
                 room=ctx.room,
-                room_options=room_io.RoomOptions(delete_room_on_close=True),
+                room_options=room_io.RoomOptions(delete_room_on_close=False),
             )
             _start_billing_heartbeat(
                 session=session,
@@ -5153,7 +5153,7 @@ async def entrypoint(ctx: JobContext):
             await session.start(
                 agent=runtime_agent,
                 room=ctx.room,
-                room_options=room_io.RoomOptions(delete_room_on_close=True),
+                room_options=room_io.RoomOptions(delete_room_on_close=False),
             )
             _start_billing_heartbeat(
                 session=session,
