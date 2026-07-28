@@ -46,6 +46,10 @@ AICC_TEST_ACCESS_CODE = str(
 AICC_TRANSFER_TARGET_NUMBER = str(
     os.getenv("AICC_TRANSFER_TARGET_NUMBER") or AICC_TEST_ACCESS_CODE
 ).strip()
+AICC_TRANSFER_SIP_URI = str(os.getenv("AICC_TRANSFER_SIP_URI") or "").strip()
+AICC_TRANSFER_STRATEGY = str(
+    os.getenv("AICC_TRANSFER_STRATEGY", "refer_then_bridge") or ""
+).strip().lower()
 AICC_TRANSFER_FROM_NUMBER = str(
     os.getenv("AICC_TRANSFER_FROM_NUMBER") or AICC_TEST_ACCESS_CODE
 ).strip()
@@ -299,6 +303,51 @@ async def _resolve_aicc_outbound_trunk() -> api.SIPOutboundTrunkInfo | None:
             if str(getattr(item, "name", "") or "").strip() == AICC_OUTBOUND_TRUNK_NAME:
                 return item
     return items[0] if len(items) == 1 else None
+
+
+def _aicc_transfer_uri(
+    *,
+    target_number: str,
+    outbound_trunk: api.SIPOutboundTrunkInfo | None,
+) -> str:
+    explicit_uri = AICC_TRANSFER_SIP_URI.strip()
+    if explicit_uri:
+        return explicit_uri
+    address = str(getattr(outbound_trunk, "address", "") or "").strip()
+    if address:
+        transport = str(getattr(outbound_trunk, "transport", "") or "").lower()
+        suffix = ";transport=tcp" if "tcp" in transport else ";transport=udp"
+        return f"sip:{target_number}@{address}{suffix}"
+    return f"tel:{target_number}"
+
+
+async def _transfer_inbound_sip_participant(
+    *,
+    room_name: str,
+    participant_identity: str,
+    transfer_to: str,
+    original_caller_number: str,
+    reason_summary: str | None,
+) -> dict[str, Any]:
+    async with _livekit_api() as lkapi:
+        request = api.TransferSIPParticipantRequest(
+            participant_identity=participant_identity,
+            room_name=room_name,
+            transfer_to=transfer_to,
+            play_dialtone=True,
+            headers={
+                "X-Odion-Entry-Surface": "voice-agent",
+                "X-Odion-Room-Name": room_name,
+                "X-Odion-Caller-Number": original_caller_number,
+                "X-Odion-Transfer-Reason": str(reason_summary or "").strip()[:180],
+            },
+        )
+        participant = await lkapi.sip.transfer_sip_participant(request)
+    return {
+        "participant_identity": participant_identity,
+        "participant_id": str(getattr(participant, "participant_id", "") or "").strip(),
+        "sip_call_id": str(getattr(participant, "sip_call_id", "") or "").strip(),
+    }
 
 
 def _is_voice_agent_participant(identity: str) -> bool:
@@ -1232,6 +1281,11 @@ async def transfer_to_aicc(
         or (metadata or {}).get("caller_phone_e164")
         or ""
     ).strip()
+    inbound_sip_participant_identity = str(
+        (metadata or {}).get("sip_participant_identity") or ""
+    ).strip()
+    if not inbound_sip_participant_identity and original_caller_number:
+        inbound_sip_participant_identity = f"sip_{original_caller_number}"
     if AICC_HANDOFF_DELAY_SECONDS > 0:
         logger.info(
             "[TOOL] transfer_to_aicc waiting before bridge: room=%s delay_seconds=%.2f",
@@ -1239,6 +1293,87 @@ async def transfer_to_aicc(
             AICC_HANDOFF_DELAY_SECONDS,
         )
         await asyncio.sleep(AICC_HANDOFF_DELAY_SECONDS)
+
+    transfer_to = _aicc_transfer_uri(
+        target_number=target_number,
+        outbound_trunk=outbound_trunk,
+    )
+    refer_error = ""
+    if (
+        AICC_TRANSFER_STRATEGY in {"refer", "refer_then_bridge", "transfer"}
+        and inbound_sip_participant_identity
+    ):
+        try:
+            transfer_result = await _transfer_inbound_sip_participant(
+                room_name=room_name,
+                participant_identity=inbound_sip_participant_identity,
+                transfer_to=transfer_to,
+                original_caller_number=original_caller_number,
+                reason_summary=reason_summary,
+            )
+            removed_agent_participants: list[str] = []
+            remove_agent_error = ""
+            if AICC_REMOVE_AGENT_AFTER_TRANSFER:
+                try:
+                    removed_agent_participants = await _remove_voice_agent_participants(
+                        room_name
+                    )
+                except Exception as exc:
+                    remove_agent_error = str(exc)
+                    logger.warning(
+                        "[TOOL] transfer_to_aicc refer succeeded but agent removal failed: room=%s error=%s",
+                        room_name,
+                        remove_agent_error,
+                    )
+            result = {
+                "status": "success",
+                "transfer_mode": "sip_refer",
+                "message": "AICC transfer has started.",
+                "room_name": room_name,
+                "target_number": target_number,
+                "transfer_to": transfer_to,
+                "from_number": original_caller_number,
+                "inbound_sip_participant_identity": inbound_sip_participant_identity,
+                "participant_identity": transfer_result.get("participant_identity", ""),
+                "participant_id": transfer_result.get("participant_id", ""),
+                "sip_call_id": transfer_result.get("sip_call_id", ""),
+                "agent_removed": bool(removed_agent_participants),
+                "removed_agent_participants": removed_agent_participants,
+            }
+            if remove_agent_error:
+                result["agent_remove_error"] = remove_agent_error
+            logger.info(
+                "[TOOL] transfer_to_aicc refer room=%s participant=%s target=%s transfer_to=%s agent_removed=%s",
+                room_name,
+                inbound_sip_participant_identity,
+                target_number,
+                transfer_to,
+                bool(removed_agent_participants),
+            )
+            return result
+        except Exception as exc:
+            refer_error = str(exc).strip()
+            logger.warning(
+                "[TOOL] transfer_to_aicc refer failed; falling back to bridge: room=%s participant=%s transfer_to=%s error=%s",
+                room_name,
+                inbound_sip_participant_identity,
+                transfer_to,
+                refer_error,
+            )
+            if AICC_TRANSFER_STRATEGY in {"refer", "transfer"}:
+                return {
+                    "status": "failed",
+                    "transfer_mode": "sip_refer",
+                    "message": (
+                        "I could not connect a colleague right now. "
+                        "Please stay on the line while I continue helping."
+                    ),
+                    "room_name": room_name,
+                    "target_number": target_number,
+                    "transfer_to": transfer_to,
+                    "inbound_sip_participant_identity": inbound_sip_participant_identity,
+                    "error": refer_error[:500],
+                }
 
     participant = None
     successful_from_number = ""
@@ -1269,8 +1404,8 @@ async def transfer_to_aicc(
                     sip_number=from_number,
                     room_name=room_name,
                     participant_identity=participant_identity,
-                    participant_name="AICC bridge",
-                    display_name="AICC bridge",
+                    participant_name=original_caller_number or "AICC bridge",
+                    display_name=original_caller_number or from_number,
                     participant_metadata=json.dumps(participant_metadata),
                     participant_attributes={
                         "call_role": "aicc_bridge",
@@ -1363,6 +1498,7 @@ async def transfer_to_aicc(
 
     result = {
         "status": "success",
+        "transfer_mode": "sip_bridge",
         "message": "AICC transfer has started.",
         "room_name": room_name,
         "target_number": target_number,
@@ -1373,6 +1509,7 @@ async def transfer_to_aicc(
         ).strip(),
         "participant_id": str(getattr(participant, "participant_id", "") or "").strip(),
         "sip_call_id": str(getattr(participant, "sip_call_id", "") or "").strip(),
+        "refer_error": refer_error,
         "outbound_trunk_name": str(getattr(outbound_trunk, "name", "") or "").strip(),
         "outbound_trunk_id": str(
             getattr(outbound_trunk, "sip_trunk_id", "") or ""
