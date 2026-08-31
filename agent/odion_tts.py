@@ -27,6 +27,7 @@ _NPU_ENDPOINT_HOSTS = {
     "ng-tts.odion.ai",
     "102.140.102.211",
     "10.130.151.11",
+    "102.88.137.124",
 }
 
 
@@ -58,6 +59,7 @@ class _TTSOptions:
     http_chunk_bytes: int
     initial_buffer_ms: int
     output_sample_rate: int
+    is_ascend_openai: bool
 
 
 def _env_int(name: str, default: int, *, minimum: int, maximum: int) -> int:
@@ -231,6 +233,51 @@ def _env_positive_float(name: str, default: float) -> float:
     return value if value > 0 else default
 
 
+def _env_truthy(name: str, *, default: bool = False) -> bool:
+    raw = str(os.getenv(name) or "").strip().lower()
+    if not raw:
+        return default
+    return raw in {"1", "true", "yes", "y", "on"}
+
+
+def _is_ascend_openai_endpoint(endpoint_url: str) -> bool:
+    backend = str(os.getenv("ODION_TTS_BACKEND") or "").strip().lower()
+    if backend == "ascend":
+        return True
+    try:
+        parsed = urlparse(endpoint_url)
+    except Exception:
+        return False
+    return parsed.path.rstrip("/") == "/tts/v1/audio/speech"
+
+
+def _ascend_cached_voice() -> str:
+    """Named Ascend/Qwen3-TTS gateway voice cached server-side."""
+    return str(
+        os.getenv("ASCEND_TTS_CACHED_VOICE")
+        or os.getenv("ASCEND_TTS_VOICE")
+        or ""
+    ).strip()
+
+
+def _ascend_task_type() -> str:
+    task_type = str(os.getenv("ASCEND_TTS_TASK_TYPE") or "Base").strip() or "Base"
+    return "Base" if task_type.lower() == "base" else task_type
+
+
+def _ascend_x_vector_only_mode() -> bool:
+    return _env_truthy("ASCEND_TTS_X_VECTOR_ONLY", default=False)
+
+
+def _ascend_initial_codec_chunk_frames() -> int:
+    return _env_int(
+        "ASCEND_TTS_INITIAL_CODEC_CHUNK_FRAMES",
+        16,
+        minimum=0,
+        maximum=256,
+    )
+
+
 class OdionTTS(tts.TTS):
     def __init__(
         self,
@@ -247,6 +294,7 @@ class OdionTTS(tts.TTS):
     ) -> None:
         endpoint_url = _rewrite_tts_endpoint_url(_resolve_tts_endpoint_url(base_url))
         output_sample_rate = _env_output_sample_rate(endpoint_url)
+        is_ascend_openai = _is_ascend_openai_endpoint(endpoint_url)
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=False),
             sample_rate=output_sample_rate,
@@ -303,6 +351,7 @@ class OdionTTS(tts.TTS):
                 maximum=2000,
             ),
             output_sample_rate=output_sample_rate,
+            is_ascend_openai=is_ascend_openai,
         )
         if not self._opts.owner_id:
             raise ValueError("owner_id is required for OdionTTS")
@@ -444,24 +493,53 @@ class ChunkedStream(tts.ChunkedStream):
         return False
 
     async def _stream_request(self, output_emitter: tts.AudioEmitter, opts: _TTSOptions) -> None:
-        payload = {
-            "text": self._input_text,
-            "language": opts.language,
-            "owner_id": opts.owner_id,
-        }
-        if opts.model_profile:
-            payload["model_profile"] = opts.model_profile
-        if opts.voice_id:
-            payload["voice_id"] = opts.voice_id
-        if opts.seed is not None:
-            payload["seed"] = opts.seed
-        if opts.output_sample_rate != _DEFAULT_OUTPUT_SAMPLE_RATE:
-            payload["output_sample_rate"] = opts.output_sample_rate
+        cached_voice = _ascend_cached_voice() if opts.is_ascend_openai else ""
+        if opts.is_ascend_openai and cached_voice:
+            payload = {
+                "input": self._input_text,
+                "model": opts.model_profile or "Qwen3-TTS",
+                "task_type": _ascend_task_type(),
+                "voice": cached_voice,
+                "language": opts.language,
+                "x_vector_only_mode": _ascend_x_vector_only_mode(),
+                "response_format": "pcm",
+                "stream": True,
+                "stream_format": "audio",
+                "initial_codec_chunk_frames": _ascend_initial_codec_chunk_frames(),
+            }
+            if opts.seed is not None:
+                payload["seed"] = opts.seed
+            logger.info(
+                "Ascend TTS payload: model=%s task_type=%s cached_voice=%s language=%s x_vector_only_mode=%s initial_codec_chunk_frames=%s input_chars=%s",
+                payload["model"],
+                payload["task_type"],
+                cached_voice,
+                payload["language"],
+                str(payload["x_vector_only_mode"]).lower(),
+                payload["initial_codec_chunk_frames"],
+                len(self._input_text or ""),
+            )
+        else:
+            payload = {
+                "text": self._input_text,
+                "language": opts.language,
+                "owner_id": opts.owner_id,
+            }
+            if opts.model_profile:
+                payload["model_profile"] = opts.model_profile
+            if opts.voice_id:
+                payload["voice_id"] = opts.voice_id
+            if opts.seed is not None:
+                payload["seed"] = opts.seed
+            if opts.output_sample_rate != _DEFAULT_OUTPUT_SAMPLE_RATE:
+                payload["output_sample_rate"] = opts.output_sample_rate
         logger.info(
-            "TTS request -> endpoint_url=%s owner_id=%s voice_id=%s model_profile=%s seed=%s language=%s mode=%s output_sample_rate=%s chars=%s",
+            "TTS request -> endpoint_url=%s ascend_openai=%s owner_id=%s voice_id=%s cached_voice=%s model_profile=%s seed=%s language=%s mode=%s output_sample_rate=%s chars=%s",
             opts.endpoint_url,
+            opts.is_ascend_openai,
             opts.owner_id,
-            opts.voice_id,
+            opts.voice_id if not opts.is_ascend_openai else None,
+            cached_voice,
             opts.model_profile,
             opts.seed,
             opts.language,

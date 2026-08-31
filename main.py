@@ -1182,10 +1182,10 @@ class FallbackGoogleLLM(llm.LLM):
     def provider(self) -> str:
         return "google"
 
-    def prewarm(self) -> None:
-        self._primary.prewarm()
+    def prewarm(self, *args: Any, **kwargs: Any) -> None:
+        self._primary.prewarm(*args, **kwargs)
         if self._backup:
-            self._backup.prewarm()
+            self._backup.prewarm(*args, **kwargs)
 
     async def aclose(self) -> None:
         await self._primary.aclose()
@@ -1309,10 +1309,10 @@ class FallbackGroqLLM(llm.LLM):
     def provider(self) -> str:
         return "groq"
 
-    def prewarm(self) -> None:
-        self._primary.prewarm()
+    def prewarm(self, *args: Any, **kwargs: Any) -> None:
+        self._primary.prewarm(*args, **kwargs)
         if self._backup:
-            self._backup.prewarm()
+            self._backup.prewarm(*args, **kwargs)
 
     async def aclose(self) -> None:
         await self._primary.aclose()
@@ -2081,6 +2081,55 @@ def _wire_session_timeline(session: AgentSession, userdata: dict[str, Any]) -> N
             int(userdata.get("timeline_event_index", 0)) + 1
         )
         return int(userdata["timeline_event_index"])
+
+    @session.on("metrics_collected")
+    def _on_metrics_collected(ev: Any) -> None:
+        metrics = getattr(ev, "metrics", ev)
+        metric_type = str(getattr(metrics, "type", "") or "").strip().lower()
+        turn_index = int(userdata.get("turn_index", 0) or 0)
+        if metric_type == "stt_metrics":
+            logger.info(
+                "Voice latency: stage=stt turn=%s provider=%s model=%s duration_ms=%.1f audio_duration_s=%.2f streamed=%s",
+                turn_index,
+                str(getattr(metrics, "provider", "") or ""),
+                str(getattr(metrics, "model", "") or ""),
+                float(getattr(metrics, "duration", 0.0) or 0.0) * 1000,
+                float(getattr(metrics, "audio_duration", 0.0) or 0.0),
+                bool(getattr(metrics, "streamed", False)),
+            )
+            return
+        if metric_type == "eou_metrics":
+            logger.info(
+                "Voice latency: stage=turn_detection turn=%s endpointing_ms=%.1f transcription_delay_ms=%.1f turn_callback_ms=%.1f",
+                turn_index,
+                float(getattr(metrics, "end_of_utterance_delay", 0.0) or 0.0) * 1000,
+                float(getattr(metrics, "transcription_delay", 0.0) or 0.0) * 1000,
+                float(getattr(metrics, "on_user_turn_completed_delay", 0.0) or 0.0) * 1000,
+            )
+            return
+        if metric_type == "llm_metrics":
+            logger.info(
+                "Voice latency: stage=llm turn=%s provider=%s model=%s ttft_ms=%.1f duration_ms=%.1f completion_tokens=%s cancelled=%s",
+                turn_index,
+                str(getattr(metrics, "provider", "") or ""),
+                str(getattr(metrics, "model", "") or ""),
+                float(getattr(metrics, "ttft", 0.0) or 0.0) * 1000,
+                float(getattr(metrics, "duration", 0.0) or 0.0) * 1000,
+                int(getattr(metrics, "completion_tokens", 0) or 0),
+                bool(getattr(metrics, "cancelled", False)),
+            )
+            return
+        if metric_type == "tts_metrics":
+            logger.info(
+                "Voice latency: stage=tts turn=%s provider=%s model=%s ttfb_ms=%.1f duration_ms=%.1f audio_duration_s=%.2f cancelled=%s",
+                turn_index,
+                str(getattr(metrics, "provider", "") or ""),
+                str(getattr(metrics, "model", "") or ""),
+                float(getattr(metrics, "ttfb", 0.0) or 0.0) * 1000,
+                float(getattr(metrics, "duration", 0.0) or 0.0) * 1000,
+                float(getattr(metrics, "audio_duration", 0.0) or 0.0),
+                bool(getattr(metrics, "cancelled", False)),
+            )
 
     @session.on("user_input_transcribed")
     def _on_user_input_transcribed(ev: Any) -> None:
@@ -3654,7 +3703,14 @@ def _build_tts_engine_for_language(
     is_fr = lang == "fr"
     saved_provider = str(active_agent_config.get("tts_provider") or "").strip().lower()
     runtime_overrides = _runtime_overrides_from_userdata(userdata)
-    override_provider = str(runtime_overrides.get("tts_provider") or "").strip().lower()
+    default_tts_provider = str(
+        os.getenv("VOICE_AGENT_TTS_PROVIDER")
+        or os.getenv("DEFAULT_TTS_PROVIDER")
+        or ""
+    ).strip().lower()
+    override_provider = str(
+        runtime_overrides.get("tts_provider") or default_tts_provider
+    ).strip().lower()
     override_model = (
         str(runtime_overrides.get("tts_model") or "").strip()
         or _deepgram_tts_model_for_language(lang)
@@ -3749,7 +3805,9 @@ def _build_tts_engine_for_language(
         ).strip()
         or ("French" if is_fr else "English")
     )
-    tts_mode_override = _normalize_tts_mode(userdata.get("tts_mode") or "")
+    tts_mode_override = _normalize_tts_mode(
+        userdata.get("tts_mode") or os.getenv("VOICE_AGENT_TTS_MODE") or ""
+    )
     tts_owner_id_override = str(userdata.get("tts_owner_id") or "").strip()
     tts_voice_id_override = str(userdata.get("tts_voice_id") or "").strip()
     tts_language_hint_override = str(userdata.get("tts_language_hint") or "").strip()
@@ -3777,7 +3835,10 @@ def _build_tts_engine_for_language(
     use_odion_default = not use_configured_clone
 
     if runtime_odion_tts_requested:
-        use_configured_clone = bool(tts_voice_id) and tts_mode_override == "cloned_voice"
+        use_configured_clone = (
+            tts_mode_override == "cloned_voice"
+            and (bool(tts_voice_id) or bool(os.getenv("ASCEND_TTS_CACHED_VOICE")))
+        )
         use_odion_default = not use_configured_clone
 
     if not odion_enabled and not runtime_odion_tts_requested:
@@ -3829,14 +3890,26 @@ def _build_tts_engine_for_language(
                 base_url=tts_endpoint_override or None,
                 api_key=override_api_key or None,
             )
-            logger.info(
-                "Using Odion default TTS for %s session: agent_config_id=%s owner_id=%s model=%s language_hint=%s",
-                fallback_label,
-                userdata.get("agent_config_id"),
-                tts_owner_id or business_id,
-                tts_model_override,
-                tts_language_hint,
-            )
+            cached_voice = str(os.getenv("ASCEND_TTS_CACHED_VOICE") or "").strip()
+            if cached_voice and str(os.getenv("ODION_TTS_BACKEND") or "").strip().lower() == "ascend":
+                logger.info(
+                    "Using Odion Ascend cached-voice TTS for %s session: agent_config_id=%s owner_id=%s cached_voice=%s model=%s language_hint=%s",
+                    fallback_label,
+                    userdata.get("agent_config_id"),
+                    tts_owner_id or business_id,
+                    cached_voice,
+                    tts_model_override or "Qwen3-TTS",
+                    tts_language_hint,
+                )
+            else:
+                logger.info(
+                    "Using Odion default TTS for %s session: agent_config_id=%s owner_id=%s model=%s language_hint=%s",
+                    fallback_label,
+                    userdata.get("agent_config_id"),
+                    tts_owner_id or business_id,
+                    tts_model_override,
+                    tts_language_hint,
+                )
             return tts_engine
     except Exception as exc:  # noqa: BLE001
         if use_configured_clone and STRICT_ODION_CLONE_CONSISTENCY:

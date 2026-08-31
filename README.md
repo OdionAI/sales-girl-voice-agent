@@ -114,6 +114,107 @@ python main.py dev
 
 Create `.env` from `.env.example` before running locally.
 
+### Pre-RVC full LiveKit cached Helen voice branch
+
+Use branch `full-livekit-version` for the preserved full LiveKit
+`AgentSession` runtime with the Ascend/Qwen3-TTS server-cached ICL cloned
+voice. This branch keeps the original LiveKit architecture intact: prompt/config
+loading, tools, interruption handling, call lifecycle, and browser-room audio
+all continue through the normal LiveKit worker path. It does not introduce the
+separate RVC pipeline.
+
+For isolated local browser experiments, do not register as the deployed
+production/SIP worker names. Use a unique worker name such as:
+
+```bash
+export AGENT_NAME=sales-girl-agent-en-pre-rvc-helen-cached-fast
+export AGENT_PORT=8188
+```
+
+Use Deepgram for ASR and Ascend/Qwen3-TTS for the cached Helen voice:
+
+```bash
+export VOICE_AGENT_STT_PROVIDER=deepgram
+export VOICE_AGENT_STT_MODEL=nova-3
+export VOICE_AGENT_TTS_PROVIDER=odion_tts
+export VOICE_AGENT_TTS_MODE=cloned_voice
+export ODION_TTS_BACKEND=ascend
+export NG_TTS_BASE_URL=http://102.88.137.124:8080/tts/v1/audio/speech
+export ODION_TTS_BASE_URL=http://102.88.137.124:8080/tts/v1/audio/speech
+export ASCEND_TTS_TASK_TYPE=Base
+export ASCEND_TTS_CACHED_VOICE=helen-mavino-0030
+export ASCEND_TTS_X_VECTOR_ONLY=false
+export ASCEND_TTS_INITIAL_CODEC_CHUNK_FRAMES=2
+export ODION_TTS_FRAME_SIZE_MS=80
+export ODION_TTS_HTTP_CHUNK_BYTES=2048
+export ODION_TTS_INITIAL_BUFFER_MS=0
+export VOICE_LATENCY_TRACE_ENABLED=true
+```
+
+The Ascend request contract for cached voice synthesis is:
+
+```json
+{
+  "input": "<text to speak>",
+  "model": "Qwen3-TTS",
+  "task_type": "Base",
+  "voice": "helen-mavino-0030",
+  "language": "English",
+  "x_vector_only_mode": false,
+  "response_format": "pcm",
+  "stream": true,
+  "stream_format": "audio",
+  "initial_codec_chunk_frames": 2
+}
+```
+
+The adapter must send the cached voice as `voice`, not `voice_id`, and must not
+send `ref_audio` or `ref_text` per phrase. The full ICL profile is already
+stored by the gateway as `helen-mavino-0030`.
+
+Before a test session, confirm the cached voice still exists:
+
+```bash
+curl -sS http://102.88.137.124:8080/tts/v1/audio/voices
+```
+
+Direct TTS smoke test:
+
+```bash
+curl -sS -m 90 \
+  -X POST http://102.88.137.124:8080/tts/v1/audio/speech \
+  -H 'Content-Type: application/json' \
+  -d '{"input":"Hello, this is Sarah speaking with the cached Helen cloned voice for a short latency smoke test.","model":"Qwen3-TTS","task_type":"Base","voice":"helen-mavino-0030","language":"English","x_vector_only_mode":false,"response_format":"pcm","stream":true,"stream_format":"audio","initial_codec_chunk_frames":2}' \
+  -o /tmp/pre-rvc-helen-smoke.pcm \
+  -w 'http_code=%{http_code} size=%{size_download} time_starttransfer=%{time_starttransfer} time_total=%{time_total}\n'
+```
+
+For browser testing, start the dashboard locally with dispatch forced to the
+same isolated worker name:
+
+```bash
+PUBLIC_AGENT_BASELINE_ENABLED=true \
+PUBLIC_AGENT_BASELINE_RUNTIME_AGENT_NAME=sales-girl-agent-en-pre-rvc-helen-cached-fast \
+PUBLIC_AGENT_EXPLICIT_DISPATCH=true \
+FORCE_ENV_LIVEKIT_URL=true \
+LOCAL_RUNTIME_AGENT_NAME_EN=sales-girl-agent-en-pre-rvc-helen-cached-fast \
+LOCAL_RUNTIME_AGENT_NAME_FR=sales-girl-agent-en-pre-rvc-helen-cached-fast \
+npm run dev:next -- -p 3000
+```
+
+Expected log evidence:
+
+- `Using Odion Ascend cached-voice TTS ... cached_voice=helen-mavino-0030`
+- `Ascend TTS payload: model=Qwen3-TTS task_type=Base cached_voice=helen-mavino-0030`
+- `TTS request -> ... ascend_openai=True ... voice_id=None cached_voice=helen-mavino-0030`
+- `TTS response <- ... sample_rate=24000 channels=1 frame_size_ms=80`
+- no per-phrase `ref_audio` or `ref_text`
+
+With `ASCEND_TTS_INITIAL_CODEC_CHUNK_FRAMES=2`, direct gateway probes measured
+first audio body bytes around `400ms`. Earlier `16`-frame tests measured around
+`1.0s`, so use `2` for lower-latency conversational browser tests unless audio
+stability requires increasing to `4`.
+
 ## Key environment variables
 
 - `LIVEKIT_URL`
