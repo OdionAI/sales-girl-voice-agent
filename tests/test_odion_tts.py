@@ -149,6 +149,9 @@ class OdionTTSTests(unittest.TestCase):
                     "stt_provider": "odion_stt",
                     "stt_base_url": "http://34.122.84.20/stt/v1/stt/stream",
                     "tts_base_url": "http://34.122.84.20/api/v1/tts/stream",
+                    "llm_provider": "qwen_openai",
+                    "llm_model": "qwen3.8_27b",
+                    "llm_base_url": "http://npu.test/v1/chat/completions",
                     "ignored": "not copied",
                 }
             }
@@ -169,6 +172,9 @@ class OdionTTSTests(unittest.TestCase):
                 "stt_provider": "odion_stt",
                 "stt_base_url": "http://34.122.84.20/stt/v1/stt/stream",
                 "tts_base_url": "http://34.122.84.20/api/v1/tts/stream",
+                "llm_provider": "qwen_openai",
+                "llm_model": "qwen3.8_27b",
+                "llm_base_url": "http://npu.test/v1/chat/completions",
             },
         )
 
@@ -225,8 +231,17 @@ class OdionTTSTests(unittest.TestCase):
 
 
 class _FakeVoiceLabContext:
-    def __init__(self, *, room_name: str, metadata: str) -> None:
-        self.job = SimpleNamespace(room=SimpleNamespace(name=room_name))
+    def __init__(
+        self,
+        *,
+        room_name: str,
+        metadata: str,
+        job_metadata: str = "",
+    ) -> None:
+        self.job = SimpleNamespace(
+            room=SimpleNamespace(name=room_name),
+            metadata=job_metadata,
+        )
         self.room = SimpleNamespace(name=room_name, remote_participants={})
         self._metadata = metadata
         self.wait_count = 0
@@ -239,6 +254,52 @@ class _FakeVoiceLabContext:
 
 
 class VoiceLabMetadataHydrationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_dispatch_metadata_hydrates_overrides_before_participant_joins(
+        self,
+    ) -> None:
+        runtime_overrides = {
+            "stt_provider": "odion_stt",
+            "stt_base_url": "ws://102.88.137.124:8080/asr-rt/v1/realtime",
+            "stt_transport": "ws",
+            "tts_provider": "odion_tts",
+            "tts_base_url": "http://102.88.137.124:8080/tts/v1/audio/speech",
+            "tts_mode": "default_voice",
+            "tts_initial_codec_chunk_frames": "2",
+            "tts_http_chunk_bytes": "4096",
+            "tts_initial_buffer_ms": "0",
+            "llm_provider": "qwen_openai",
+            "llm_base_url": "http://102.88.137.124:8080/qwen38-standard/v1/chat/completions",
+            "llm_disable_thinking": "true",
+        }
+        metadata = json.dumps(
+            {
+                "end_user_email": "research@odion.ai",
+                "identity_type": "web",
+                "runtime_overrides": runtime_overrides,
+            }
+        )
+        room_name = (
+            f"voice_assistant_room_eid{_room_token('research@odion.ai')}"
+            f"_bid{_room_token('business-123')}"
+            f"_aid{_room_token('agent-123')}"
+            f"_nid{_room_token('Jane')}_9876"
+        )
+        ctx = _FakeVoiceLabContext(
+            room_name=room_name,
+            metadata=metadata,
+            job_metadata=metadata,
+        )
+
+        userdata = await main._init_session_userdata(ctx, language="en")
+
+        self.assertEqual(ctx.wait_count, 0)
+        self.assertEqual(userdata["runtime_overrides"], runtime_overrides)
+        self.assertEqual(userdata["tts_mode"], "default_voice")
+        self.assertEqual(
+            userdata["runtime_overrides"]["tts_initial_codec_chunk_frames"],
+            "2",
+        )
+
     async def test_web_room_waits_for_runtime_overrides_before_billing(self) -> None:
         endpoint = "http://34.122.84.20/api/v1/tts/stream"
         runtime_overrides = {

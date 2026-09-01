@@ -5,6 +5,7 @@ import re
 import asyncio
 import base64
 import hashlib
+import time
 from typing import Any
 import uuid
 from urllib.parse import urlparse
@@ -15,10 +16,13 @@ load_dotenv()
 
 from livekit.agents import (
     APIConnectOptions,
+    EndpointingOptions,
+    InterruptionOptions,
     NOT_GIVEN,
     AgentServer,
     AgentSession,
     JobContext,
+    TurnHandlingOptions,
     cli,
     room_io,
 )
@@ -26,7 +30,7 @@ from livekit.agents import llm, stt
 from livekit.agents._exceptions import APIConnectionError, APIStatusError
 from livekit.agents.llm import LLMStream
 from livekit.agents.llm.tool_context import find_function_tools
-from livekit.plugins import deepgram, google, groq, silero
+from livekit.plugins import deepgram, google, groq, openai, silero
 
 from agent.conversation_memory import (
     append_message,
@@ -66,7 +70,13 @@ from agent.ops_api import (
     search_business_knowledge as ops_search_business_knowledge,
 )
 from agent.odion_tts import OdionTTS
-from agent.odion_stt import DEFAULT_ODION_STT_BASE_URL, OdionSTT
+from agent.odion_stt import (
+    DEFAULT_ODION_STT_BASE_URL,
+    ODION_STT_REALTIME_ENDPOINTING_SILENCE_SECONDS,
+    ODION_STT_REALTIME_MIN_SPEECH_SECONDS,
+    ODION_STT_REALTIME_VAD_ACTIVATION_THRESHOLD,
+    OdionSTT,
+)
 from agent.observability import flush_traces, trace_conversation_event
 from agent.livekit_recording import (
     finalize_room_recording,
@@ -83,6 +93,8 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
+
+VOICE_LAB_METRICS_TOPIC = "odion.voice_lab.metrics"
 
 
 # AgentServer allows only one rtc_session per process. To support both English and
@@ -1074,8 +1086,13 @@ if TURN_MAX_ENDPOINTING_DELAY < TURN_MIN_ENDPOINTING_DELAY:
 
 TURN_MIN_INTERRUPTION_DURATION = _float_env(
     "TURN_MIN_INTERRUPTION_DURATION",
-    0.7,
+    0.25,
     min_value=0.1,
+)
+TURN_AEC_WARMUP_DURATION = _float_env(
+    "TURN_AEC_WARMUP_DURATION",
+    0.5,
+    min_value=0.0,
 )
 
 GOOGLE_LLM_MODEL_DEFAULT = (
@@ -1130,6 +1147,18 @@ GROQ_LLM_BACKUP_MODEL_EN = (
 GROQ_LLM_BACKUP_MODEL_FR = (
     str(os.getenv("GROQ_LLM_BACKUP_MODEL_FR") or GROQ_LLM_BACKUP_MODEL_DEFAULT).strip()
     or GROQ_LLM_BACKUP_MODEL_DEFAULT
+)
+QWEN_LLM_MODEL_DEFAULT = (
+    str(os.getenv("QWEN_LLM_MODEL_DEFAULT") or "qwen3.8_27b").strip()
+    or "qwen3.8_27b"
+)
+QWEN_LLM_MODEL_EN = (
+    str(os.getenv("QWEN_LLM_MODEL_EN") or QWEN_LLM_MODEL_DEFAULT).strip()
+    or QWEN_LLM_MODEL_DEFAULT
+)
+QWEN_LLM_MODEL_FR = (
+    str(os.getenv("QWEN_LLM_MODEL_FR") or QWEN_LLM_MODEL_DEFAULT).strip()
+    or QWEN_LLM_MODEL_DEFAULT
 )
 
 
@@ -1404,12 +1433,82 @@ class _FallbackGroqLLMStream(llm.LLMStream):
         raise APIConnectionError("No Groq model could be selected for this request.")
 
 
-def _build_llm_for_language(*, language: str) -> llm.LLM:
+def _openai_compatible_base_url(value: str) -> str:
+    base_url = str(value or "").strip().rstrip("/")
+    suffix = "/chat/completions"
+    if base_url.endswith(suffix):
+        return base_url[: -len(suffix)]
+    return base_url
+
+
+def _runtime_override_truthy(value: Any, *, default: bool = False) -> bool:
+    normalized = str(value or "").strip().lower()
+    if not normalized:
+        return default
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
+def _build_llm_for_language(
+    *, language: str, userdata: dict[str, Any] | None = None
+) -> llm.LLM:
     lang = str(language or "").strip().lower()
-    provider = LLM_PROVIDER
+    overrides = _normalize_runtime_overrides((userdata or {}).get("runtime_overrides"))
+    override_provider = str(overrides.get("llm_provider") or "").strip().lower()
+    provider = override_provider or LLM_PROVIDER
+
+    if provider in {"qwen", "qwen_openai", "openai", "openai_compatible", "custom"}:
+        model = (
+            str(overrides.get("llm_model") or "").strip()
+            or (QWEN_LLM_MODEL_FR if lang == "fr" else QWEN_LLM_MODEL_EN)
+        )
+        endpoint = (
+            str(overrides.get("llm_base_url") or "").strip()
+            or str(os.getenv("QWEN_LLM_BASE_URL") or "").strip()
+        )
+        base_url = _openai_compatible_base_url(endpoint)
+        if not base_url:
+            raise ValueError("QWEN_LLM_BASE_URL is required for the Qwen LLM provider")
+        api_key = (
+            str(overrides.get("llm_api_key") or "").strip()
+            or str(os.getenv("QWEN_LLM_API_KEY") or "").strip()
+            or "EMPTY"
+        )
+        disable_thinking = _runtime_override_truthy(
+            overrides.get("llm_disable_thinking"),
+            default=False,
+        )
+        logger.info(
+            "Using Qwen OpenAI-compatible LLM for %s session: model=%s base_url=%s thinking=%s runtime_override=%s",
+            "French" if lang == "fr" else "English",
+            model,
+            base_url,
+            "disabled" if disable_thinking else "enabled",
+            bool(override_provider or overrides.get("llm_base_url")),
+        )
+        return openai.LLM(
+            model=model,
+            api_key=api_key,
+            base_url=base_url,
+            temperature=0,
+            extra_body={
+                "chat_template_kwargs": {
+                    "enable_thinking": not disable_thinking,
+                }
+            },
+        )
+
     if provider == "groq":
-        primary_model = GROQ_LLM_MODEL_FR if lang == "fr" else GROQ_LLM_MODEL_EN
-        backup_model = GROQ_LLM_BACKUP_MODEL_FR if lang == "fr" else GROQ_LLM_BACKUP_MODEL_EN
+        primary_model = (
+            str(overrides.get("llm_model") or "").strip()
+            or (GROQ_LLM_MODEL_FR if lang == "fr" else GROQ_LLM_MODEL_EN)
+        )
+        backup_model = "" if override_provider else (
+            GROQ_LLM_BACKUP_MODEL_FR if lang == "fr" else GROQ_LLM_BACKUP_MODEL_EN
+        )
         logger.info(
             "Using Groq LLM for %s session: primary=%s backup=%s",
             "French" if lang == "fr" else "English",
@@ -1421,8 +1520,11 @@ def _build_llm_for_language(*, language: str) -> llm.LLM:
             backup_model=backup_model,
         )
 
-    primary_model = GOOGLE_LLM_MODEL_FR if lang == "fr" else GOOGLE_LLM_MODEL_EN
-    backup_model = (
+    primary_model = (
+        str(overrides.get("llm_model") or "").strip()
+        or (GOOGLE_LLM_MODEL_FR if lang == "fr" else GOOGLE_LLM_MODEL_EN)
+    )
+    backup_model = "" if override_provider else (
         GOOGLE_LLM_BACKUP_MODEL_FR if lang == "fr" else GOOGLE_LLM_BACKUP_MODEL_EN
     )
     logger.info(
@@ -1641,10 +1743,27 @@ _RUNTIME_OVERRIDE_KEYS = (
     "stt_provider",
     "stt_model",
     "stt_base_url",
+    "stt_transport",
     "tts_provider",
     "tts_model",
     "tts_base_url",
     "tts_api_key",
+    "tts_transport",
+    "tts_mode",
+    "tts_voice_id",
+    "tts_owner_id",
+    "tts_language_hint",
+    "tts_seed",
+    "tts_initial_codec_chunk_frames",
+    "tts_stream_first_chunk_bytes",
+    "tts_stream_chunk_bytes",
+    "tts_http_chunk_bytes",
+    "tts_initial_buffer_ms",
+    "llm_provider",
+    "llm_model",
+    "llm_base_url",
+    "llm_api_key",
+    "llm_disable_thinking",
 )
 
 
@@ -1775,24 +1894,6 @@ def _participant_identity_from_ctx(
     if not participants:
         return "", "voice", fallback_business_id, "", "", "", "", {}
 
-    def _normalize_runtime_overrides(payload: Any) -> dict[str, str]:
-        if not isinstance(payload, dict):
-            return {}
-        normalized: dict[str, str] = {}
-        for key in (
-            "stt_provider",
-            "stt_model",
-            "stt_base_url",
-            "tts_provider",
-            "tts_model",
-            "tts_base_url",
-            "tts_api_key",
-        ):
-            value = str(payload.get(key) or "").strip()
-            if value:
-                normalized[key] = value
-        return normalized
-
     values = participants.values() if hasattr(participants, "values") else participants
     for participant in values:
         metadata_business_id = ""
@@ -1897,10 +1998,22 @@ async def _init_session_userdata(ctx: JobContext, language: str) -> dict[str, An
         configured_agent_name,
         end_user_name,
         tts_endpoint,
-        runtime_overrides,
+        identity_runtime_overrides,
     ) = _participant_identity_from_ctx(ctx)
+    job_runtime_overrides = _normalize_runtime_overrides(
+        job_metadata.get("runtime_overrides")
+    )
     participant_overrides = _extract_tts_overrides_from_ctx(ctx)
-    runtime_overrides = participant_overrides.get("runtime_overrides") or {}
+    runtime_overrides = {
+        **job_runtime_overrides,
+        **identity_runtime_overrides,
+        **participant_overrides.get("runtime_overrides", {}),
+    }
+    tts_endpoint = (
+        participant_overrides.get("tts_endpoint")
+        or _normalize_tts_endpoint(job_metadata.get("tts_endpoint") or "")
+        or tts_endpoint
+    )
 
     needs_identity = REQUIRE_VERIFIED_PHONE and not end_user_id
     needs_web_metadata = (
@@ -1921,11 +2034,18 @@ async def _init_session_userdata(ctx: JobContext, language: str) -> dict[str, An
                 configured_agent_name,
                 end_user_name,
                 tts_endpoint,
-                runtime_overrides,
+                identity_runtime_overrides,
             ) = _participant_identity_from_ctx(ctx)
             participant_overrides = _extract_tts_overrides_from_ctx(ctx)
-            runtime_overrides = (
-                participant_overrides.get("runtime_overrides") or runtime_overrides
+            runtime_overrides = {
+                **job_runtime_overrides,
+                **identity_runtime_overrides,
+                **participant_overrides.get("runtime_overrides", {}),
+            }
+            tts_endpoint = (
+                participant_overrides.get("tts_endpoint")
+                or _normalize_tts_endpoint(job_metadata.get("tts_endpoint") or "")
+                or tts_endpoint
             )
             logger.info(
                 "Retried participant identity after join: end_user_id=%s type=%s business_id=%s config_agent_id=%s configured_name=%s end_user_name=%s tts_endpoint=%s runtime_overrides=%s",
@@ -1977,11 +2097,11 @@ async def _init_session_userdata(ctx: JobContext, language: str) -> dict[str, An
         "entry_surface": str(job_metadata.get("entry_surface") or "").strip(),
         "session_owner": str(job_metadata.get("owner") or "").strip(),
         "route_number": str(job_metadata.get("route_number") or "").strip(),
-        "tts_mode": "auto",
-        "tts_owner_id": "",
-        "tts_voice_id": "",
-        "tts_language_hint": "",
-        "tts_seed": "",
+        "tts_mode": runtime_overrides.get("tts_mode") or "auto",
+        "tts_owner_id": runtime_overrides.get("tts_owner_id") or "",
+        "tts_voice_id": runtime_overrides.get("tts_voice_id") or "",
+        "tts_language_hint": runtime_overrides.get("tts_language_hint") or "",
+        "tts_seed": runtime_overrides.get("tts_seed") or "",
         "business_id": business_id,
         "conversation_id": conversation_id,
         "session_id": stable_session_id,
@@ -1999,7 +2119,58 @@ async def _init_session_userdata(ctx: JobContext, language: str) -> dict[str, An
     } | participant_overrides | _extract_session_extras_from_ctx(ctx)
 
 
-def _wire_session_timeline(session: AgentSession, userdata: dict[str, Any]) -> None:
+def _wire_session_timeline(
+    session: AgentSession,
+    userdata: dict[str, Any],
+    *,
+    room: Any | None = None,
+) -> None:
+    voice_lab_metrics_enabled = room is not None and bool(
+        userdata.get("runtime_overrides")
+        or str(userdata.get("entry_surface") or "").strip().lower() == "voice_lab"
+    )
+
+    def _publish_voice_lab_metric(event: str, **values: Any) -> None:
+        if not voice_lab_metrics_enabled:
+            return
+        turn_id = str(
+            values.pop("turn_id", "")
+            or userdata.get("voice_lab_active_turn_id")
+            or ""
+        ).strip()
+        turn_index = int(
+            values.pop("turn_index", 0)
+            or userdata.get("voice_lab_active_turn_index")
+            or 0
+        )
+        if not turn_id or turn_index <= 0:
+            return
+        payload = {
+            "type": "odion.voice_lab.metric",
+            "event": event,
+            "turn_id": turn_id,
+            "turn_index": turn_index,
+            "ts_ms": int(values.pop("ts_ms", 0) or time.time() * 1000),
+            **values,
+        }
+
+        async def _publish() -> None:
+            try:
+                await room.local_participant.publish_data(
+                    json.dumps(payload),
+                    reliable=True,
+                    topic=VOICE_LAB_METRICS_TOPIC,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "Could not publish Voice Lab metric event=%s turn=%s: %s",
+                    event,
+                    turn_index,
+                    exc,
+                )
+
+        _track_background_task(userdata, _publish())
+
     async def _update_live_agent_instructions(instructions: str) -> None:
         current_agent = getattr(session, "current_agent", None)
         if current_agent is None:
@@ -2108,6 +2279,7 @@ def _wire_session_timeline(session: AgentSession, userdata: dict[str, Any]) -> N
             )
             return
         if metric_type == "llm_metrics":
+            llm_ttft_ms = float(getattr(metrics, "ttft", 0.0) or 0.0) * 1000
             logger.info(
                 "Voice latency: stage=llm turn=%s provider=%s model=%s ttft_ms=%.1f duration_ms=%.1f completion_tokens=%s cancelled=%s",
                 turn_index,
@@ -2118,8 +2290,20 @@ def _wire_session_timeline(session: AgentSession, userdata: dict[str, Any]) -> N
                 int(getattr(metrics, "completion_tokens", 0) or 0),
                 bool(getattr(metrics, "cancelled", False)),
             )
+            if llm_ttft_ms > 0 and not bool(getattr(metrics, "cancelled", False)):
+                _publish_voice_lab_metric(
+                    "llm_first_token",
+                    provider=str(getattr(metrics, "provider", "") or ""),
+                    model=str(getattr(metrics, "model", "") or ""),
+                    llm_ttft_ms=llm_ttft_ms,
+                )
             return
         if metric_type == "tts_metrics":
+            tts_ttfb_ms = float(getattr(metrics, "ttfb", 0.0) or 0.0) * 1000
+            tts_total_ms = float(getattr(metrics, "duration", 0.0) or 0.0) * 1000
+            tts_audio_seconds = float(
+                getattr(metrics, "audio_duration", 0.0) or 0.0
+            )
             logger.info(
                 "Voice latency: stage=tts turn=%s provider=%s model=%s ttfb_ms=%.1f duration_ms=%.1f audio_duration_s=%.2f cancelled=%s",
                 turn_index,
@@ -2130,6 +2314,28 @@ def _wire_session_timeline(session: AgentSession, userdata: dict[str, Any]) -> N
                 float(getattr(metrics, "audio_duration", 0.0) or 0.0),
                 bool(getattr(metrics, "cancelled", False)),
             )
+            if tts_ttfb_ms > 0 and not bool(getattr(metrics, "cancelled", False)):
+                duration_seconds = tts_total_ms / 1000
+                _publish_voice_lab_metric(
+                    "tts_done",
+                    transport=str(
+                        (userdata.get("runtime_overrides") or {}).get("tts_transport")
+                        or "http"
+                    ),
+                    ttfa_ms=tts_ttfb_ms,
+                    total_ms=tts_total_ms,
+                    audio_seconds=tts_audio_seconds,
+                    rtf=(
+                        duration_seconds / tts_audio_seconds
+                        if tts_audio_seconds > 0
+                        else None
+                    ),
+                    audio_wall=(
+                        tts_audio_seconds / duration_seconds
+                        if duration_seconds > 0
+                        else None
+                    ),
+                )
 
     @session.on("user_input_transcribed")
     def _on_user_input_transcribed(ev: Any) -> None:
@@ -2139,6 +2345,19 @@ def _wire_session_timeline(session: AgentSession, userdata: dict[str, Any]) -> N
 
         userdata["turn_index"] = int(userdata.get("turn_index", 0)) + 1
         userdata["last_user_transcript"] = transcript
+        turn_index = int(userdata["turn_index"])
+        created_at = float(getattr(ev, "created_at", 0.0) or time.time())
+        turn_id = f"turn-{turn_index}-{int(created_at * 1000)}"
+        userdata["voice_lab_active_turn_id"] = turn_id
+        userdata["voice_lab_active_turn_index"] = turn_index
+        _publish_voice_lab_metric(
+            "stt_final",
+            turn_id=turn_id,
+            turn_index=turn_index,
+            ts_ms=int(created_at * 1000),
+            transcript_preview=transcript[:160],
+            transcript_chars=len(transcript),
+        )
         _schedule_dynamic_knowledge_refresh(transcript)
         event_idx = _next_event_idx()
         trace_conversation_event(
@@ -2171,6 +2390,11 @@ def _wire_session_timeline(session: AgentSession, userdata: dict[str, Any]) -> N
 
         if role.lower() == "assistant":
             userdata["last_assistant_message"] = content
+            _publish_voice_lab_metric(
+                "llm_first_text",
+                assistant_preview=content[:160],
+                assistant_chars=len(content),
+            )
         elif role.lower() == "user":
             if content != userdata.get("last_user_transcript"):
                 userdata["turn_index"] = int(userdata.get("turn_index", 0)) + 1
@@ -3516,26 +3740,47 @@ def _build_session_for_language(
 ) -> AgentSession:
     if stt_engine is None:
         stt_engine = _build_stt_engine_for_language(language=language, userdata=userdata)
-    session_llm = _build_llm_for_language(language=language)
+    session_llm = _build_llm_for_language(language=language, userdata=userdata)
+    odion_stt = (
+        stt_engine.wrapped_stt
+        if isinstance(stt_engine, stt.StreamAdapter)
+        else stt_engine
+    )
+    session_vad = (
+        odion_stt.endpointing_vad if isinstance(odion_stt, OdionSTT) else None
+    )
+    turn_handling = TurnHandlingOptions(
+        endpointing=EndpointingOptions(
+            min_delay=TURN_MIN_ENDPOINTING_DELAY,
+            max_delay=TURN_MAX_ENDPOINTING_DELAY,
+        ),
+        interruption=InterruptionOptions(
+            enabled=True,
+            mode="vad",
+            min_duration=TURN_MIN_INTERRUPTION_DURATION,
+            min_words=0,
+            resume_false_interruption=False,
+            false_interruption_timeout=None,
+        ),
+    )
+    session_options: dict[str, Any] = {
+        "stt": stt_engine,
+        "llm": session_llm,
+        "userdata": userdata,
+        "turn_handling": turn_handling,
+        "aec_warmup_duration": TURN_AEC_WARMUP_DURATION,
+    }
+    if session_vad is not None:
+        session_options["vad"] = session_vad
     if language == "fr":
         return AgentSession(
-            stt=stt_engine,
             tts=tts_engine or deepgram.TTS(model="aura-2-agathe-fr"),
-            llm=session_llm,
-            userdata=userdata,
-            min_endpointing_delay=TURN_MIN_ENDPOINTING_DELAY,
-            max_endpointing_delay=TURN_MAX_ENDPOINTING_DELAY,
-            min_interruption_duration=TURN_MIN_INTERRUPTION_DURATION,
+            **session_options,
         )
 
     return AgentSession(
-        stt=stt_engine,
         tts=tts_engine,
-        llm=session_llm,
-        userdata=userdata,
-        min_endpointing_delay=TURN_MIN_ENDPOINTING_DELAY,
-        max_endpointing_delay=TURN_MAX_ENDPOINTING_DELAY,
-        min_interruption_duration=TURN_MIN_INTERRUPTION_DURATION,
+        **session_options,
     )
 
 
@@ -3544,7 +3789,7 @@ def _trigger_first_turn(
 ) -> None:
     try:
         session.generate_reply(
-            instructions=_kickoff_prompt_for_language(language, business_use_case),
+            user_input=_kickoff_prompt_for_language(language, business_use_case),
             input_modality="text",
         )
     except Exception as exc:  # noqa: BLE001
@@ -3643,6 +3888,10 @@ def _default_odion_stt_base_url() -> str:
     )
 
 
+def _default_odion_stt_transport() -> str:
+    return str(os.getenv("ODION_STT_TRANSPORT") or "").strip().lower()
+
+
 def _build_stt_engine_for_language(*, language: str, userdata: dict[str, Any]) -> Any:
     lang = str(language or "").strip().lower()
     overrides = _runtime_overrides_from_userdata(userdata)
@@ -3651,24 +3900,38 @@ def _build_stt_engine_for_language(*, language: str, userdata: dict[str, Any]) -
     )
     model = str(overrides.get("stt_model") or _default_stt_model()).strip() or _default_stt_model()
     base_url = str(overrides.get("stt_base_url") or "").strip()
+    transport = str(
+        overrides.get("stt_transport")
+        or ("" if base_url else _default_odion_stt_transport())
+    ).strip().lower()
 
     if provider == "odion_stt":
         resolved_base_url = base_url or _default_odion_stt_base_url()
         logger.info(
-            "Using Odion STT runtime selection: base_url=%s model=%s language=%s override=%s",
+            "Using Odion STT runtime selection: base_url=%s model=%s language=%s transport=%s override=%s",
             resolved_base_url,
             model,
             lang,
+            transport or "auto",
             bool(overrides.get("stt_provider") or overrides.get("stt_base_url")),
+        )
+        endpointing_vad = silero.VAD.load(
+            min_speech_duration=ODION_STT_REALTIME_MIN_SPEECH_SECONDS,
+            min_silence_duration=ODION_STT_REALTIME_ENDPOINTING_SILENCE_SECONDS,
+            activation_threshold=ODION_STT_REALTIME_VAD_ACTIVATION_THRESHOLD,
         )
         odion_stt = OdionSTT(
             language=lang,
             model=model,
             base_url=resolved_base_url,
+            transport=transport,
+            endpointing_vad=endpointing_vad,
         )
+        if odion_stt.capabilities.streaming:
+            return odion_stt
         return stt.StreamAdapter(
             stt=odion_stt,
-            vad=silero.VAD.load(),
+            vad=endpointing_vad,
         )
     stt_kwargs: dict[str, Any] = {
         "language": _deepgram_stt_language_for_language(lang),
@@ -4056,7 +4319,7 @@ async def entrypoint(ctx: JobContext):
                     for tool in dynamic_tools
                 ],
             )
-        _wire_session_timeline(session, session.userdata)
+        _wire_session_timeline(session, session.userdata, room=ctx.room)
         try:
             if conversation_service_enabled(business_id) and userdata.get(
                 "conversation_id"
@@ -4237,7 +4500,7 @@ async def entrypoint(ctx: JobContext):
                     for tool in dynamic_tools
                 ],
             )
-        _wire_session_timeline(session, session.userdata)
+        _wire_session_timeline(session, session.userdata, room=ctx.room)
         try:
             if conversation_service_enabled(business_id) and userdata.get(
                 "conversation_id"
