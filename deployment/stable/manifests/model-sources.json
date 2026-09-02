@@ -1,0 +1,29 @@
+{
+  "captured_at": "2026-09-02",
+  "models": [
+    {
+      "service": "asr",
+      "model_id": "Qwen/Qwen3-ASR-1.7B",
+      "local_path": "/data/models/Qwen3-ASR-1.7B",
+      "upstream_revision": null,
+      "identity_source": "deployment/stable/manifests/model-metadata.sha256 and model-weights-asr-llm.sha256"
+    },
+    {
+      "service": "tts",
+      "model_id": "Qwen/Qwen3-TTS-12Hz-1.7B-Base",
+      "local_path": "/data/models/Qwen3-TTS-12Hz-1.7B-Base",
+      "upstream_revision": "fd4b254389122332181a7c3db7f27e918eec64e3",
+      "identity_source": "deployment/stable/manifests/model-metadata.sha256 and model-weights-tts.sha256"
+    },
+    {
+      "service": "llm",
+      "model_id": "Qwen/Qwen3.8-27B",
+      "local_path": "/data/models/Qwen3.8-27B-w8a8",
+      "quantization": "Ascend W8A8",
+      "quantizer": "msmodelslim",
+      "quantizer_revision": "173fc3787b496d4ef2e1e995bbf17c19f65a2083",
+      "upstream_revision": null,
+      "identity_source": "deployment/stable/manifests/model-metadata.sha256 and model-weights-asr-llm.sha256"
+    }
+  ]
+}

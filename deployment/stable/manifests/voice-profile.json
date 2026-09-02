@@ -1,0 +1,11 @@
+{
+  "profile_name": "helen-mavino-0030",
+  "filename": "helen-mavino-0030_user-approved-2026-08-25_1787674731.safetensors",
+  "size_bytes": 435712,
+  "sha256": "80f7f1af82958a2b878f8c2d20d53209fe944af4cd1af8e5cca5fec3d29defa4",
+  "container_path": "/root/.cache/vllm-omni/speakers/helen-mavino-0030_user-approved-2026-08-25_1787674731.safetensors",
+  "contains_biometric_audio": true,
+  "committed_to_git": false,
+  "local_backup_path": ".artifacts/stable/server-backup/tts-speakers/helen-mavino-0030_user-approved-2026-08-25_1787674731.safetensors",
+  "recovery": "Use deployment/stable/scripts/restore-helen-voice.sh with a private copy of this exact file."
+}

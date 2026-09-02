@@ -1,0 +1,219 @@
+[
+  {
+    "name": "qwen3.8_27b",
+    "container_id": "07c466e465765c9bdedb66695ed831d1259fe73bba93c1b85434969150e667de",
+    "created": "2026-08-19T15:43:22.980802733Z",
+    "image_ref": "quay.io/ascend/vllm-ascend:v0.23.0",
+    "image_id": "sha256:4ee78def8f33d59d48f116d1dfa793332c23c99ecab4f0d7dd5cd62d0fb4e6c1",
+    "path": "/bin/bash",
+    "args": [
+      "-c",
+      "    source /usr/local/Ascend/ascend-toolkit/set_env.sh &&     source /usr/local/Ascend/cann-9.1.0/share/info/ascendnpu-ir/bin/set_env.sh &&     source /usr/local/Ascend/nnal/atb/set_env.sh --cxx_abi=${ATB_CXX_ABI:-1}&&     exec \"$@\"",
+      "--",
+      "bash"
+    ],
+    "restart_policy": "no",
+    "network_mode": "host",
+    "ipc_mode": "host",
+    "privileged": true,
+    "shm_size_bytes": 10737418240,
+    "devices": [
+      "/dev/davinci0",
+      "/dev/davinci1",
+      "/dev/davinci2",
+      "/dev/davinci3",
+      "/dev/davinci4",
+      "/dev/davinci5",
+      "/dev/davinci6",
+      "/dev/davinci7",
+      "/dev/davinci_manager",
+      "/dev/devmm_svm",
+      "/dev/hisi_hdc"
+    ],
+    "mounts": [
+      {
+        "type": "bind",
+        "source": "/usr/local/Ascend/driver/tools/hccn_tool",
+        "destination": "/usr/local/Ascend/driver/tools/hccn_tool",
+        "read_write": true
+      },
+      {
+        "type": "bind",
+        "source": "/usr/local/bin/npu-smi",
+        "destination": "/usr/local/bin/npu-smi",
+        "read_write": true
+      },
+      {
+        "type": "bind",
+        "source": "/usr/local/Ascend/driver/lib64",
+        "destination": "/usr/local/Ascend/driver/lib64",
+        "read_write": true
+      },
+      {
+        "type": "bind",
+        "source": "/usr/local/Ascend/driver/version.info",
+        "destination": "/usr/local/Ascend/driver/version.info",
+        "read_write": true
+      },
+      {
+        "type": "bind",
+        "source": "/etc/ascend_install.info",
+        "destination": "/etc/ascend_install.info",
+        "read_write": true
+      },
+      {
+        "type": "bind",
+        "source": "/etc/hccn.conf",
+        "destination": "/etc/hccn.conf",
+        "read_write": true
+      },
+      {
+        "type": "bind",
+        "source": "/data",
+        "destination": "/data",
+        "read_write": true
+      },
+      {
+        "type": "bind",
+        "source": "/usr/local/dcmi",
+        "destination": "/usr/local/dcmi",
+        "read_write": true
+      }
+    ]
+  },
+  {
+    "name": "asr",
+    "container_id": "91c885524c51439fc1966417fe69dc36f2c5fe1a4981ec1308bdff6989e64645",
+    "created": "2026-07-23T18:48:22.950905175Z",
+    "image_ref": "quay.io/ascend/vllm-ascend:v0.22.1rc1",
+    "image_id": "sha256:9008b47081282612abfe4d28069ce34436752c980fd06f7599343213205ce64d",
+    "path": "/bin/bash",
+    "args": [
+      "-c",
+      "    source /usr/local/Ascend/ascend-toolkit/set_env.sh &&     source /usr/local/Ascend/cann-9.0.0/share/info/ascendnpu-ir/bin/set_env.sh &&     source /usr/local/Ascend/nnal/atb/set_env.sh &&     exec \"$@\"",
+      "--",
+      "bash"
+    ],
+    "restart_policy": "no",
+    "network_mode": "host",
+    "ipc_mode": "private",
+    "privileged": true,
+    "shm_size_bytes": 4294967296,
+    "devices": [
+      "/dev/davinci0",
+      "/dev/davinci1",
+      "/dev/davinci2",
+      "/dev/davinci3",
+      "/dev/davinci4",
+      "/dev/davinci5",
+      "/dev/davinci6",
+      "/dev/davinci7",
+      "/dev/davinci_manager",
+      "/dev/devmm_svm",
+      "/dev/hisi_hdc"
+    ],
+    "mounts": [
+      {
+        "type": "bind",
+        "source": "/usr/local/dcmi",
+        "destination": "/usr/local/dcmi",
+        "read_write": true
+      },
+      {
+        "type": "bind",
+        "source": "/usr/local/sbin",
+        "destination": "/usr/local/sbin",
+        "read_write": true
+      },
+      {
+        "type": "bind",
+        "source": "/usr/local/bin/npu-smi",
+        "destination": "/usr/local/bin/npu-smi",
+        "read_write": true
+      },
+      {
+        "type": "bind",
+        "source": "/usr/local/Ascend/driver",
+        "destination": "/usr/local/Ascend/driver",
+        "read_write": true
+      },
+      {
+        "type": "bind",
+        "source": "/etc/ascend_install.info",
+        "destination": "/etc/ascend_install.info",
+        "read_write": true
+      },
+      {
+        "type": "bind",
+        "source": "/data",
+        "destination": "/data",
+        "read_write": true
+      }
+    ]
+  },
+  {
+    "name": "tts",
+    "container_id": "4e11567bd1c11aef0b06311174b9fcf5072f4093a34da380c5eb1e8458930569",
+    "created": "2026-07-23T08:27:07.611687278Z",
+    "image_ref": "quay.io/ascend/vllm-omni:v0.25.0",
+    "image_id": "sha256:acba66221a39170cbc405c7e7aa69b73b1905e04ef92f04943a61bb3878d6761",
+    "path": "bash",
+    "args": [],
+    "restart_policy": "no",
+    "network_mode": "host",
+    "ipc_mode": "private",
+    "privileged": true,
+    "shm_size_bytes": 4294967296,
+    "devices": [
+      "/dev/davinci0",
+      "/dev/davinci1",
+      "/dev/davinci2",
+      "/dev/davinci3",
+      "/dev/davinci4",
+      "/dev/davinci5",
+      "/dev/davinci6",
+      "/dev/davinci7",
+      "/dev/davinci_manager",
+      "/dev/devmm_svm",
+      "/dev/hisi_hdc"
+    ],
+    "mounts": [
+      {
+        "type": "bind",
+        "source": "/usr/local/dcmi",
+        "destination": "/usr/local/dcmi",
+        "read_write": true
+      },
+      {
+        "type": "bind",
+        "source": "/usr/local/sbin",
+        "destination": "/usr/local/sbin",
+        "read_write": true
+      },
+      {
+        "type": "bind",
+        "source": "/usr/local/bin/npu-smi",
+        "destination": "/usr/local/bin/npu-smi",
+        "read_write": true
+      },
+      {
+        "type": "bind",
+        "source": "/usr/local/Ascend/driver",
+        "destination": "/usr/local/Ascend/driver",
+        "read_write": true
+      },
+      {
+        "type": "bind",
+        "source": "/etc/ascend_install.info",
+        "destination": "/etc/ascend_install.info",
+        "read_write": true
+      },
+      {
+        "type": "bind",
+        "source": "/data",
+        "destination": "/data",
+        "read_write": true
+      }
+    ]
+  }
+]

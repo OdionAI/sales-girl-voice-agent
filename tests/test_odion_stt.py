@@ -464,7 +464,11 @@ class OdionSTTTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(
             fake_websocket.sent_json[0],
-            {"type": "session.update", "model": "Qwen3-ASR"},
+            {
+                "type": "session.update",
+                "model": "Qwen3-ASR",
+                "language": "English",
+            },
         )
         self.assertEqual(
             fake_websocket.sent_json[1],
@@ -719,9 +723,9 @@ class OdionSTTTests(unittest.IsolatedAsyncioTestCase):
             patch.multiple(
                 main,
                 TURN_MIN_ENDPOINTING_DELAY=0.45,
-                TURN_MAX_ENDPOINTING_DELAY=1.2,
-                TURN_MIN_INTERRUPTION_DURATION=0.25,
-                TURN_AEC_WARMUP_DURATION=0.5,
+                TURN_MAX_ENDPOINTING_DELAY=0.9,
+                TURN_MIN_INTERRUPTION_DURATION=0.1,
+                TURN_AEC_WARMUP_DURATION=0.1,
             ),
             patch("main._build_llm_for_language", return_value=object()),
             patch(
@@ -739,20 +743,20 @@ class OdionSTTTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(
             session.turn_handling["endpointing"],
-            {"min_delay": 0.45, "max_delay": 1.2},
+            {"min_delay": 0.45, "max_delay": 0.9},
         )
         self.assertEqual(
             session.turn_handling["interruption"],
             {
                 "enabled": True,
                 "mode": "vad",
-                "min_duration": 0.25,
+                "min_duration": 0.1,
                 "min_words": 0,
                 "resume_false_interruption": False,
                 "false_interruption_timeout": None,
             },
         )
-        self.assertEqual(session.aec_warmup_duration, 0.5)
+        self.assertEqual(session.aec_warmup_duration, 0.1)
 
     def test_session_builder_shares_odion_vad_for_immediate_barge_in(self) -> None:
         endpointing_vad = object()

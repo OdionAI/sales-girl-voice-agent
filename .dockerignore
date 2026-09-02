@@ -1,7 +1,15 @@
 .git
 .github
 .venv
+.env
+.env.*
+.artifacts
+.codex_backups
+.idea
 __pycache__
 *.pyc
+*.log
+screenlog.*
+node_modules
 .DS_Store
 conversation_memory.db
