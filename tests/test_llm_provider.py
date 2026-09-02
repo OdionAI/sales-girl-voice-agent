@@ -32,6 +32,57 @@ class LlmProviderTests(unittest.TestCase):
             self.assertEqual(llm_engine.provider, "groq")
             self.assertEqual(llm_engine.model, main.GROQ_LLM_MODEL_EN)
 
+    def test_build_llm_uses_qwen_with_thinking_disabled_by_default(self) -> None:
+        with (
+            patch.object(main, "LLM_PROVIDER", "qwen"),
+            patch.object(
+                main,
+                "QWEN_LLM_BASE_URL",
+                "http://102.88.137.124:8080/qwen38-standard/v1",
+            ),
+            patch("main.openai.LLM", return_value=object()) as llm_factory,
+        ):
+            main._build_llm_for_language(language="en")
+
+        llm_factory.assert_called_once_with(
+            model="qwen3.8_27b",
+            api_key="EMPTY",
+            base_url="http://102.88.137.124:8080/qwen38-standard/v1",
+            temperature=0,
+            extra_body={
+                "chat_template_kwargs": {
+                    "thinking": False,
+                    "enable_thinking": False,
+                }
+            },
+        )
+
+    def test_qwen_runtime_override_can_disable_thinking_explicitly(self) -> None:
+        with patch("main.openai.LLM", return_value=object()) as llm_factory:
+            main._build_llm_for_language(
+                language="en",
+                userdata={
+                    "runtime_overrides": {
+                        "llm_provider": "qwen_openai",
+                        "llm_model": "qwen3.8_27b",
+                        "llm_base_url": (
+                            "http://102.88.137.124:8080/"
+                            "qwen38-standard/v1/chat/completions"
+                        ),
+                        "llm_disable_thinking": "true",
+                    }
+                },
+            )
+
+        kwargs = llm_factory.call_args.kwargs
+        self.assertEqual(kwargs["model"], "qwen3.8_27b")
+        self.assertEqual(
+            kwargs["base_url"],
+            "http://102.88.137.124:8080/qwen38-standard/v1",
+        )
+        self.assertFalse(kwargs["extra_body"]["chat_template_kwargs"]["enable_thinking"])
+        self.assertFalse(kwargs["extra_body"]["chat_template_kwargs"]["thinking"])
+
     def test_groq_qwen_models_disable_reasoning_for_voice_latency(self) -> None:
         kwargs = main._groq_llm_kwargs_for_model("qwen/qwen3-32b")
         self.assertEqual(kwargs, {"reasoning_effort": "none"})

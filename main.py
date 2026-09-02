@@ -1343,7 +1343,7 @@ TURN_MIN_INTERRUPTION_DURATION = _float_env(
 )
 
 VOICE_AGENT_LLM_PROVIDER = str(
-    os.getenv("VOICE_AGENT_LLM_PROVIDER") or os.getenv("LLM_PROVIDER") or "maas"
+    os.getenv("VOICE_AGENT_LLM_PROVIDER") or os.getenv("LLM_PROVIDER") or "qwen"
 ).strip().lower()
 MAAS_API_KEY = str(os.getenv("MAAS_API_KEY") or os.getenv("HUAWEI_MAAS_API_KEY") or "").strip()
 MAAS_BASE_URL = str(
@@ -1352,6 +1352,23 @@ MAAS_BASE_URL = str(
 MAAS_LLM_MODEL_DEFAULT = str(os.getenv("MAAS_LLM_MODEL_DEFAULT") or "glm-5.2").strip() or "glm-5.2"
 MAAS_LLM_MODEL_EN = str(os.getenv("MAAS_LLM_MODEL_EN") or MAAS_LLM_MODEL_DEFAULT).strip() or MAAS_LLM_MODEL_DEFAULT
 MAAS_LLM_MODEL_FR = str(os.getenv("MAAS_LLM_MODEL_FR") or MAAS_LLM_MODEL_DEFAULT).strip() or MAAS_LLM_MODEL_DEFAULT
+QWEN_LLM_BASE_URL = str(
+    os.getenv("QWEN_LLM_BASE_URL")
+    or "http://102.88.137.124:8080/qwen38-standard/v1"
+).strip()
+QWEN_LLM_API_KEY = str(os.getenv("QWEN_LLM_API_KEY") or "EMPTY").strip() or "EMPTY"
+QWEN_LLM_MODEL_DEFAULT = (
+    str(os.getenv("QWEN_LLM_MODEL_DEFAULT") or os.getenv("QWEN_LLM_MODEL") or "qwen3.8_27b").strip()
+    or "qwen3.8_27b"
+)
+QWEN_LLM_MODEL_EN = (
+    str(os.getenv("QWEN_LLM_MODEL_EN") or QWEN_LLM_MODEL_DEFAULT).strip()
+    or QWEN_LLM_MODEL_DEFAULT
+)
+QWEN_LLM_MODEL_FR = (
+    str(os.getenv("QWEN_LLM_MODEL_FR") or QWEN_LLM_MODEL_DEFAULT).strip()
+    or QWEN_LLM_MODEL_DEFAULT
+)
 
 GOOGLE_LLM_MODEL_DEFAULT = (
     str(os.getenv("GOOGLE_LLM_MODEL_DEFAULT") or "gemini-3-flash-preview").strip()
@@ -1379,8 +1396,8 @@ GOOGLE_LLM_BACKUP_MODEL_FR = (
 )
 
 LLM_PROVIDER = str(
-    os.getenv("LLM_PROVIDER") or os.getenv("VOICE_AGENT_LLM_PROVIDER") or "maas"
-).strip().lower() or "maas"
+    os.getenv("LLM_PROVIDER") or os.getenv("VOICE_AGENT_LLM_PROVIDER") or "qwen"
+).strip().lower() or "qwen"
 GROQ_LLM_MODEL_DEFAULT = (
     str(
         os.getenv("GROQ_LLM_MODEL_DEFAULT")
@@ -1903,9 +1920,69 @@ class _LatencyTracingLLMStream(llm.LLMStream):
             raise
 
 
-def _build_llm_for_language(*, language: str) -> llm.LLM:
+def _openai_compatible_base_url(value: str) -> str:
+    base_url = str(value or "").strip().rstrip("/")
+    suffix = "/chat/completions"
+    if base_url.endswith(suffix):
+        return base_url[: -len(suffix)]
+    return base_url
+
+
+def _runtime_override_truthy(value: Any, *, default: bool = False) -> bool:
+    normalized = str(value or "").strip().lower()
+    if not normalized:
+        return default
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
+def _build_llm_for_language(
+    *, language: str, userdata: dict[str, Any] | None = None
+) -> llm.LLM:
     lang = str(language or "").strip().lower()
-    provider = LLM_PROVIDER
+    overrides = _normalize_runtime_overrides((userdata or {}).get("runtime_overrides"))
+    override_provider = str(overrides.get("llm_provider") or "").strip().lower()
+    provider = override_provider or LLM_PROVIDER
+    if provider in {"qwen", "qwen_openai", "openai", "openai_compatible", "custom"}:
+        model = (
+            str(overrides.get("llm_model") or "").strip()
+            or (QWEN_LLM_MODEL_FR if lang == "fr" else QWEN_LLM_MODEL_EN)
+        )
+        endpoint = (
+            str(overrides.get("llm_base_url") or "").strip()
+            or QWEN_LLM_BASE_URL
+        )
+        base_url = _openai_compatible_base_url(endpoint)
+        if not base_url:
+            raise ValueError("QWEN_LLM_BASE_URL is required for the Qwen LLM provider")
+        api_key = str(overrides.get("llm_api_key") or "").strip() or QWEN_LLM_API_KEY
+        disable_thinking = _runtime_override_truthy(
+            overrides.get("llm_disable_thinking"),
+            default=True,
+        )
+        logger.info(
+            "Using Qwen OpenAI-compatible LLM for %s session: model=%s base_url=%s thinking=%s runtime_override=%s",
+            "French" if lang == "fr" else "English",
+            model,
+            base_url,
+            "disabled" if disable_thinking else "enabled",
+            bool(override_provider or overrides.get("llm_base_url")),
+        )
+        return openai.LLM(
+            model=model,
+            api_key=api_key,
+            base_url=base_url,
+            temperature=0,
+            extra_body={
+                "chat_template_kwargs": {
+                    "thinking": not disable_thinking,
+                    "enable_thinking": not disable_thinking,
+                }
+            },
+        )
     if provider == "maas":
         if not MAAS_API_KEY:
             raise RuntimeError("MAAS_API_KEY is required when using the Huawei MaaS voice runtime.")
@@ -2150,10 +2227,27 @@ _RUNTIME_OVERRIDE_KEYS = (
     "stt_provider",
     "stt_model",
     "stt_base_url",
+    "stt_transport",
     "tts_provider",
     "tts_model",
     "tts_base_url",
     "tts_api_key",
+    "tts_transport",
+    "tts_mode",
+    "tts_voice_id",
+    "tts_owner_id",
+    "tts_language_hint",
+    "tts_seed",
+    "tts_initial_codec_chunk_frames",
+    "tts_stream_first_chunk_bytes",
+    "tts_stream_chunk_bytes",
+    "tts_http_chunk_bytes",
+    "tts_initial_buffer_ms",
+    "llm_provider",
+    "llm_model",
+    "llm_base_url",
+    "llm_api_key",
+    "llm_disable_thinking",
 )
 
 
@@ -4253,7 +4347,7 @@ def _build_session_for_language(
     if stt_engine is None:
         stt_engine = _build_stt_engine_for_language(language=language, userdata=userdata)
     session_llm = LatencyTracingLLM(
-        _build_llm_for_language(language=language),
+        _build_llm_for_language(language=language, userdata=userdata),
         userdata=userdata,
         language=language,
     )
