@@ -66,7 +66,7 @@ or biometric voice material.
 - NPU: `3`; upstream port: `8093`
 - Decode mode: cumulative; cadence: `0.8s`; maximum retained audio: `30s`
 - Forced language: `English`
-- Client finalizer: `0.6s` silence, `0.2s` minimum speech, VAD threshold `0.5`
+- Client finalizer: `0.5s` silence, `0.2s` minimum speech, VAD threshold `0.5`
 
 The two ASR overlays are required. They preserve audio arriving while a decode
 is in flight, cumulatively re-decode the utterance, force the English prompt,
