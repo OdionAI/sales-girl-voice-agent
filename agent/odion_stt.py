@@ -50,9 +50,9 @@ ODION_STT_HTTP_TRANSPORT = "http"
 ODION_STT_WEBSOCKET_TRANSPORT = "ws"
 ODION_STT_REALTIME_SAMPLE_RATE = 16000
 ODION_STT_REALTIME_CHUNK_MS = 100
-ODION_STT_REALTIME_ENDPOINTING_SILENCE_SECONDS = 0.4
-ODION_STT_REALTIME_MIN_SPEECH_SECONDS = 0.25
-ODION_STT_REALTIME_VAD_ACTIVATION_THRESHOLD = 0.6
+ODION_STT_REALTIME_ENDPOINTING_SILENCE_SECONDS = 0.7
+ODION_STT_REALTIME_MIN_SPEECH_SECONDS = 0.2
+ODION_STT_REALTIME_VAD_ACTIVATION_THRESHOLD = 0.5
 
 logger = logging.getLogger("salesgirl.odion_stt")
 
@@ -647,6 +647,10 @@ class _OdionRealtimeSTTStream(stt.RecognizeStream):
             {
                 "type": "session.update",
                 "model": self._odion_stt.model,
+                "language": _display_language(
+                    self._language,
+                    model=self._odion_stt.model,
+                ),
             }
         )
         await self._arm_generation(ws)
