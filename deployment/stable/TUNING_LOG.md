@@ -12,7 +12,7 @@ before promoting an experiment into the stable baseline.
 | ASR cumulative decode cadence | earlier `0.4s` trial | `0.8s` | `0.4s` degraded/cut off recognition; `0.8s` restored stable transcription. |
 | LiveKit minimum endpointing delay | `0.45s` | `0.30s` | Reduced perceived response latency in Voice Lab; promoted to stable. |
 | LiveKit maximum endpointing delay | `0.90s` | `0.65s` | Reduced the upper wait bound; promoted with the minimum delay. |
-| Client ASR final-silence gate | `0.70s` | `0.70s` | Unchanged; recent normal turns measured about `705ms` endpointing. |
+| Client ASR final-silence gate | `0.70s` | `0.60s` | Reduced turn latency without observed transcription regression; promoted to stable. |
 | Client PCM upload chunk | `100ms` | `100ms` | Unchanged. |
 | Client minimum speech | `0.20s` | `0.20s` | Unchanged. |
 | Client VAD activation threshold | `0.50` | `0.50` | Unchanged. |
@@ -21,3 +21,6 @@ before promoting an experiment into the stable baseline.
 The `0.30s` / `0.65s` endpointing experiment was accepted and promoted to the
 runtime defaults and stable environment templates before beginning another
 turn-taking experiment.
+
+The `0.60s` ASR final-silence experiment was accepted and promoted to the
+runtime default and stable deployment templates.
