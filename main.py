@@ -1479,7 +1479,10 @@ def _build_llm_for_language(
         )
         disable_thinking = _runtime_override_truthy(
             overrides.get("llm_disable_thinking"),
-            default=False,
+            default=_runtime_override_truthy(
+                os.getenv("QWEN_LLM_DISABLE_THINKING"),
+                default=True,
+            ),
         )
         logger.info(
             "Using Qwen OpenAI-compatible LLM for %s session: model=%s base_url=%s thinking=%s runtime_override=%s",
