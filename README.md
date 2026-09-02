@@ -72,8 +72,10 @@ Current stable contract:
   fragments so dashboard and session transcripts reflect final replies cleanly
 - ticket follow-up reconciliation should not create a second ticket when a
   recent successful ticket already exists for the same caller turn flow
-- the production cascade runtime uses Huawei MaaS `glm-5.2` for English and
-  French sessions through the OpenAI-compatible endpoint
+- the production cascade runtime uses Qwen 3.8 27B
+  (`qwen3.8_27b` at `QWEN_LLM_BASE_URL`) with thinking disabled for English and
+  French sessions; Huawei MaaS `glm-5.2` remains an opt-in alternative via
+  `LLM_PROVIDER=maas`
 - optional post-call summary/intent analysis also uses Huawei MaaS and reads
   only messages belonging to the completed session, not older calls in the
   same conversation
@@ -146,8 +148,13 @@ Create `.env` from `.env.example` before running locally.
 - `LIVEKIT_API_KEY`
 - `LIVEKIT_API_SECRET`
 - `DEEPGRAM_API_KEY`
-- `LLM_PROVIDER` (`maas` for the Huawei production runtime; `google` and
-  `groq` remain supported alternatives)
+- `LLM_PROVIDER` (`qwen` for the Qwen 3.8 27B production runtime with thinking
+  off; `maas`, `google`, and `groq` remain supported alternatives)
+- `QWEN_LLM_BASE_URL`
+- `QWEN_LLM_MODEL_DEFAULT`
+- `QWEN_LLM_MODEL_EN`
+- `QWEN_LLM_MODEL_FR`
+- `QWEN_LLM_API_KEY`
 - `MAAS_API_KEY`
 - `MAAS_BASE_URL`
 - `MAAS_LLM_MODEL_DEFAULT`
