@@ -22,6 +22,7 @@ from agent.odion_stt import (
     ODION_STT_REALTIME_VAD_ACTIVATION_THRESHOLD,
     OdionSTT,
     _normalize_realtime_transcript,
+    _realtime_endpointing_silence_seconds,
 )
 
 
@@ -230,6 +231,17 @@ class _FakeSession:
 
 
 class OdionSTTTests(unittest.IsolatedAsyncioTestCase):
+    def test_realtime_endpointing_silence_uses_stable_default(self) -> None:
+        with patch.dict("os.environ", {}, clear=True):
+            self.assertEqual(_realtime_endpointing_silence_seconds(), 0.6)
+
+    def test_realtime_endpointing_silence_can_be_overridden(self) -> None:
+        with patch.dict(
+            "os.environ",
+            {"ODION_STT_REALTIME_ENDPOINTING_SILENCE_SECONDS": "0.55"},
+        ):
+            self.assertEqual(_realtime_endpointing_silence_seconds(), 0.55)
+
     def test_realtime_transcript_removes_non_latin_hallucinations(self) -> None:
         self.assertEqual(
             _normalize_realtime_transcript(
