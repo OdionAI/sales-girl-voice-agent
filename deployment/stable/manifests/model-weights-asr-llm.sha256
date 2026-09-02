@@ -1,0 +1,12 @@
+a4cd1f1a04d90b757dc7f7dd26254e69a013b19e80efe590a83c6a3bde8608d6  /data/models/Qwen3-ASR-1.7B/model-00001-of-00002.safetensors
+6e0b9d9e09e2e0238e7ef3cc8a484ab387e91b90f1900bedf88bc92d7929ccfc  /data/models/Qwen3-ASR-1.7B/model-00002-of-00002.safetensors
+500817339c96773da713ac0d99ca983122cb563e528593df3a8b330ed8648c11  /data/models/Qwen3.8-27B-w8a8/quant_model_weights-00001-of-00010.safetensors
+f0db5b077ce04009320791e4d781e84ce081c4412437af8ed34c8695fdd5baa9  /data/models/Qwen3.8-27B-w8a8/quant_model_weights-00002-of-00010.safetensors
+7d913af1f62f996e076a9a19a1a9e34c0ac3bbec2119a06b5bd23df1ae4e8c06  /data/models/Qwen3.8-27B-w8a8/quant_model_weights-00003-of-00010.safetensors
+ce492366d1902004aaf2e1bfaddf758c6534e6fea00833d77c11c2c277f01392  /data/models/Qwen3.8-27B-w8a8/quant_model_weights-00004-of-00010.safetensors
+6866cf8adcccc4cc6a00e74bc025f1a774fb52103b70f2674d0288272951a733  /data/models/Qwen3.8-27B-w8a8/quant_model_weights-00005-of-00010.safetensors
+1166401c565f47119176b0bb93bbd9fe4f66850e7bc49aabfeba49a20d0c5175  /data/models/Qwen3.8-27B-w8a8/quant_model_weights-00006-of-00010.safetensors
+1e22bff91476ac31fd41fa6c5b6772286cacb458fcb0b13cd0d401d15504cf42  /data/models/Qwen3.8-27B-w8a8/quant_model_weights-00007-of-00010.safetensors
+b11d51a9214229b57daf5b076a85d0fc330e24d814c9e58e1fcc94707f80a74c  /data/models/Qwen3.8-27B-w8a8/quant_model_weights-00008-of-00010.safetensors
+10311cdef6e5c917c29fc5adbbea5e440dbe30ff1614d56466f285ef2c22950b  /data/models/Qwen3.8-27B-w8a8/quant_model_weights-00009-of-00010.safetensors
+54432100b68ff2f5cd362ec5fd5e798bfd259c2a67da75db00d42b310922b732  /data/models/Qwen3.8-27B-w8a8/quant_model_weights-00010-of-00010.safetensors

@@ -114,6 +114,16 @@ python main.py dev
 
 Create `.env` from `.env.example` before running locally.
 
+### Stable low-latency Qwen snapshot
+
+Branch `stable` preserves the complete Voice Lab profile validated on
+2026-09-02: local LiveKit, realtime cumulative Qwen ASR, Qwen 3.8 27B, cached
+Helen Qwen TTS, exact NPU launch scripts, immutable image/source identities,
+model checksums, and recovery probes. Follow
+[`deployment/stable/README.md`](deployment/stable/README.md) for replay or cold
+recovery. Secrets, model weights, image archives, and biometric voice material
+are intentionally kept in private storage rather than Git.
+
 ### Pre-RVC full LiveKit cached Helen voice branch
 
 Use branch `full-livekit-version` for the preserved full LiveKit

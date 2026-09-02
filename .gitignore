@@ -21,6 +21,12 @@ build/
 # OS / editor junk
 .DS_Store
 *.log
+.idea/
+.codex_backups/
+screenlog.*
+
+# Private recovery artifacts (model exports, voice profiles, raw server state)
+.artifacts/
 
 # SQLite database (optional, recommended)
 appointments.db
