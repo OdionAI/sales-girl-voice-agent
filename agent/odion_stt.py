@@ -5,6 +5,7 @@ import base64
 import io
 import json
 import logging
+import os
 import re
 import unicodedata
 import wave
@@ -43,6 +44,28 @@ except ImportError:
             body=body,
         )
 
+logger = logging.getLogger("salesgirl.odion_stt")
+
+
+def _realtime_endpointing_silence_seconds() -> float:
+    default = 0.6
+    raw = str(
+        os.getenv("ODION_STT_REALTIME_ENDPOINTING_SILENCE_SECONDS") or ""
+    ).strip()
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        logger.warning(
+            "Invalid ODION_STT_REALTIME_ENDPOINTING_SILENCE_SECONDS=%r; using %.1f",
+            raw,
+            default,
+        )
+        return default
+    return max(0.1, value)
+
+
 DEFAULT_ODION_STT_BASE_URL = "https://eu-stt.odion.ai"
 DEFAULT_ODION_STT_STREAM_PATH = "/stt/v1/stt/stream"
 DEFAULT_ODION_STT_PATH = DEFAULT_ODION_STT_STREAM_PATH
@@ -50,11 +73,11 @@ ODION_STT_HTTP_TRANSPORT = "http"
 ODION_STT_WEBSOCKET_TRANSPORT = "ws"
 ODION_STT_REALTIME_SAMPLE_RATE = 16000
 ODION_STT_REALTIME_CHUNK_MS = 100
-ODION_STT_REALTIME_ENDPOINTING_SILENCE_SECONDS = 0.7
+ODION_STT_REALTIME_ENDPOINTING_SILENCE_SECONDS = (
+    _realtime_endpointing_silence_seconds()
+)
 ODION_STT_REALTIME_MIN_SPEECH_SECONDS = 0.2
 ODION_STT_REALTIME_VAD_ACTIVATION_THRESHOLD = 0.5
-
-logger = logging.getLogger("salesgirl.odion_stt")
 
 _REALTIME_HYPOTHESIS_PREFIX = re.compile(r"^\s*language\b", re.IGNORECASE)
 _CJK_PUNCTUATION_TRANSLATION = str.maketrans(
