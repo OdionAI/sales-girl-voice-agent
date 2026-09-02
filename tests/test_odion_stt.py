@@ -285,7 +285,6 @@ class OdionSTTTests(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch("main.openai.LLM", return_value=object()) as llm_mock,
-            patch.object(main, "MAAS_API_KEY", "test-maas-key"),
             patch(
                 "main.AgentSession",
                 side_effect=lambda **kwargs: SimpleNamespace(**kwargs),
@@ -302,12 +301,17 @@ class OdionSTTTests(unittest.IsolatedAsyncioTestCase):
         self.assertIs(session.stt, stt_engine)
         self.assertIs(session.tts, tts_engine)
         llm_mock.assert_called_once()
-        self.assertEqual(llm_mock.call_args.kwargs["model"], main.MAAS_LLM_MODEL_EN)
-        self.assertEqual(llm_mock.call_args.kwargs["base_url"], main.MAAS_BASE_URL)
-        self.assertEqual(llm_mock.call_args.kwargs["api_key"], "test-maas-key")
+        self.assertEqual(llm_mock.call_args.kwargs["model"], main.QWEN_LLM_MODEL_EN)
+        self.assertEqual(llm_mock.call_args.kwargs["base_url"], main.QWEN_LLM_BASE_URL)
+        self.assertEqual(llm_mock.call_args.kwargs["api_key"], main.QWEN_LLM_API_KEY)
         self.assertEqual(
             llm_mock.call_args.kwargs["extra_body"],
-            {"chat_template_kwargs": {"thinking": False}},
+            {
+                "chat_template_kwargs": {
+                    "thinking": False,
+                    "enable_thinking": False,
+                }
+            },
         )
 
 
