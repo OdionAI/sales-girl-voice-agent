@@ -61,7 +61,7 @@
       "max_audio_seconds": 30,
       "language": "English",
       "client_pcm_chunk_ms": 100,
-      "client_final_silence_seconds": 0.6,
+      "client_final_silence_seconds": 0.5,
       "client_min_speech_seconds": 0.2,
       "client_vad_activation_threshold": 0.5
     }

@@ -48,7 +48,7 @@ logger = logging.getLogger("salesgirl.odion_stt")
 
 
 def _realtime_endpointing_silence_seconds() -> float:
-    default = 0.6
+    default = 0.5
     raw = str(
         os.getenv("ODION_STT_REALTIME_ENDPOINTING_SILENCE_SECONDS") or ""
     ).strip()
