@@ -24,3 +24,12 @@ turn-taking experiment.
 
 The `0.60s` ASR final-silence experiment was accepted and promoted to the
 runtime default and stable deployment templates.
+
+## 2026-09-03 0.50s Silence Tune
+
+| Control | Previous value | Current stable value | Result |
+| --- | ---: | ---: | --- |
+| Client ASR final-silence gate | `0.60s` | `0.50s` | Reduced latency without observed loss of final words or pause tolerance; promoted to stable. |
+
+All other turn-handling and ASR cadence controls remain at the stable values
+listed above.

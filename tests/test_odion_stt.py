@@ -233,14 +233,14 @@ class _FakeSession:
 class OdionSTTTests(unittest.IsolatedAsyncioTestCase):
     def test_realtime_endpointing_silence_uses_stable_default(self) -> None:
         with patch.dict("os.environ", {}, clear=True):
-            self.assertEqual(_realtime_endpointing_silence_seconds(), 0.6)
+            self.assertEqual(_realtime_endpointing_silence_seconds(), 0.5)
 
     def test_realtime_endpointing_silence_can_be_overridden(self) -> None:
         with patch.dict(
             "os.environ",
-            {"ODION_STT_REALTIME_ENDPOINTING_SILENCE_SECONDS": "0.55"},
+            {"ODION_STT_REALTIME_ENDPOINTING_SILENCE_SECONDS": "0.45"},
         ):
-            self.assertEqual(_realtime_endpointing_silence_seconds(), 0.55)
+            self.assertEqual(_realtime_endpointing_silence_seconds(), 0.45)
 
     def test_realtime_transcript_removes_non_latin_hallucinations(self) -> None:
         self.assertEqual(
