@@ -97,8 +97,8 @@ image reproduces the earlier dropped-word and Chinese/Arabic transcript bugs.
 
 ### Turn Handling
 
-- minimum endpointing delay: `0.45s`
-- maximum endpointing delay: `0.9s`
+- minimum endpointing delay: `0.3s`
+- maximum endpointing delay: `0.65s`
 - minimum interruption duration: `0.1s`
 - AEC warmup: `0.1s`
 

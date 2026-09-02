@@ -1070,12 +1070,12 @@ def _float_env(name: str, default: float, *, min_value: float) -> float:
 
 TURN_MIN_ENDPOINTING_DELAY = _float_env(
     "TURN_MIN_ENDPOINTING_DELAY",
-    0.45,
+    0.3,
     min_value=0.1,
 )
 TURN_MAX_ENDPOINTING_DELAY = _float_env(
     "TURN_MAX_ENDPOINTING_DELAY",
-    0.9,
+    0.65,
     min_value=0.2,
 )
 if TURN_MAX_ENDPOINTING_DELAY < TURN_MIN_ENDPOINTING_DELAY:
