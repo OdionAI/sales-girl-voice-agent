@@ -1,3 +1,4 @@
+import os
 import unittest
 from unittest.mock import Mock, patch
 
@@ -47,7 +48,7 @@ class LlmProviderTests(unittest.TestCase):
             temperature=0,
             extra_body={
                 "chat_template_kwargs": {
-                    "enable_thinking": True,
+                    "enable_thinking": False,
                 }
             },
         )
@@ -66,6 +67,27 @@ class LlmProviderTests(unittest.TestCase):
             )
 
         self.assertFalse(
+            llm_factory.call_args.kwargs["extra_body"]
+            ["chat_template_kwargs"]["enable_thinking"]
+        )
+
+    def test_qwen_runtime_override_can_enable_thinking(self) -> None:
+        with (
+            patch.dict(os.environ, {"QWEN_LLM_DISABLE_THINKING": "true"}),
+            patch("main.openai.LLM", return_value=object()) as llm_factory,
+        ):
+            main._build_llm_for_language(
+                language="en",
+                userdata={
+                    "runtime_overrides": {
+                        "llm_provider": "qwen_openai",
+                        "llm_base_url": "http://npu.test/v1/chat/completions",
+                        "llm_disable_thinking": "false",
+                    }
+                },
+            )
+
+        self.assertTrue(
             llm_factory.call_args.kwargs["extra_body"]
             ["chat_template_kwargs"]["enable_thinking"]
         )
