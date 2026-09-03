@@ -193,6 +193,16 @@ class VoiceLabMetricsPublishingTests(unittest.IsolatedAsyncioTestCase):
             registered_handlers["metrics_collected"](
                 SimpleNamespace(
                     metrics=SimpleNamespace(
+                        type="eou_metrics",
+                        end_of_utterance_delay=0.45,
+                        transcription_delay=0.32,
+                        on_user_turn_completed_delay=0.01,
+                    )
+                )
+            )
+            registered_handlers["metrics_collected"](
+                SimpleNamespace(
+                    metrics=SimpleNamespace(
                         type="llm_metrics",
                         provider="qwen",
                         model="qwen3.8_27b",
@@ -220,22 +230,24 @@ class VoiceLabMetricsPublishingTests(unittest.IsolatedAsyncioTestCase):
             for coro in queued_coroutines:
                 await coro
 
-        self.assertEqual(publish_data.await_count, 3)
+        self.assertEqual(publish_data.await_count, 4)
         payloads = [
             json.loads(call.args[0]) for call in publish_data.await_args_list
         ]
         self.assertEqual(
             [payload["event"] for payload in payloads],
-            ["stt_final", "llm_first_token", "tts_done"],
+            ["stt_final", "stt_timing", "llm_first_token", "tts_done"],
         )
         self.assertTrue(
             all(payload["type"] == "odion.voice_lab.metric" for payload in payloads)
         )
         self.assertTrue(all(payload["turn_index"] == 1 for payload in payloads))
         self.assertEqual(payloads[0]["transcript_preview"], transcript)
-        self.assertEqual(payloads[1]["llm_ttft_ms"], 250.0)
-        self.assertEqual(payloads[2]["ttfa_ms"], 400.0)
-        self.assertEqual(payloads[2]["rtf"], 0.5)
+        self.assertEqual(payloads[1]["transcript_delay_ms"], 320.0)
+        self.assertEqual(payloads[1]["endpointing_ms"], 450.0)
+        self.assertEqual(payloads[2]["llm_ttft_ms"], 250.0)
+        self.assertEqual(payloads[3]["ttfa_ms"], 400.0)
+        self.assertEqual(payloads[3]["rtf"], 0.5)
         for call in publish_data.await_args_list:
             self.assertEqual(call.kwargs["topic"], main.VOICE_LAB_METRICS_TOPIC)
             self.assertTrue(call.kwargs["reliable"])

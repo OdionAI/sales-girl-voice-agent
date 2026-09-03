@@ -84,7 +84,7 @@ from agent.livekit_recording import (
     start_room_recording,
 )
 from agent.salon_agent import SalonAgent
-from prompts.en import SYSTEM_PROMPT_EN
+from prompts.en import NIGERIAN_SPOKEN_STYLE_EN, SYSTEM_PROMPT_EN
 from prompts.fr import SYSTEM_PROMPT_FR
 
 
@@ -2273,12 +2273,34 @@ def _wire_session_timeline(
             )
             return
         if metric_type == "eou_metrics":
+            endpointing_ms = (
+                float(
+                    getattr(metrics, "end_of_utterance_delay", 0.0) or 0.0
+                )
+                * 1000
+            )
+            transcription_delay_ms = (
+                float(getattr(metrics, "transcription_delay", 0.0) or 0.0)
+                * 1000
+            )
+            turn_callback_ms = (
+                float(
+                    getattr(metrics, "on_user_turn_completed_delay", 0.0)
+                    or 0.0
+                )
+                * 1000
+            )
             logger.info(
                 "Voice latency: stage=turn_detection turn=%s endpointing_ms=%.1f transcription_delay_ms=%.1f turn_callback_ms=%.1f",
                 turn_index,
-                float(getattr(metrics, "end_of_utterance_delay", 0.0) or 0.0) * 1000,
-                float(getattr(metrics, "transcription_delay", 0.0) or 0.0) * 1000,
-                float(getattr(metrics, "on_user_turn_completed_delay", 0.0) or 0.0) * 1000,
+                endpointing_ms,
+                transcription_delay_ms,
+                turn_callback_ms,
+            )
+            _publish_voice_lab_metric(
+                "stt_timing",
+                transcript_delay_ms=transcription_delay_ms,
+                endpointing_ms=endpointing_ms,
             )
             return
         if metric_type == "llm_metrics":
@@ -2570,7 +2592,19 @@ def _instructions_with_resume_context(
     )
 
 
+def _instructions_with_spoken_style(base_prompt: str, language: str) -> str:
+    if str(language or "").strip().lower() != "en":
+        return base_prompt
+    style = NIGERIAN_SPOKEN_STYLE_EN.strip()
+    if not style or style in base_prompt:
+        return base_prompt
+    return f"{base_prompt.rstrip()}\n\n{style}\n"
+
+
 async def _instructions_with_context(base_prompt: str, userdata: dict[str, Any]) -> str:
+    base_prompt = _instructions_with_spoken_style(
+        base_prompt, str(userdata.get("language") or "")
+    )
     base_prompt = (
         f"{base_prompt}\n\n"
         "Closing behavior:\n"

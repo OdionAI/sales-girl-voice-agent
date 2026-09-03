@@ -4,13 +4,16 @@ This branch is the working branch for the Wema Bank voice banking POC.
 
 ## Branch
 
-- Branch name: `wema-bank-poc`
-- Baseline branch: `full-livekit-test`
+- Branch name: `wema-bank-poc-tools`
+- Baseline branch: `wema-bank-poc`, incorporating the accepted `stable` runtime
 - Main implementation repo: `sales-girl-voice-agent`
 - Supporting UI repo, if needed: `sales-girl-dashboard`
 
-All Wema-specific implementation work should happen from this branch, not from
-`huawei-local-integration` or old temporary experiment folders.
+New Wema tool implementation work should happen on `wema-bank-poc-tools`, not
+on the stable runtime branches or old temporary experiment folders. The current
+API grouping and mock implementation are documented in
+[`docs/wema/README.md`](docs/wema/README.md) and
+[`docs/wema/TOOL_INVENTORY.md`](docs/wema/TOOL_INVENTORY.md).
 
 ## Goal
 
@@ -146,7 +149,16 @@ The local test goal is to run an agent that has these tools and verify that:
 - it does not call irrelevant tools
 - it confirms before transactional actions
 
-## Task 2 — Background voice authentication
+## Authentication integration boundary
+
+Authentication is owned by the separate `wema-bank-poc-auth` branch and is out of
+scope for `wema-bank-poc-tools`. This branch defines task orchestration, resolves
+downstream data, prepares immutable transaction previews, and exposes a narrow
+execution integration point. It must not create a competing authentication flow.
+
+When the auth branch is merged, its trusted session/customer context and approved
+transaction executor should be injected at this boundary. The requirements below
+are retained as integration requirements, not work assigned to this branch.
 
 Voice authentication should run asynchronously in the background while the
 conversation continues.
@@ -219,4 +231,3 @@ Minimum scenarios:
 The POC is working when the agent can complete the supported flows in test mode,
 use the correct tools, avoid irrelevant tools, and block transactions whenever
 the auth/session gate is not satisfied.
-
