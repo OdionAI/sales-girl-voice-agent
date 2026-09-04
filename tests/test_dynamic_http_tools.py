@@ -6,10 +6,44 @@ from unittest.mock import AsyncMock, patch
 
 import httpx
 
+from agent.auth_observer import ACTION_WEMA_EXECUTE_PREPARED
 from agent.dynamic_tools import build_dynamic_http_tools
 
 
 class DynamicHttpToolsTests(unittest.IsolatedAsyncioTestCase):
+    @staticmethod
+    def _execute_prepared_config(
+        *, include_auth_fields: bool = False
+    ) -> dict[str, object]:
+        properties: dict[str, object] = {
+            "operation_id": {"type": "string"},
+        }
+        required = ["operation_id"]
+        if include_auth_fields:
+            properties.update(
+                {
+                    "authenticated": {"type": "boolean"},
+                    "voice_auth_authorized": {"type": "boolean"},
+                }
+            )
+            required.extend(["authenticated", "voice_auth_authorized"])
+        return {
+            "tools": [
+                {
+                    "name": ACTION_WEMA_EXECUTE_PREPARED,
+                    "description": "Execute the caller's latest prepared Wema transaction.",
+                    "method": "POST",
+                    "url": "https://wema.example.com/execute",
+                    "request_schema": {
+                        "type": "object",
+                        "properties": properties,
+                        "required": required,
+                        "additionalProperties": False,
+                    },
+                }
+            ]
+        }
+
     def _run_context(
         self, enabled_tool_names: list[str], **session_values: object
     ) -> SimpleNamespace:
@@ -251,6 +285,141 @@ class DynamicHttpToolsTests(unittest.IsolatedAsyncioTestCase):
             await tools[0](ctx=context, raw_arguments=arguments)
 
         self.assertEqual(client.request.await_args.kwargs["json"], arguments)
+
+    async def test_execute_prepared_hides_auth_fields_from_model_schema(self) -> None:
+        tools = build_dynamic_http_tools(
+            self._execute_prepared_config(include_auth_fields=True)
+        )
+
+        parameters = tools[0].info.raw_schema["parameters"]
+        self.assertEqual(
+            parameters["properties"],
+            {"operation_id": {"type": "string"}},
+        )
+        self.assertEqual(parameters["required"], ["operation_id"])
+
+    async def test_execute_prepared_blocks_when_auth_observer_is_missing(self) -> None:
+        tools = build_dynamic_http_tools(self._execute_prepared_config())
+        context = self._run_context(
+            [ACTION_WEMA_EXECUTE_PREPARED],
+            last_user_transcript="Yes, send it.",
+        )
+
+        with patch("agent.dynamic_tools.httpx.AsyncClient") as client_cls:
+            result = await tools[0](
+                ctx=context,
+                raw_arguments={"operation_id": "op-1"},
+            )
+
+        self.assertEqual(result["status"], "failed")
+        self.assertTrue(result["auth_required"])
+        self.assertEqual(result["reason"], "voice_not_recognized")
+        client_cls.assert_not_called()
+
+    async def test_execute_prepared_requires_exact_boolean_auth_decision(self) -> None:
+        observer = SimpleNamespace(
+            authorize_action=AsyncMock(
+                return_value={
+                    "authorized": "true",
+                    "session_status": "recognized",
+                    "action_status": "recognized",
+                }
+            ),
+            publish_action_outcome=AsyncMock(),
+        )
+        tools = build_dynamic_http_tools(self._execute_prepared_config())
+        context = self._run_context(
+            [ACTION_WEMA_EXECUTE_PREPARED],
+            auth_observer=observer,
+            last_user_transcript="Yes, send it.",
+        )
+
+        with patch("agent.dynamic_tools.httpx.AsyncClient") as client_cls:
+            result = await tools[0](
+                ctx=context,
+                raw_arguments={"operation_id": "op-1"},
+            )
+
+        self.assertEqual(result["status"], "failed")
+        self.assertTrue(result["auth_required"])
+        observer.authorize_action.assert_awaited_once()
+        observer.publish_action_outcome.assert_not_awaited()
+        client_cls.assert_not_called()
+
+    async def test_execute_prepared_calls_endpoint_only_after_voice_auth(self) -> None:
+        observer = SimpleNamespace(
+            authorize_action=AsyncMock(
+                return_value={
+                    "authorized": True,
+                    "session_status": "recognized",
+                    "action_status": "authorized",
+                }
+            ),
+            publish_action_outcome=AsyncMock(),
+        )
+        tools = build_dynamic_http_tools(self._execute_prepared_config())
+        context = self._run_context(
+            [ACTION_WEMA_EXECUTE_PREPARED],
+            auth_observer=observer,
+            last_user_transcript="Yes, send it.",
+        )
+
+        with patch("agent.dynamic_tools.httpx.AsyncClient") as client_cls:
+            client = AsyncMock()
+            client.request.return_value = httpx.Response(
+                200,
+                json={"status": "completed", "data": {"reference": "ref-1"}},
+                headers={"content-type": "application/json"},
+            )
+            client_cls.return_value.__aenter__.return_value = client
+            client_cls.return_value.__aexit__.return_value = False
+
+            result = await tools[0](
+                ctx=context,
+                raw_arguments={"operation_id": "op-1"},
+            )
+
+        self.assertEqual(result["status"], "completed")
+        observer.authorize_action.assert_awaited_once_with(
+            action=ACTION_WEMA_EXECUTE_PREPARED,
+            transcript="Yes, send it.",
+            details={"operation_id": "op-1"},
+        )
+        observer.publish_action_outcome.assert_awaited_once_with(
+            action=ACTION_WEMA_EXECUTE_PREPARED,
+            tool_result=result,
+            details={"operation_id": "op-1"},
+        )
+        self.assertEqual(
+            client.request.await_args.kwargs["json"],
+            {"operation_id": "op-1"},
+        )
+
+    async def test_execute_prepared_rejects_model_supplied_auth_fields(self) -> None:
+        observer = SimpleNamespace(
+            authorize_action=AsyncMock(return_value={"authorized": True}),
+            publish_action_outcome=AsyncMock(),
+        )
+        tools = build_dynamic_http_tools(self._execute_prepared_config())
+        context = self._run_context(
+            [ACTION_WEMA_EXECUTE_PREPARED],
+            auth_observer=observer,
+        )
+
+        with patch("agent.dynamic_tools.httpx.AsyncClient") as client_cls:
+            result = await tools[0](
+                ctx=context,
+                raw_arguments={
+                    "operation_id": "op-1",
+                    "authenticated": True,
+                },
+            )
+
+        self.assertEqual(result["status"], "failed")
+        self.assertTrue(result["auth_required"])
+        observer.authorize_action.assert_not_awaited()
+        observer.publish_action_outcome.assert_not_awaited()
+        client_cls.assert_not_called()
 
     async def test_dynamic_tool_validates_required_fields(self) -> None:
         tools = build_dynamic_http_tools(

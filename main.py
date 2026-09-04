@@ -84,6 +84,12 @@ from agent.livekit_recording import (
     start_room_recording,
 )
 from agent.salon_agent import SalonAgent
+from agent.auth_observer import (
+    apply_auth_observer_session,
+    auth_observer_enabled,
+    start_auth_observer,
+)
+from agent.voice_enroll_http import start_voice_enroll_http
 from prompts.en import NIGERIAN_SPOKEN_STYLE_EN, SYSTEM_PROMPT_EN
 from prompts.fr import SYSTEM_PROMPT_FR
 
@@ -4432,6 +4438,7 @@ async def entrypoint(ctx: JobContext):
         instructions = await _instructions_with_initial_knowledge_context(
             instructions, userdata
         )
+        instructions = apply_auth_observer_session(userdata, instructions)
         userdata["base_instructions"] = instructions
         started_at = conv_api_utcnow()
         business_id = str(userdata.get("business_id") or "")
@@ -4490,6 +4497,7 @@ async def entrypoint(ctx: JobContext):
                 ],
             )
         _wire_session_timeline(session, session.userdata, room=ctx.room)
+        start_auth_observer(session, room=ctx.room)
         try:
             if conversation_service_enabled(business_id) and userdata.get(
                 "conversation_id"
@@ -4616,6 +4624,7 @@ async def entrypoint(ctx: JobContext):
         instructions = await _instructions_with_initial_knowledge_context(
             instructions, userdata
         )
+        instructions = apply_auth_observer_session(userdata, instructions)
         userdata["base_instructions"] = instructions
         started_at = conv_api_utcnow()
         business_id = str(userdata.get("business_id") or "")
@@ -4672,6 +4681,7 @@ async def entrypoint(ctx: JobContext):
                 ],
             )
         _wire_session_timeline(session, session.userdata, room=ctx.room)
+        start_auth_observer(session, room=ctx.room)
         try:
             if conversation_service_enabled(business_id) and userdata.get(
                 "conversation_id"
@@ -4763,6 +4773,11 @@ if __name__ == "__main__":
     # LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET are read from the environment/.env
     try:
         _validate_runtime_requirements()
+        voice_auth_http_enabled = str(
+            os.getenv("VOICE_AUTH_HTTP", "1")
+        ).strip().lower() not in {"0", "false", "off", "no"}
+        if auth_observer_enabled() and voice_auth_http_enabled:
+            start_voice_enroll_http()
         cli.run_app(server)
     finally:
         flush_traces()

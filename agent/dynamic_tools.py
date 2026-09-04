@@ -16,6 +16,7 @@ from livekit.agents import RunContext, function_tool
 from .tool_schema_compat import strictify_schema_for_groq
 
 from .salon_agent import _is_tool_enabled, _tool_metadata
+from .auth_observer import ACTION_WEMA_EXECUTE_PREPARED
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +35,13 @@ WEMA_TOOL_PREFIX = "wema_"
 WEMA_CUSTOMER_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,120}$")
 WEMA_ACCOUNT_NUMBER_PATTERN = re.compile(r"^\d{10}$")
 WEMA_PHONE_PATTERN = re.compile(r"^(?:0\d{10}|\+234\d{10})$")
+PRIVILEGED_DYNAMIC_TOOLS = {ACTION_WEMA_EXECUTE_PREPARED}
+AUTH_CONTROL_FIELDS = {
+    "authenticated",
+    "auth_status",
+    "skip_auth",
+    "voice_auth_authorized",
+}
 
 
 def _active_tool_records(active_agent_config: dict[str, Any] | None) -> list[dict[str, Any]]:
@@ -238,9 +246,16 @@ def _model_facing_schema(tool_name: str, schema: dict[str, Any]) -> dict[str, An
     if not tool_name.startswith(WEMA_TOOL_PREFIX):
         return schema
     model_schema = copy.deepcopy(schema)
+    properties = model_schema.get("properties")
+    if isinstance(properties, dict):
+        for field in AUTH_CONTROL_FIELDS:
+            properties.pop(field, None)
     required = model_schema.get("required") or []
     model_schema["required"] = [
-        field for field in required if field not in {"source_account", "phone_number"}
+        field
+        for field in required
+        if field
+        not in {"source_account", "phone_number", *AUTH_CONTROL_FIELDS}
     ]
     return model_schema
 
@@ -312,6 +327,92 @@ def _failure_payload(tool_name: str, message: str, *, http_status: int | None = 
     if detail not in (None, ""):
         payload["detail"] = detail
     return payload
+
+
+def _session_userdata(ctx: RunContext) -> dict[str, Any]:
+    session = getattr(ctx, "session", None)
+    userdata = getattr(session, "userdata", None)
+    return userdata if isinstance(userdata, dict) else {}
+
+
+def _voice_auth_blocked_payload(tool_name: str, decision: dict[str, Any] | None = None) -> dict[str, Any]:
+    auth_decision = decision if isinstance(decision, dict) else {}
+    return {
+        "status": "failed",
+        "tool_name": tool_name,
+        "auth_required": True,
+        "auth_status": str(auth_decision.get("session_status") or "pending"),
+        "action_status": str(auth_decision.get("action_status") or "pending"),
+        "reason": "voice_not_recognized",
+        "message": (
+            "The transaction was blocked because the caller's voice was not recognized. "
+            "Tell the caller clearly that you could not recognize their voice, so you "
+            "cannot complete this transaction."
+        ),
+    }
+
+
+async def _authorize_privileged_dynamic_tool(
+    ctx: RunContext,
+    *,
+    tool_name: str,
+    arguments: dict[str, Any],
+) -> tuple[bool, Any | None, dict[str, Any] | None]:
+    if tool_name not in PRIVILEGED_DYNAMIC_TOOLS:
+        return True, None, None
+
+    userdata = _session_userdata(ctx)
+    observer = userdata.get("auth_observer")
+    authorize = getattr(observer, "authorize_action", None)
+    if not callable(authorize):
+        logger.warning("[TOOL] %s blocked because voice auth observer is unavailable", tool_name)
+        return False, None, _voice_auth_blocked_payload(tool_name)
+
+    decision = await authorize(
+        action=tool_name,
+        transcript=str(userdata.get("last_user_transcript") or ""),
+        details=arguments,
+    )
+    voice_auth_authorized = decision.get("authorized") is True
+    if voice_auth_authorized is not True:
+        logger.info(
+            "[TOOL] %s blocked reason=%s",
+            tool_name,
+            decision.get("reason") or "voice_not_recognized",
+        )
+        return False, observer, _voice_auth_blocked_payload(tool_name, decision)
+    return True, observer, None
+
+
+async def _invoke_authorized_dynamic_http_tool(
+    *,
+    ctx: RunContext,
+    tool: dict[str, Any],
+    arguments: dict[str, Any],
+    metadata: dict[str, Any],
+    observer: Any,
+    voice_auth_authorized: bool,
+) -> dict[str, Any]:
+    tool_name = str(tool.get("name") or "").strip()
+    if voice_auth_authorized is not True:
+        return _voice_auth_blocked_payload(tool_name)
+
+    result = await invoke_dynamic_http_tool(
+        tool=tool,
+        raw_arguments=arguments,
+        metadata=metadata,
+    )
+    publish_outcome = getattr(observer, "publish_action_outcome", None)
+    if callable(publish_outcome):
+        try:
+            await publish_outcome(
+                action=tool_name,
+                tool_result=result,
+                details=arguments,
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception("[TOOL] could not publish final auth action outcome name=%s", tool_name)
+    return result
 
 
 async def invoke_dynamic_http_tool(
@@ -449,10 +550,13 @@ def build_dynamic_http_tools(
         ) -> dict[str, Any]:
             current_name = str(_tool.get("name") or "").strip()
             metadata = _tool_metadata(ctx)
+            supplied_arguments = (
+                raw_arguments if isinstance(raw_arguments, dict) else {}
+            )
             arguments = _wema_arguments_with_session_defaults(
                 _tool,
                 metadata,
-                raw_arguments if isinstance(raw_arguments, dict) else {},
+                supplied_arguments,
             )
             call_id = f"tool-{uuid.uuid4().hex}"
             started_at_ms = int(time.time() * 1000)
@@ -472,6 +576,31 @@ def build_dynamic_http_tools(
                     current_name,
                     "I can't use that tool from this agent right now.",
                 )
+            elif current_name in PRIVILEGED_DYNAMIC_TOOLS and any(
+                field in supplied_arguments for field in AUTH_CONTROL_FIELDS
+            ):
+                logger.warning(
+                    "[TOOL] %s rejected model-supplied voice auth field",
+                    current_name,
+                )
+                result = _voice_auth_blocked_payload(current_name)
+            elif current_name in PRIVILEGED_DYNAMIC_TOOLS:
+                authorized, observer, blocked = await _authorize_privileged_dynamic_tool(
+                    ctx,
+                    tool_name=current_name,
+                    arguments=arguments,
+                )
+                if blocked is not None:
+                    result = blocked
+                else:
+                    result = await _invoke_authorized_dynamic_http_tool(
+                        ctx=ctx,
+                        tool=_tool,
+                        arguments=arguments,
+                        metadata=metadata,
+                        observer=observer,
+                        voice_auth_authorized=authorized,
+                    )
             else:
                 result = await invoke_dynamic_http_tool(
                     tool=_tool,

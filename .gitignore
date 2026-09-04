@@ -31,3 +31,5 @@ screenlog.*
 # SQLite database (optional, recommended)
 appointments.db
 conversation_memory.db
+.local/
+voice-auth.sqlite
