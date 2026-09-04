@@ -84,6 +84,8 @@ from agent.livekit_recording import (
     start_room_recording,
 )
 from agent.salon_agent import SalonAgent
+from agent.auth_observer import apply_auth_observer_session, auth_observer_enabled, start_auth_observer
+from agent.voice_enroll_http import start_voice_enroll_http
 from prompts.en import SYSTEM_PROMPT_EN
 from prompts.fr import SYSTEM_PROMPT_FR
 
@@ -1120,7 +1122,14 @@ GOOGLE_LLM_BACKUP_MODEL_FR = (
     or GOOGLE_LLM_BACKUP_MODEL_DEFAULT
 )
 
-LLM_PROVIDER = str(os.getenv("LLM_PROVIDER") or "google").strip().lower() or "google"
+LLM_PROVIDER = (
+    str(
+        os.getenv("VOICE_AGENT_LLM_PROVIDER")
+        or os.getenv("LLM_PROVIDER")
+        or "google"
+    ).strip().lower()
+    or "google"
+)
 GROQ_LLM_MODEL_DEFAULT = (
     str(
         os.getenv("GROQ_LLM_MODEL_DEFAULT")
@@ -2842,9 +2851,14 @@ async def _instructions_with_context(base_prompt: str, userdata: dict[str, Any])
             )
         return base_prompt
 
-    # Fallback: local sqlite memory
+    # Fallback: local sqlite memory. Demo/baseline sessions often have a
+    # non-UUID business id, so do not crash the call when remote conversation
+    # context is unavailable.
     if CONVERSATION_SERVICE_REQUIRED:
-        raise RuntimeError("Conversation service is required but not configured.")
+        logger.warning(
+            "Conversation service is unavailable for this session; continuing without remote context. business_id=%s",
+            userdata.get("business_id"),
+        )
     return _instructions_with_resume_context(base_prompt, userdata)
 
 
@@ -3908,7 +3922,7 @@ def _build_stt_engine_for_language(*, language: str, userdata: dict[str, Any]) -
         or ("" if base_url else _default_odion_stt_transport())
     ).strip().lower()
 
-    if provider == "odion_stt":
+    if provider in {"odion_stt", "odion_stt_realtime", "odion"}:
         resolved_base_url = base_url or _default_odion_stt_base_url()
         logger.info(
             "Using Odion STT runtime selection: base_url=%s model=%s language=%s transport=%s override=%s",
@@ -4062,6 +4076,8 @@ def _build_tts_engine_for_language(
             business_id=business_id,
         )
     )
+    if not tts_owner_id:
+        tts_owner_id = str(ODION_TTS_EXPERIMENT_OWNER_ID or "").strip()
     tts_language_hint = (
         ODION_TTS_EXPERIMENT_LANGUAGE_HINT
         if use_experiment_clone
@@ -4146,8 +4162,11 @@ def _build_tts_engine_for_language(
             )
             return tts_engine
         if use_odion_default:
+            odion_owner_id = str(tts_owner_id or business_id or "").strip()
+            if not odion_owner_id:
+                raise ValueError("owner_id is required for OdionTTS")
             tts_engine = OdionTTS(
-                owner_id=tts_owner_id or business_id,
+                owner_id=odion_owner_id,
                 voice_id=None,
                 language=tts_language_hint,
                 model=tts_model_override,
@@ -4191,7 +4210,7 @@ def _build_tts_engine_for_language(
             raise
         if runtime_odion_tts_requested:
             logger.error(
-                "Failed to initialize runtime Odion TTS override for %s session; refusing to fall back to Deepgram: %s",
+                "Failed to initialize runtime Odion TTS override for %s session: %s",
                 fallback_label,
                 exc,
             )
@@ -4266,6 +4285,7 @@ async def entrypoint(ctx: JobContext):
         instructions = await _instructions_with_initial_knowledge_context(
             instructions, userdata
         )
+        instructions = apply_auth_observer_session(userdata, instructions)
         userdata["base_instructions"] = instructions
         started_at = conv_api_utcnow()
         business_id = str(userdata.get("business_id") or "")
@@ -4323,6 +4343,7 @@ async def entrypoint(ctx: JobContext):
                 ],
             )
         _wire_session_timeline(session, session.userdata, room=ctx.room)
+        start_auth_observer(session, room=ctx.room)
         try:
             if conversation_service_enabled(business_id) and userdata.get(
                 "conversation_id"
@@ -4449,6 +4470,7 @@ async def entrypoint(ctx: JobContext):
         instructions = await _instructions_with_initial_knowledge_context(
             instructions, userdata
         )
+        instructions = apply_auth_observer_session(userdata, instructions)
         userdata["base_instructions"] = instructions
         started_at = conv_api_utcnow()
         business_id = str(userdata.get("business_id") or "")
@@ -4504,6 +4526,7 @@ async def entrypoint(ctx: JobContext):
                 ],
             )
         _wire_session_timeline(session, session.userdata, room=ctx.room)
+        start_auth_observer(session, room=ctx.room)
         try:
             if conversation_service_enabled(business_id) and userdata.get(
                 "conversation_id"
@@ -4595,6 +4618,13 @@ if __name__ == "__main__":
     # LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET are read from the environment/.env
     try:
         _validate_runtime_requirements()
+        if auth_observer_enabled() and str(os.getenv("VOICE_AUTH_HTTP", "1")).strip().lower() not in {
+            "0",
+            "false",
+            "off",
+            "no",
+        }:
+            start_voice_enroll_http()
         cli.run_app(server)
     finally:
         flush_traces()

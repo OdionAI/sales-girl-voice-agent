@@ -12,6 +12,15 @@ from .tool_schema_compat import (
     normalize_price_snapshot,
     normalize_top_k,
 )
+from .auth_observer import (
+    ACTION_AIRTIME_PURCHASE,
+    ACTION_FUNDS_TRANSFER,
+    AUTH_FAILED,
+    AUTH_PENDING,
+    AUTH_VERIFIED,
+    DEMO_EMAIL_TO,
+)
+from .zepto_mail import send_zepto_email, zepto_mail_configured
 from .ops_api import (
     apply_billing_adjustment as apply_billing_adjustment_api,
     block_card as block_card_api,
@@ -140,6 +149,82 @@ def _is_tool_enabled(ctx: RunContext, tool_name: str) -> bool:
     if not normalized_enabled:
         return False
     return normalized_tool_name in normalized_enabled
+
+
+def _voice_auth_status(ctx: RunContext) -> str:
+    session_userdata = _session_userdata(ctx)
+    if not session_userdata.get("auth_observer_enabled"):
+        return AUTH_VERIFIED
+    status = str(session_userdata.get("auth_status") or AUTH_PENDING).strip().lower()
+    if status in {AUTH_VERIFIED, AUTH_FAILED, AUTH_PENDING}:
+        return status
+    return AUTH_PENDING
+
+
+def _voice_not_recognized_message(action: str) -> str:
+    return (
+        "The transaction was blocked because the caller's voice was not recognized. "
+        f"Tell the caller clearly that you could not recognize their voice, so you cannot {action}."
+    )
+
+
+def _unverified_transaction_result(status: str, action: str) -> dict:
+    if status == AUTH_FAILED:
+        return {
+            "status": "failed",
+            "auth_required": True,
+            "auth_status": AUTH_FAILED,
+            "reason": "voice_not_recognized",
+            "message": _voice_not_recognized_message(action),
+        }
+    return {
+        "status": "failed",
+        "auth_required": True,
+        "auth_status": AUTH_PENDING,
+        "reason": "voice_not_recognized",
+        "message": _voice_not_recognized_message(action),
+    }
+
+
+async def _authorize_bank_action(
+    ctx: RunContext,
+    *,
+    action: str,
+    details: dict,
+    fallback_verb: str,
+) -> dict | None:
+    session_userdata = _session_userdata(ctx)
+    observer = session_userdata.get("auth_observer")
+    authorize = getattr(observer, "authorize_action", None)
+    if callable(authorize):
+        decision = await authorize(
+            action=action,
+            transcript=str(session_userdata.get("last_user_transcript") or ""),
+            details=details,
+        )
+        if decision.get("authorized"):
+            return None
+        logger.info(
+            "[TOOL] %s blocked reason=%s",
+            action,
+            decision.get("reason") or "voice_not_recognized",
+        )
+        return {
+            "status": "failed",
+            "auth_required": True,
+            "auth_status": str(decision.get("session_status") or AUTH_PENDING),
+            "action_status": str(decision.get("action_status") or AUTH_PENDING),
+            "reason": "voice_not_recognized",
+            "message": _voice_not_recognized_message(fallback_verb),
+        }
+    if _voice_auth_status(ctx) != AUTH_VERIFIED:
+        logger.info("[TOOL] %s blocked auth_status=%s", action, _voice_auth_status(ctx))
+        return _unverified_transaction_result(_voice_auth_status(ctx), fallback_verb)
+    return None
+
+
+def _unverified_email_result(status: str) -> dict:
+    return _unverified_transaction_result(status, "send the email")
 
 
 class SalonAgent(Agent):
@@ -681,25 +766,129 @@ class SalonAgent(Agent):
         )
 
     @function_tool()
+    async def complete_airtime_purchase(
+        self,
+        ctx: RunContext,
+        amount_naira: str,
+        phone_number: str | None = None,
+    ) -> dict:
+        """Top up airtime. Call only after the caller confirms the amount and phone number. A second voice check runs before it completes."""
+        if not _is_tool_enabled(ctx, ACTION_AIRTIME_PURCHASE):
+            return {
+                "status": "failed",
+                "message": "I can't complete that airtime top-up from this agent right now.",
+            }
+        amount = str(amount_naira or "").strip() or "the requested amount"
+        destination = str(phone_number or "").strip() or "the destination number"
+        blocked = await _authorize_bank_action(
+            ctx,
+            action=ACTION_AIRTIME_PURCHASE,
+            details={"amount_naira": amount, "phone_number": destination},
+            fallback_verb="complete this airtime top-up",
+        )
+        if blocked:
+            return blocked
+        logger.info(
+            "[TOOL] complete_airtime_purchase amount=%s destination=%s",
+            amount,
+            destination,
+        )
+        return {
+            "status": "success",
+            "auth_status": AUTH_VERIFIED,
+            "amount_naira": amount,
+            "phone_number": destination,
+            "message": (
+                f"Airtime top-up of {amount} naira to {destination} completed "
+                "after the action voice check passed."
+            ),
+        }
+
+    @function_tool()
+    async def complete_funds_transfer(
+        self,
+        ctx: RunContext,
+        amount_naira: str,
+        account_number: str,
+        bank_name: str | None = None,
+        beneficiary_name: str | None = None,
+    ) -> dict:
+        """Transfer funds. Call only after the caller confirms the amount, account number, and bank. A second voice check runs before it completes."""
+        if not _is_tool_enabled(ctx, ACTION_FUNDS_TRANSFER):
+            return {
+                "status": "failed",
+                "message": "I can't complete that funds transfer from this agent right now.",
+            }
+        amount = str(amount_naira or "").strip() or "the requested amount"
+        account = str(account_number or "").strip() or "the destination account"
+        bank = str(bank_name or "").strip() or "the destination bank"
+        beneficiary = str(beneficiary_name or "").strip()
+        blocked = await _authorize_bank_action(
+            ctx,
+            action=ACTION_FUNDS_TRANSFER,
+            details={
+                "amount_naira": amount,
+                "account_number": account,
+                "bank_name": bank,
+                "beneficiary_name": beneficiary,
+            },
+            fallback_verb="complete this funds transfer",
+        )
+        if blocked:
+            return blocked
+        logger.info(
+            "[TOOL] complete_funds_transfer amount=%s account=%s bank=%s",
+            amount,
+            account,
+            bank,
+        )
+        destination = f"{account} at {bank}"
+        if beneficiary:
+            destination = f"{beneficiary}, {destination}"
+        return {
+            "status": "success",
+            "auth_status": AUTH_VERIFIED,
+            "amount_naira": amount,
+            "account_number": account,
+            "bank_name": bank,
+            "beneficiary_name": beneficiary,
+            "message": (
+                f"Funds transfer of {amount} naira to {destination} completed "
+                "after the action voice check passed."
+            ),
+        }
+
+    @function_tool()
     async def send_email(
         self,
         ctx: RunContext,
-        to_email: str,
         subject: str,
         body_text: str,
     ) -> dict:
-        """Send an email to the caller. Use this tool when you need to send links, documents, or written instructions. (Envoyer un email à l'appelant. Utilisez cet outil lorsque vous devez envoyer des liens, des documents ou des instructions écrites)."""
+        """Send an email to the fixed demo inbox. Do not ask the caller for an email address. Use this after [AUTH: VERIFIED] when the caller wants a message sent."""
         if not _is_tool_enabled(ctx, "send_email"):
             return {
                 "status": "failed",
                 "message": "I can't send an email from this agent right now.",
             }
-        result = await send_email_api(
-            to_email=to_email,
-            subject=subject,
-            body_text=body_text,
-            metadata=_tool_metadata(ctx),
-        )
+        auth_status = _voice_auth_status(ctx)
+        if auth_status != AUTH_VERIFIED:
+            logger.info("[TOOL] send_email blocked auth_status=%s", auth_status)
+            return _unverified_email_result(auth_status)
+        to_email = DEMO_EMAIL_TO
+        if zepto_mail_configured():
+            result = await send_zepto_email(
+                to_email=to_email,
+                subject=subject,
+                body_text=body_text,
+            )
+        else:
+            result = await send_email_api(
+                to_email=to_email,
+                subject=subject,
+                body_text=body_text,
+                metadata=_tool_metadata(ctx),
+            )
         if result.get("status") != "failed":
             logger.info("[TOOL] send_email to=%s subject=%s", to_email, subject)
         return result
