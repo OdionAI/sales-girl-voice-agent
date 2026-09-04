@@ -3959,6 +3959,7 @@ def _trigger_first_turn(
         session.generate_reply(
             user_input=_kickoff_prompt_for_language(language, business_use_case),
             input_modality="text",
+            allow_interruptions=False,
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning("Failed to trigger first assistant turn (%s): %s", language, exc)

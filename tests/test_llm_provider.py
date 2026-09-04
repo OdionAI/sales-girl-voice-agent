@@ -104,6 +104,7 @@ class LlmProviderTests(unittest.TestCase):
         session.generate_reply.assert_called_once_with(
             user_input=main._kickoff_prompt_for_language("en", ""),
             input_modality="text",
+            allow_interruptions=False,
         )
 
     def test_groq_qwen_models_disable_reasoning_for_voice_latency(self) -> None:
