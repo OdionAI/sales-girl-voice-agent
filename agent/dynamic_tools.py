@@ -3,6 +3,10 @@ from __future__ import annotations
 import copy
 import logging
 import os
+import re
+import time
+import uuid
+from collections.abc import Callable
 from typing import Any
 
 import httpx
@@ -26,6 +30,10 @@ HTTP_TOOL_ALLOWED_METHODS = {
     "DELETE",
     "HEAD",
 }
+WEMA_TOOL_PREFIX = "wema_"
+WEMA_CUSTOMER_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,120}$")
+WEMA_ACCOUNT_NUMBER_PATTERN = re.compile(r"^\d{10}$")
+WEMA_PHONE_PATTERN = re.compile(r"^(?:0\d{10}|\+234\d{10})$")
 
 
 def _active_tool_records(active_agent_config: dict[str, Any] | None) -> list[dict[str, Any]]:
@@ -190,7 +198,68 @@ def _metadata_headers(metadata: dict[str, Any], tool_name: str) -> dict[str, str
         "X-Session-Id": str(metadata.get("session_id") or ""),
         "X-End-User-Id": str(metadata.get("end_user_id") or ""),
     }
+    if tool_name.startswith(WEMA_TOOL_PREFIX):
+        customer_id = str(metadata.get("wema_customer_id") or "").strip()
+        if WEMA_CUSTOMER_ID_PATTERN.fullmatch(customer_id):
+            headers["X-Wema-Customer-Id"] = customer_id
     return {key: value for key, value in headers.items() if value}
+
+
+def _wema_arguments_with_session_defaults(
+    tool: dict[str, Any],
+    metadata: dict[str, Any],
+    raw_arguments: dict[str, Any],
+) -> dict[str, Any]:
+    arguments = dict(raw_arguments)
+    tool_name = str(tool.get("name") or "").strip()
+    if not tool_name.startswith(WEMA_TOOL_PREFIX):
+        return arguments
+
+    schema = _normalize_schema(tool.get("request_schema"))
+    properties = schema.get("properties") or {}
+    account_number = str(metadata.get("wema_account_number") or "").strip()
+    phone_number = str(metadata.get("wema_phone_number") or "").strip()
+    if (
+        "source_account" in properties
+        and arguments.get("source_account") in (None, "")
+        and WEMA_ACCOUNT_NUMBER_PATTERN.fullmatch(account_number)
+    ):
+        arguments["source_account"] = account_number
+    if (
+        "phone_number" in properties
+        and arguments.get("phone_number") in (None, "")
+        and WEMA_PHONE_PATTERN.fullmatch(phone_number)
+    ):
+        arguments["phone_number"] = phone_number
+    return arguments
+
+
+def _model_facing_schema(tool_name: str, schema: dict[str, Any]) -> dict[str, Any]:
+    if not tool_name.startswith(WEMA_TOOL_PREFIX):
+        return schema
+    model_schema = copy.deepcopy(schema)
+    required = model_schema.get("required") or []
+    model_schema["required"] = [
+        field for field in required if field not in {"source_account", "phone_number"}
+    ]
+    return model_schema
+
+
+def _notify_tool_activity(
+    callback: Callable[[dict[str, Any]], Any] | None,
+    payload: dict[str, Any],
+) -> None:
+    if callback is None:
+        return
+    try:
+        callback(payload)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "Could not publish dynamic tool activity name=%s event=%s: %s",
+            payload.get("tool_name"),
+            payload.get("event"),
+            exc,
+        )
 
 
 def _custom_headers(tool: dict[str, Any], method: str) -> dict[str, str]:
@@ -343,6 +412,7 @@ def build_dynamic_http_tools(
     active_agent_config: dict[str, Any] | None,
     *,
     excluded_tool_names: set[str] | None = None,
+    on_tool_activity: Callable[[dict[str, Any]], Any] | None = None,
 ) -> list[Any]:
     excluded = {str(name or "").strip() for name in (excluded_tool_names or set())}
     dynamic_tools: list[Any] = []
@@ -359,28 +429,74 @@ def build_dynamic_http_tools(
         ):
             continue
 
+        tool_schema = _normalize_schema(tool.get("request_schema"))
+        description_suffix = (
+            " The caller's selected account and own phone number are supplied by "
+            "the session when omitted. Ask only when the caller wants a different one."
+            if tool_name.startswith(WEMA_TOOL_PREFIX)
+            else ""
+        )
         raw_schema = {
             "name": tool_name,
             "description": (
-                f"{description} When you call this tool, send the relevant request fields as top-level JSON keys."
+                f"{description}{description_suffix} When you call this tool, send the relevant request fields as top-level JSON keys."
             ),
-            "parameters": _normalize_schema(tool.get("request_schema")),
+            "parameters": _model_facing_schema(tool_name, tool_schema),
         }
 
         async def _call_dynamic_http_tool(
             ctx: RunContext, raw_arguments: dict[str, Any], _tool: dict[str, Any] = tool
         ) -> dict[str, Any]:
             current_name = str(_tool.get("name") or "").strip()
+            metadata = _tool_metadata(ctx)
+            arguments = _wema_arguments_with_session_defaults(
+                _tool,
+                metadata,
+                raw_arguments if isinstance(raw_arguments, dict) else {},
+            )
+            call_id = f"tool-{uuid.uuid4().hex}"
+            started_at_ms = int(time.time() * 1000)
+            _notify_tool_activity(
+                on_tool_activity,
+                {
+                    "event": "started",
+                    "call_id": call_id,
+                    "tool_name": current_name,
+                    "arguments": arguments,
+                    "started_at_ms": started_at_ms,
+                    "ts_ms": started_at_ms,
+                },
+            )
             if not _is_tool_enabled(ctx, current_name):
-                return _failure_payload(
+                result = _failure_payload(
                     current_name,
                     "I can't use that tool from this agent right now.",
                 )
-            return await invoke_dynamic_http_tool(
-                tool=_tool,
-                raw_arguments=raw_arguments if isinstance(raw_arguments, dict) else {},
-                metadata=_tool_metadata(ctx),
+            else:
+                result = await invoke_dynamic_http_tool(
+                    tool=_tool,
+                    raw_arguments=arguments,
+                    metadata=metadata,
+                )
+            completed_at_ms = int(time.time() * 1000)
+            _notify_tool_activity(
+                on_tool_activity,
+                {
+                    "event": "completed",
+                    "call_id": call_id,
+                    "tool_name": current_name,
+                    "arguments": arguments,
+                    "result": result,
+                    "status": (
+                        str(result.get("status") or "success")
+                        if isinstance(result, dict)
+                        else "success"
+                    ),
+                    "started_at_ms": started_at_ms,
+                    "ts_ms": completed_at_ms,
+                },
             )
+            return result
 
         dynamic_tools.append(function_tool(raw_schema=raw_schema)(_call_dynamic_http_tool))
 

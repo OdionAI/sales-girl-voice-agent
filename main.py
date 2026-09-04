@@ -95,6 +95,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 VOICE_LAB_METRICS_TOPIC = "odion.voice_lab.metrics"
+TOOL_ACTIVITY_TOPIC = "odion.tool.activity"
 
 
 # AgentServer allows only one rtc_session per process. To support both English and
@@ -1781,6 +1782,30 @@ def _normalize_runtime_overrides(raw: Any) -> dict[str, str]:
     return normalized
 
 
+_WEMA_CUSTOMER_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,120}$")
+_WEMA_ACCOUNT_NUMBER_PATTERN = re.compile(r"^\d{10}$")
+_WEMA_PHONE_PATTERN = re.compile(r"^(?:0\d{10}|\+234\d{10})$")
+
+
+def _normalize_wema_context(raw: Any) -> dict[str, str]:
+    if not isinstance(raw, dict):
+        return {}
+
+    customer_id = str(raw.get("customer_id") or raw.get("customerId") or "").strip()
+    account_number = str(
+        raw.get("account_number") or raw.get("accountNumber") or ""
+    ).strip()
+    phone_number = str(raw.get("phone_number") or raw.get("phoneNumber") or "").strip()
+    normalized: dict[str, str] = {}
+    if _WEMA_CUSTOMER_ID_PATTERN.fullmatch(customer_id):
+        normalized["wema_customer_id"] = customer_id
+    if _WEMA_ACCOUNT_NUMBER_PATTERN.fullmatch(account_number):
+        normalized["wema_account_number"] = account_number
+    if _WEMA_PHONE_PATTERN.fullmatch(phone_number):
+        normalized["wema_phone_number"] = phone_number
+    return normalized
+
+
 WEB_METADATA_WAIT_SECONDS = 3
 
 
@@ -1817,6 +1842,27 @@ def _extract_tts_overrides_from_ctx(ctx: JobContext) -> dict[str, Any]:
         if runtime_overrides:
             overrides["runtime_overrides"] = runtime_overrides
         return overrides
+    return {}
+
+
+def _extract_wema_context_from_ctx(ctx: JobContext) -> dict[str, str]:
+    room = getattr(ctx, "room", None)
+    participants = getattr(room, "remote_participants", None)
+    if not participants:
+        return {}
+
+    values = participants.values() if hasattr(participants, "values") else participants
+    for participant in values:
+        metadata_raw = str(getattr(participant, "metadata", "") or "").strip()
+        if not metadata_raw:
+            continue
+        try:
+            payload = json.loads(metadata_raw)
+        except json.JSONDecodeError:
+            continue
+        normalized = _normalize_wema_context(payload.get("wema_context"))
+        if normalized:
+            return normalized
     return {}
 
 
@@ -2006,7 +2052,12 @@ async def _init_session_userdata(ctx: JobContext, language: str) -> dict[str, An
     job_runtime_overrides = _normalize_runtime_overrides(
         job_metadata.get("runtime_overrides")
     )
+    job_wema_context = _normalize_wema_context(job_metadata.get("wema_context"))
     participant_overrides = _extract_tts_overrides_from_ctx(ctx)
+    wema_context = {
+        **job_wema_context,
+        **_extract_wema_context_from_ctx(ctx),
+    }
     runtime_overrides = {
         **job_runtime_overrides,
         **identity_runtime_overrides,
@@ -2040,6 +2091,10 @@ async def _init_session_userdata(ctx: JobContext, language: str) -> dict[str, An
                 identity_runtime_overrides,
             ) = _participant_identity_from_ctx(ctx)
             participant_overrides = _extract_tts_overrides_from_ctx(ctx)
+            wema_context = {
+                **job_wema_context,
+                **_extract_wema_context_from_ctx(ctx),
+            }
             runtime_overrides = {
                 **job_runtime_overrides,
                 **identity_runtime_overrides,
@@ -2119,7 +2174,83 @@ async def _init_session_userdata(ctx: JobContext, language: str) -> dict[str, An
         "guest_context": "",
         "session_kind": "",
         "usage_meter": UsageMeter(),
-    } | participant_overrides | _extract_session_extras_from_ctx(ctx)
+    } | participant_overrides | wema_context | _extract_session_extras_from_ctx(ctx)
+
+
+_TOOL_ACTIVITY_SECRET_KEYS = {
+    "api_key",
+    "apikey",
+    "authorization",
+    "password",
+    "secret",
+    "service_token",
+    "token",
+}
+
+
+def _bounded_tool_activity_value(value: Any, *, depth: int = 0) -> Any:
+    if depth >= 8:
+        return "[truncated]"
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    if isinstance(value, str):
+        return value if len(value) <= 1000 else f"{value[:1000]}..."
+    if isinstance(value, dict):
+        bounded: dict[str, Any] = {}
+        items = list(value.items())
+        for key, item in items[:24]:
+            key_text = str(key)
+            normalized_key = key_text.strip().lower().replace("-", "_")
+            if normalized_key in _TOOL_ACTIVITY_SECRET_KEYS:
+                bounded[key_text] = "[redacted]"
+            else:
+                bounded[key_text] = _bounded_tool_activity_value(
+                    item, depth=depth + 1
+                )
+        if len(items) > 24:
+            bounded["_truncated_fields"] = len(items) - 24
+        return bounded
+    if isinstance(value, (list, tuple, set)):
+        items = list(value)
+        bounded_items = [
+            _bounded_tool_activity_value(item, depth=depth + 1)
+            for item in items[:20]
+        ]
+        if len(items) > 20:
+            bounded_items.append({"_truncated_items": len(items) - 20})
+        return bounded_items
+    return str(value)[:1000]
+
+
+def _tool_activity_publisher(room: Any, userdata: dict[str, Any]) -> Any:
+    if room is None or str(userdata.get("identity_type") or "").lower() != "web":
+        return None
+
+    def _publish(event: dict[str, Any]) -> asyncio.Task[None]:
+        payload = {
+            "type": "odion.tool.activity",
+            **_bounded_tool_activity_value(event),
+        }
+
+        async def _send() -> None:
+            try:
+                await room.local_participant.publish_data(
+                    json.dumps(payload, separators=(",", ":")),
+                    reliable=True,
+                    topic=TOOL_ACTIVITY_TOPIC,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "Could not publish tool activity name=%s event=%s: %s",
+                    event.get("tool_name"),
+                    event.get("event"),
+                    exc,
+                )
+
+        # Telemetry must never add network latency to the tool execution path.
+        return asyncio.create_task(_send())
+
+    return _publish
 
 
 def _wire_session_timeline(
@@ -4347,6 +4478,7 @@ async def entrypoint(ctx: JobContext):
         dynamic_tools = build_dynamic_http_tools(
             active_agent_config,
             excluded_tool_names=set(BUILTIN_RUNTIME_TOOL_NAMES),
+            on_tool_activity=_tool_activity_publisher(ctx.room, userdata),
         )
         if dynamic_tools:
             logger.info(
@@ -4528,6 +4660,7 @@ async def entrypoint(ctx: JobContext):
         dynamic_tools = build_dynamic_http_tools(
             active_agent_config,
             excluded_tool_names=set(BUILTIN_RUNTIME_TOOL_NAMES),
+            on_tool_activity=_tool_activity_publisher(ctx.room, userdata),
         )
         if dynamic_tools:
             logger.info(

@@ -145,6 +145,17 @@ class WemaToolsTests(unittest.TestCase):
     def test_package_cannot_be_used_for_wrong_network(self):
         value = self.invoke("wema_prepare_data_purchase", {**DATA, "network": "Airtel"})
         self.assertEqual(value["status"], "needs_input")
+        self.assertEqual(value["data"]["missing_fields"], ["package_id"])
+        self.assertIn("saved account and phone number", value["message"])
+        self.assertEqual(self.workflows.operations, {})
+
+    def test_package_price_is_not_accepted_as_package_id(self):
+        value = self.invoke("wema_prepare_data_purchase", {**DATA, "package_id": 500})
+        self.assertEqual(value["status"], "needs_input")
+        self.assertEqual(value["data"]["missing_fields"], ["package_id"])
+        self.assertEqual(value["data"]["network"], "MTN")
+        self.assertEqual(value["data"]["packages"][0]["id"], 1)
+        self.assertIn("do not use the package price", value["message"])
         self.assertEqual(self.workflows.operations, {})
 
     def test_price_customer_and_auth_cannot_be_injected(self):

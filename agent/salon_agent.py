@@ -77,6 +77,11 @@ def _tool_metadata(ctx: RunContext) -> dict:
         "conversation_id": conversation_id,
         "session_id": session_id,
         "end_user_id": str(session_userdata.get("end_user_id") or ""),
+        "wema_customer_id": str(session_userdata.get("wema_customer_id") or ""),
+        "wema_account_number": str(
+            session_userdata.get("wema_account_number") or ""
+        ),
+        "wema_phone_number": str(session_userdata.get("wema_phone_number") or ""),
         "enabled_tool_names": list(session_userdata.get("enabled_tool_names") or []),
         "turn_index": int(session_userdata.get("turn_index", 0)),
         "last_user_transcript": str(session_userdata.get("last_user_transcript") or ""),

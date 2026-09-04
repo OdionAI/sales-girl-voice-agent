@@ -321,5 +321,36 @@ class TranscriptAndTicketGuardTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(reused["reused_existing_ticket"])
 
 
+class ToolActivityPublisherTests(unittest.IsolatedAsyncioTestCase):
+    async def test_web_tool_activity_is_bounded_redacted_and_published(self) -> None:
+        publish_data = AsyncMock()
+        room = SimpleNamespace(
+            local_participant=SimpleNamespace(publish_data=publish_data)
+        )
+        publisher = main._tool_activity_publisher(
+            room,
+            {"identity_type": "web"},
+        )
+
+        await publisher(
+            {
+                "event": "completed",
+                "call_id": "tool-1",
+                "tool_name": "wema_list_transfer_banks",
+                "arguments": {"query": "access", "token": "do-not-send"},
+                "result": {"status": "ok", "banks": list(range(25))},
+            }
+        )
+
+        publish_data.assert_awaited_once()
+        call = publish_data.await_args
+        payload = json.loads(call.args[0])
+        self.assertEqual(payload["type"], "odion.tool.activity")
+        self.assertEqual(payload["arguments"]["token"], "[redacted]")
+        self.assertEqual(payload["result"]["banks"][-1], {"_truncated_items": 5})
+        self.assertEqual(call.kwargs["topic"], main.TOOL_ACTIVITY_TOPIC)
+        self.assertTrue(call.kwargs["reliable"])
+
+
 if __name__ == "__main__":
     unittest.main()

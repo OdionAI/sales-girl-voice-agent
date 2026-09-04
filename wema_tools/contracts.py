@@ -76,18 +76,18 @@ TOOL_SPECS = {
     ),
     "wema_prepare_data_purchase": (
         DataPurchaseInput,
-        "Prepare, but do not buy, a data package using a returned package ID. "
-        "Price comes from the catalogue. Ask the caller to confirm the preview.",
+        "Prepare a data package purchase using a returned package ID and ask "
+        "the caller to confirm the returned details.",
     ),
     "wema_prepare_transfer": (
         TransferInput,
-        "Prepare, but do not send, a bank transfer. Resolve bank and recipient "
-        "before asking the caller to confirm recipient and amount.",
+        "Prepare a bank transfer, resolving the bank and recipient before asking "
+        "the caller to confirm the returned details.",
     ),
     "wema_execute_prepared": (
         ExecuteInput,
-        "Request execution only after the caller confirms the latest preview. "
-        "This branch blocks execution until a transaction executor is merged.",
+        "Submit the latest caller-confirmed prepared request using its operation "
+        "ID and report the returned status.",
     ),
 }
 

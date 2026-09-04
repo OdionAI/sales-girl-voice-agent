@@ -336,6 +336,47 @@ class VoiceLabMetadataHydrationTests(unittest.IsolatedAsyncioTestCase):
             "voice_lab_runtime_overrides",
         )
 
+    async def test_web_room_hydrates_validated_wema_context(self) -> None:
+        metadata = json.dumps(
+            {
+                "end_user_phone": "+2348161540638",
+                "identity_type": "web",
+                "wema_context": {
+                    "customer_id": "R008448055",
+                    "account_number": "0125679408",
+                    "phone_number": "08161540638",
+                    "ignored": "not copied",
+                },
+            }
+        )
+        room_name = (
+            f"voice_assistant_room_eid{_room_token('+2348161540638')}"
+            f"_bid{_room_token('business-123')}"
+            f"_aid{_room_token('agent-123')}"
+            f"_nid{_room_token('SAW')}_4321"
+        )
+        ctx = _FakeVoiceLabContext(room_name=room_name, metadata=metadata)
+
+        userdata = await main._init_session_userdata(ctx, language="en")
+
+        self.assertEqual(ctx.wait_count, 1)
+        self.assertEqual(userdata["wema_customer_id"], "R008448055")
+        self.assertEqual(userdata["wema_account_number"], "0125679408")
+        self.assertEqual(userdata["wema_phone_number"], "08161540638")
+        self.assertNotIn("ignored", userdata)
+
+    def test_invalid_wema_context_values_are_not_hydrated(self) -> None:
+        self.assertEqual(
+            main._normalize_wema_context(
+                {
+                    "customer_id": "bad header\nvalue",
+                    "account_number": "123",
+                    "phone_number": "0816",
+                }
+            ),
+            {},
+        )
+
 
 class _FakeTTSContent:
     def __init__(self, chunks: list[bytes] | None = None) -> None:

@@ -207,12 +207,34 @@ class WemaWorkflows:
         if selection:
             return selection
         groups = await self.bank.read("D2")
-        matches = [(g, p) for g in groups for p in g["dataPackages"]
-                   if g["networkProvider"].casefold() == args.network.strip().casefold()
-                   and p["id"] == args.package_id]
-        if len(matches) != 1:
-            return self._result("needs_input", "Choose a package returned for that network.", networks=groups)
-        group, package = matches[0]
+        network_groups = [
+            group for group in groups
+            if group["networkProvider"].casefold() == args.network.strip().casefold()
+        ]
+        if len(network_groups) != 1:
+            return self._result(
+                "needs_input",
+                "Choose a network returned by wema_list_data_plans. The caller's "
+                "saved account and phone number are already available.",
+                missing_fields=["network", "package_id"],
+                networks=groups,
+            )
+        group = network_groups[0]
+        packages = [
+            package for package in group["dataPackages"]
+            if package["id"] == args.package_id
+        ]
+        if len(packages) != 1:
+            return self._result(
+                "needs_input",
+                "Use the exact package_id returned by wema_list_data_plans for "
+                "this network; do not use the package price as its ID. The "
+                "caller's saved account and phone number are already available.",
+                missing_fields=["package_id"],
+                network=group["networkProvider"],
+                packages=group["dataPackages"],
+            )
+        package = packages[0]
         amount = Decimal(str(package["amount"]))
         if account["currency"] != "NGN" or not amount.is_finite() or amount <= 0:
             raise WorkflowError("Unsupported currency or invalid package price.")
