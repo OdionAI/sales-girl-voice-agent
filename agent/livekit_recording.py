@@ -29,6 +29,7 @@ RECORDING_S3_FORCE_PATH_STYLE = os.getenv("LIVEKIT_RECORDING_S3_FORCE_PATH_STYLE
 RECORDING_PREFIX = str(os.getenv("LIVEKIT_RECORDING_FILE_PREFIX", "livekit-recordings")).strip("/") or "livekit-recordings"
 RECORDING_FORMAT = str(os.getenv("LIVEKIT_RECORDING_FORMAT", "mp3")).strip().lower() or "mp3"
 RECORDING_PUBLIC_BASE_URL = str(os.getenv("LIVEKIT_RECORDING_PUBLIC_BASE_URL", "")).strip().rstrip("/")
+RECORDING_LOCAL_OUTPUT_DIR = str(os.getenv("LIVEKIT_RECORDING_LOCAL_OUTPUT_DIR", "")).strip().rstrip("/")
 RECORDING_POLL_TIMEOUT_SECONDS = max(5, int(os.getenv("LIVEKIT_RECORDING_POLL_TIMEOUT_SECONDS", "45")))
 RECORDING_POLL_INTERVAL_SECONDS = max(1, int(os.getenv("LIVEKIT_RECORDING_POLL_INTERVAL_SECONDS", "2")))
 
@@ -51,7 +52,11 @@ class RecordingFinalizeResult:
 
 
 def is_recording_enabled() -> bool:
-    if not RECORDING_ENABLED or not RECORDING_BUCKET:
+    if not RECORDING_ENABLED:
+        return False
+    if RECORDING_STORAGE_PROVIDER == "local":
+        return RECORDING_LOCAL_OUTPUT_DIR.startswith("/")
+    if not RECORDING_BUCKET:
         return False
     if RECORDING_STORAGE_PROVIDER == "s3":
         return bool(RECORDING_S3_ACCESS_KEY and RECORDING_S3_SECRET_KEY and RECORDING_S3_ENDPOINT)
@@ -82,11 +87,16 @@ def _recording_path(*, business_id: str, session_id: str, room_name: str, starte
     room_slug = _safe_slug(room_name, "room")
     session_slug = _safe_slug(session_id, "session")
     filename = f"{stamp}-{room_slug}-{session_slug}.{RECORDING_FORMAT}"
+    if RECORDING_STORAGE_PROVIDER == "local":
+        # Room names can exceed the filesystem's single-filename length limit.
+        filename = f"{stamp}-{session_slug}.{RECORDING_FORMAT}"
     return posixpath.join(RECORDING_PREFIX, business_slug, filename)
 
 
 def _public_url_for_path(filepath: str) -> str:
     normalized_path = filepath.lstrip("/")
+    if RECORDING_STORAGE_PROVIDER == "local":
+        return f"local-recording:///{normalized_path}"
     if RECORDING_PUBLIC_BASE_URL:
         return f"{RECORDING_PUBLIC_BASE_URL}/{normalized_path}"
     if RECORDING_STORAGE_PROVIDER == "s3":
@@ -184,8 +194,8 @@ async def start_room_recording(
     if not is_recording_enabled():
         return RecordingStartResult(enabled=False, detail="recording_disabled")
 
-    credentials = _serialize_credentials()
-    if RECORDING_STORAGE_PROVIDER != "s3" and not credentials:
+    credentials = _serialize_credentials() if RECORDING_STORAGE_PROVIDER not in {"local", "s3"} else ""
+    if RECORDING_STORAGE_PROVIDER not in {"local", "s3"} and not credentials:
         return RecordingStartResult(enabled=False, detail="invalid_gcp_credentials")
 
     filepath = _recording_path(
@@ -194,35 +204,25 @@ async def start_room_recording(
         room_name=room_name,
         started_at=started_at,
     )
+    output = api.EncodedFileOutput(file_type=_file_type_for_format(), filepath=filepath)
+    if RECORDING_STORAGE_PROVIDER == "local":
+        output.filepath = posixpath.join(RECORDING_LOCAL_OUTPUT_DIR, filepath)
+    elif RECORDING_STORAGE_PROVIDER == "s3":
+        output.s3.CopyFrom(api.S3Upload(
+            access_key=RECORDING_S3_ACCESS_KEY,
+            secret=RECORDING_S3_SECRET_KEY,
+            session_token=RECORDING_S3_SESSION_TOKEN,
+            region=RECORDING_S3_REGION,
+            endpoint=RECORDING_S3_ENDPOINT,
+            bucket=RECORDING_BUCKET,
+            force_path_style=RECORDING_S3_FORCE_PATH_STYLE,
+        ))
+    else:
+        output.gcp.CopyFrom(api.GCPUpload(bucket=RECORDING_BUCKET, credentials=credentials))
     req = api.RoomCompositeEgressRequest(
         room_name=room_name,
         audio_only=True,
-        file_outputs=[
-            api.EncodedFileOutput(
-                file_type=_file_type_for_format(),
-                filepath=filepath,
-                **(
-                    {
-                        "s3": api.S3Upload(
-                            access_key=RECORDING_S3_ACCESS_KEY,
-                            secret=RECORDING_S3_SECRET_KEY,
-                            session_token=RECORDING_S3_SESSION_TOKEN,
-                            region=RECORDING_S3_REGION,
-                            endpoint=RECORDING_S3_ENDPOINT,
-                            bucket=RECORDING_BUCKET,
-                            force_path_style=RECORDING_S3_FORCE_PATH_STYLE,
-                        )
-                    }
-                    if RECORDING_STORAGE_PROVIDER == "s3"
-                    else {
-                        "gcp": api.GCPUpload(
-                            bucket=RECORDING_BUCKET,
-                            credentials=credentials,
-                        )
-                    }
-                ),
-            )
-        ],
+        file_outputs=[output],
     )
 
     lkapi = _api_client()
@@ -258,6 +258,9 @@ def _extract_completed_location(info: Any) -> str | None:
 
 
 def _normalize_recording_url(location: str | None, fallback: str | None) -> str | None:
+    if RECORDING_STORAGE_PROVIDER == "local":
+        # Never expose the container filesystem path to the browser.
+        return fallback
     raw = str(location or "").strip()
     if not raw:
         return fallback
@@ -314,13 +317,16 @@ async def finalize_room_recording(
             items = list(getattr(listing, "items", []) or [])
             latest = items[0] if items else latest
             location = _extract_completed_location(latest)
-            if location:
+            status_code = int(getattr(latest, "status", 0) or 0) if latest is not None else 0
+            if location and (
+                RECORDING_STORAGE_PROVIDER != "local"
+                or status_code == int(api.EgressStatus.EGRESS_COMPLETE)
+            ):
                 return RecordingFinalizeResult(
                     status="available",
                     recording_url=_normalize_recording_url(location, expected_url),
                     duration_seconds=duration_seconds,
                 )
-            status_code = int(getattr(latest, "status", 0) or 0) if latest is not None else 0
             error_text = str(getattr(latest, "error", "") or "").strip() if latest is not None else ""
             if status_code in {
                 int(api.EgressStatus.EGRESS_FAILED),

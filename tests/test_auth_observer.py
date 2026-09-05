@@ -88,6 +88,19 @@ class AuthObserverLogicTests(unittest.TestCase):
         self.assertFalse(userdata["auth_observer_enabled"])
         self.assertEqual(instructions, "You are a helpful agent.")
 
+    def test_apply_session_enables_auth_for_wema_read_tools(self) -> None:
+        userdata = {
+            "enabled_tool_names": ["wema_get_balance", "wema_get_transactions"],
+            "end_user_id": "a@b.com",
+        }
+        with patch.dict(os.environ, {"AUTH_OBSERVER_ENABLED": "true"}):
+            instructions = apply_auth_observer_session(
+                userdata, "You are a helpful agent."
+            )
+
+        self.assertTrue(userdata["auth_observer_enabled"])
+        self.assertIn("every Wema tool call", instructions)
+
     def test_observer_verifies_session_once_from_first_usable_clip(self) -> None:
         session = _FakeSession()
         compares = [_match(True)]
@@ -171,6 +184,98 @@ class AuthObserverLogicTests(unittest.TestCase):
 
         asyncio.run(_run())
         self.assertEqual(session.userdata["auth_status"], AUTH_FAILED)
+
+    def test_failed_session_check_retries_on_next_user_utterance(self) -> None:
+        session = _FakeSession()
+        results = [_match(False), _match(True)]
+
+        async def _run() -> None:
+            observer = FakeVoiceAuthObserver(
+                session,
+                delay_seconds=0,
+                compare_fn=lambda *args, **kwargs: results.pop(0),
+            )
+            await observer.ingest_pcm(np.ones(16000 * 2, dtype=np.float32), 16000)
+            session.emit(
+                "conversation_item_added",
+                SimpleNamespace(
+                    item=SimpleNamespace(role="user", content="Please check my balance")
+                ),
+            )
+            await asyncio.sleep(0.05)
+            self.assertEqual(session.userdata["auth_status"], AUTH_FAILED)
+
+            await observer.ingest_pcm(np.ones(16000 * 2, dtype=np.float32), 16000)
+            session.emit(
+                "conversation_item_added",
+                SimpleNamespace(
+                    item=SimpleNamespace(role="user", content="Check it again please")
+                ),
+            )
+            await asyncio.sleep(0.05)
+
+        asyncio.run(_run())
+        self.assertEqual(session.userdata["auth_status"], AUTH_VERIFIED)
+        self.assertEqual(results, [])
+
+    def test_wema_read_tool_requires_session_and_fresh_action_checks(self) -> None:
+        session = _FakeSession()
+        results = [_match(True), _match(True)]
+
+        async def _run() -> None:
+            observer = FakeVoiceAuthObserver(
+                session,
+                delay_seconds=0,
+                compare_fn=lambda *args, **kwargs: results.pop(0),
+            )
+            await observer.ingest_pcm(np.ones(16000 * 2, dtype=np.float32), 16000)
+            decision = await observer.authorize_action(
+                action="wema_get_balance",
+                transcript="What is my balance?",
+            )
+            self.assertTrue(decision["authorized"])
+            self.assertEqual(decision["session_status"], AUTH_VERIFIED)
+            self.assertEqual(decision["action_status"], AUTH_VERIFIED)
+
+        asyncio.run(_run())
+        self.assertEqual(results, [])
+
+    def test_tool_retry_uses_new_utterance_after_failed_session_check(self) -> None:
+        session = _FakeSession()
+        results = [_match(False), _match(True), _match(True)]
+
+        async def _run() -> None:
+            observer = FakeVoiceAuthObserver(
+                session,
+                delay_seconds=0,
+                compare_fn=lambda *args, **kwargs: results.pop(0),
+            )
+            await observer.ingest_pcm(np.ones(16000 * 2, dtype=np.float32), 16000)
+            session.emit(
+                "conversation_item_added",
+                SimpleNamespace(
+                    item=SimpleNamespace(role="user", content="Please check my balance")
+                ),
+            )
+            await asyncio.sleep(0.05)
+            self.assertEqual(session.userdata["auth_status"], AUTH_FAILED)
+
+            await observer.ingest_pcm(np.ones(16000 * 2, dtype=np.float32), 16000)
+            session.emit(
+                "conversation_item_added",
+                SimpleNamespace(
+                    item=SimpleNamespace(role="user", content="Please try my balance again")
+                ),
+            )
+            decision = await observer.authorize_action(
+                action="wema_get_balance",
+                transcript="Please try my balance again",
+            )
+            self.assertTrue(decision["authorized"])
+            await asyncio.sleep(0.05)
+
+        asyncio.run(_run())
+        self.assertEqual(results, [])
 
     def test_action_check_is_independent_and_gates_airtime(self) -> None:
         session = _FakeSession()

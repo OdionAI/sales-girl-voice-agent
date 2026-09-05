@@ -59,6 +59,7 @@ from agent.billing_hooks import (
 )
 from agent.agent_config_api import get_runtime_config as get_agent_runtime_config
 from agent.dynamic_tools import build_dynamic_http_tools
+from agent.tool_wait_speech import normalize_tool_wait_speech_mode
 from agent.ops_api import (
     create_ticket as ops_create_ticket,
     get_account_overview as ops_get_account_overview,
@@ -1896,6 +1897,10 @@ def _extract_session_extras_from_ctx(ctx: JobContext) -> dict[str, Any]:
         except json.JSONDecodeError:
             continue
         extras: dict[str, Any] = {}
+        if "tool_wait_speech_mode" in payload:
+            extras["tool_wait_speech_mode"] = normalize_tool_wait_speech_mode(
+                payload["tool_wait_speech_mode"]
+            )
         guest_context = str(payload.get("guest_context") or "").strip()
         if guest_context:
             extras["guest_context"] = guest_context[:4000]
@@ -2158,6 +2163,9 @@ async def _init_session_userdata(ctx: JobContext, language: str) -> dict[str, An
         "end_user_name": end_user_name,
         "tts_endpoint": tts_endpoint,
         "runtime_overrides": runtime_overrides,
+        "tool_wait_speech_mode": normalize_tool_wait_speech_mode(
+            job_metadata.get("tool_wait_speech_mode")
+        ),
         "entry_surface": str(job_metadata.get("entry_surface") or "").strip(),
         "session_owner": str(job_metadata.get("owner") or "").strip(),
         "route_number": str(job_metadata.get("route_number") or "").strip(),

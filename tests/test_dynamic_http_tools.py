@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from contextlib import nullcontext
 from types import SimpleNamespace
 import unittest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import httpx
 
@@ -11,6 +12,19 @@ from agent.dynamic_tools import build_dynamic_http_tools
 
 
 class DynamicHttpToolsTests(unittest.IsolatedAsyncioTestCase):
+    @staticmethod
+    def _verified_observer() -> SimpleNamespace:
+        return SimpleNamespace(
+            authorize_action=AsyncMock(
+                return_value={
+                    "authorized": True,
+                    "session_status": "verified",
+                    "action_status": "verified",
+                }
+            ),
+            publish_action_outcome=AsyncMock(),
+        )
+
     @staticmethod
     def _execute_prepared_config(
         *, include_auth_fields: bool = False
@@ -60,6 +74,7 @@ class DynamicHttpToolsTests(unittest.IsolatedAsyncioTestCase):
         return SimpleNamespace(
             session=SimpleNamespace(userdata=userdata),
             room=SimpleNamespace(name="room-123"),
+            with_filler=Mock(side_effect=lambda *args, **kwargs: nullcontext()),
         )
 
     async def test_dynamic_post_tool_executes_and_returns_json_payload(self) -> None:
@@ -149,6 +164,7 @@ class DynamicHttpToolsTests(unittest.IsolatedAsyncioTestCase):
         )
         context = self._run_context(
             ["wema_prepare_data_purchase"],
+            auth_observer=self._verified_observer(),
             wema_customer_id="R008448055",
             wema_account_number="0125679408",
             wema_phone_number="08161540638",
@@ -214,6 +230,7 @@ class DynamicHttpToolsTests(unittest.IsolatedAsyncioTestCase):
         )
         context = self._run_context(
             ["wema_get_balance"],
+            auth_observer=self._verified_observer(),
             wema_customer_id="R008448055",
             wema_account_number="0125679408",
         )
@@ -261,6 +278,7 @@ class DynamicHttpToolsTests(unittest.IsolatedAsyncioTestCase):
         )
         context = self._run_context(
             ["wema_prepare_data_purchase"],
+            auth_observer=self._verified_observer(),
             wema_customer_id="R008448055",
             wema_account_number="0125679408",
             wema_phone_number="08161540638",
@@ -285,6 +303,96 @@ class DynamicHttpToolsTests(unittest.IsolatedAsyncioTestCase):
             await tools[0](ctx=context, raw_arguments=arguments)
 
         self.assertEqual(client.request.await_args.kwargs["json"], arguments)
+
+    async def test_all_wema_tools_block_when_auth_observer_is_missing(self) -> None:
+        tool_names = [
+            "wema_get_balance",
+            "wema_get_transactions",
+            "wema_list_data_plans",
+            "wema_list_transfer_banks",
+            "wema_prepare_data_purchase",
+            "wema_prepare_transfer",
+            ACTION_WEMA_EXECUTE_PREPARED,
+        ]
+
+        for tool_name in tool_names:
+            with self.subTest(tool_name=tool_name):
+                tools = build_dynamic_http_tools(
+                    {
+                        "tools": [
+                            {
+                                "name": tool_name,
+                                "description": "Run a Wema banking request.",
+                                "method": "POST",
+                                "url": f"https://wema.example.com/{tool_name}",
+                                "request_schema": {
+                                    "type": "object",
+                                    "properties": {},
+                                    "required": [],
+                                    "additionalProperties": False,
+                                },
+                            }
+                        ]
+                    }
+                )
+                context = self._run_context([tool_name])
+
+                with patch("agent.dynamic_tools.httpx.AsyncClient") as client_cls:
+                    result = await tools[0](ctx=context, raw_arguments={})
+
+                self.assertEqual(result["status"], "failed")
+                self.assertTrue(result["auth_required"])
+                self.assertEqual(result["reason"], "voice_not_recognized")
+                client_cls.assert_not_called()
+
+    async def test_balance_and_history_call_http_only_after_voice_auth(self) -> None:
+        for tool_name in ["wema_get_balance", "wema_get_transactions"]:
+            with self.subTest(tool_name=tool_name):
+                observer = self._verified_observer()
+                tools = build_dynamic_http_tools(
+                    {
+                        "tools": [
+                            {
+                                "name": tool_name,
+                                "description": "Read protected Wema account information.",
+                                "method": "POST",
+                                "url": f"https://wema.example.com/{tool_name}",
+                                "request_schema": {
+                                    "type": "object",
+                                    "properties": {},
+                                    "required": [],
+                                    "additionalProperties": False,
+                                },
+                            }
+                        ]
+                    }
+                )
+                context = self._run_context(
+                    [tool_name],
+                    auth_observer=observer,
+                    last_user_transcript="Show me my account information.",
+                )
+
+                with patch("agent.dynamic_tools.httpx.AsyncClient") as client_cls:
+                    client = AsyncMock()
+                    client.request.return_value = httpx.Response(
+                        200,
+                        json={"status": "ok", "data": {}},
+                        headers={"content-type": "application/json"},
+                    )
+                    client_cls.return_value.__aenter__.return_value = client
+                    client_cls.return_value.__aexit__.return_value = False
+
+                    result = await tools[0](ctx=context, raw_arguments={})
+
+                self.assertEqual(result["status"], "ok")
+                observer.authorize_action.assert_awaited_once_with(
+                    action=tool_name,
+                    transcript="Show me my account information.",
+                    details={},
+                )
+                observer.publish_action_outcome.assert_not_awaited()
+                client.request.assert_awaited_once()
 
     async def test_execute_prepared_hides_auth_fields_from_model_schema(self) -> None:
         tools = build_dynamic_http_tools(

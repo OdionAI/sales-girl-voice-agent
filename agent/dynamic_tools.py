@@ -7,6 +7,7 @@ import re
 import time
 import uuid
 from collections.abc import Callable
+from contextlib import nullcontext
 from typing import Any
 
 import httpx
@@ -16,13 +17,34 @@ from livekit.agents import RunContext, function_tool
 from .tool_schema_compat import strictify_schema_for_groq
 
 from .salon_agent import _is_tool_enabled, _tool_metadata
-from .auth_observer import ACTION_WEMA_EXECUTE_PREPARED
+from .auth_observer import ACTION_WEMA_EXECUTE_PREPARED, is_privileged_action
+from .tool_wait_speech import GeneratedToolWaitSpeech, normalize_tool_wait_speech_mode
 
 logger = logging.getLogger(__name__)
 
 HTTP_TOOL_TIMEOUT_SECONDS = float(
     os.getenv("AGENT_DYNAMIC_TOOL_TIMEOUT_SECONDS", "12")
 )
+HTTP_TOOL_FILLER_DELAY_SECONDS = float(
+    os.getenv("AGENT_DYNAMIC_TOOL_FILLER_DELAY_SECONDS", "0.75")
+)
+HTTP_TOOL_FILLER_INTERVAL_SECONDS = float(
+    os.getenv("AGENT_DYNAMIC_TOOL_FILLER_INTERVAL_SECONDS", "6")
+)
+HTTP_TOOL_FILLER_MESSAGES = (
+    "One moment while I check your request.",
+    "Thanks for waiting. I'm still checking that for you.",
+    "It's taking a little longer. I'm still here with you.",
+)
+HTTP_TOOL_ACKNOWLEDGEMENTS = {
+    "wema_get_balance": "Let me check your available balance.",
+    "wema_get_transactions": "Let me check your recent transactions.",
+    "wema_list_data_plans": "Let me check the data plans for you.",
+    "wema_list_transfer_banks": "Let me look up that bank for you.",
+    "wema_prepare_data_purchase": "Let me check the details for your data purchase.",
+    "wema_prepare_transfer": "Let me check the details for your transfer.",
+    "wema_execute_prepared": "Let me check your confirmed transaction request.",
+}
 HTTP_TOOL_ALLOWED_METHODS = {
     "GET",
     "POST",
@@ -35,7 +57,6 @@ WEMA_TOOL_PREFIX = "wema_"
 WEMA_CUSTOMER_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,120}$")
 WEMA_ACCOUNT_NUMBER_PATTERN = re.compile(r"^\d{10}$")
 WEMA_PHONE_PATTERN = re.compile(r"^(?:0\d{10}|\+234\d{10})$")
-PRIVILEGED_DYNAMIC_TOOLS = {ACTION_WEMA_EXECUTE_PREPARED}
 AUTH_CONTROL_FIELDS = {
     "authenticated",
     "auth_status",
@@ -335,8 +356,31 @@ def _session_userdata(ctx: RunContext) -> dict[str, Any]:
     return userdata if isinstance(userdata, dict) else {}
 
 
+def _tool_wait_filler(
+    ctx: RunContext, tool_name: str, step: int,
+    generated: GeneratedToolWaitSpeech | None = None,
+):
+    userdata = _session_userdata(ctx)
+    now = time.monotonic()
+    last_spoken = userdata.get("_dynamic_tool_last_filler_at", float("-inf"))
+    # Parallel tools share one voice; only one may fill the same quiet pause.
+    if now - last_spoken < HTTP_TOOL_FILLER_INTERVAL_SECONDS:
+        return None
+    userdata["_dynamic_tool_last_filler_at"] = now
+    text = (
+        HTTP_TOOL_ACKNOWLEDGEMENTS.get(tool_name, HTTP_TOOL_FILLER_MESSAGES[0])
+        if step == 0 else HTTP_TOOL_FILLER_MESSAGES[step]
+    )
+    return generated.say(step, text) if generated is not None else text
+
+
 def _voice_auth_blocked_payload(tool_name: str, decision: dict[str, Any] | None = None) -> dict[str, Any]:
     auth_decision = decision if isinstance(decision, dict) else {}
+    request_label = (
+        "transaction"
+        if tool_name == ACTION_WEMA_EXECUTE_PREPARED
+        else "banking request"
+    )
     return {
         "status": "failed",
         "tool_name": tool_name,
@@ -345,9 +389,9 @@ def _voice_auth_blocked_payload(tool_name: str, decision: dict[str, Any] | None 
         "action_status": str(auth_decision.get("action_status") or "pending"),
         "reason": "voice_not_recognized",
         "message": (
-            "The transaction was blocked because the caller's voice was not recognized. "
+            f"The {request_label} was blocked because the caller's voice was not recognized. "
             "Tell the caller clearly that you could not recognize their voice, so you "
-            "cannot complete this transaction."
+            f"cannot complete this {request_label}."
         ),
     }
 
@@ -358,7 +402,7 @@ async def _authorize_privileged_dynamic_tool(
     tool_name: str,
     arguments: dict[str, Any],
 ) -> tuple[bool, Any | None, dict[str, Any] | None]:
-    if tool_name not in PRIVILEGED_DYNAMIC_TOOLS:
+    if not is_privileged_action(tool_name):
         return True, None, None
 
     userdata = _session_userdata(ctx)
@@ -403,7 +447,7 @@ async def _invoke_authorized_dynamic_http_tool(
         metadata=metadata,
     )
     publish_outcome = getattr(observer, "publish_action_outcome", None)
-    if callable(publish_outcome):
+    if tool_name == ACTION_WEMA_EXECUTE_PREPARED and callable(publish_outcome):
         try:
             await publish_outcome(
                 action=tool_name,
@@ -576,7 +620,7 @@ def build_dynamic_http_tools(
                     current_name,
                     "I can't use that tool from this agent right now.",
                 )
-            elif current_name in PRIVILEGED_DYNAMIC_TOOLS and any(
+            elif is_privileged_action(current_name) and any(
                 field in supplied_arguments for field in AUTH_CONTROL_FIELDS
             ):
                 logger.warning(
@@ -584,29 +628,46 @@ def build_dynamic_http_tools(
                     current_name,
                 )
                 result = _voice_auth_blocked_payload(current_name)
-            elif current_name in PRIVILEGED_DYNAMIC_TOOLS:
-                authorized, observer, blocked = await _authorize_privileged_dynamic_tool(
-                    ctx,
-                    tool_name=current_name,
-                    arguments=arguments,
-                )
-                if blocked is not None:
-                    result = blocked
-                else:
-                    result = await _invoke_authorized_dynamic_http_tool(
-                        ctx=ctx,
-                        tool=_tool,
-                        arguments=arguments,
-                        metadata=metadata,
-                        observer=observer,
-                        voice_auth_authorized=authorized,
-                    )
             else:
-                result = await invoke_dynamic_http_tool(
-                    tool=_tool,
-                    raw_arguments=arguments,
-                    metadata=metadata,
+                mode = normalize_tool_wait_speech_mode(
+                    _session_userdata(ctx).get("tool_wait_speech_mode")
                 )
+                generated = (
+                    GeneratedToolWaitSpeech(ctx, current_name)
+                    if mode == "llm_generated" else None
+                )
+                logger.info("[TOOL] waiting speech mode=%s name=%s", mode, current_name)
+                # The filler scope covers both voice checks and the HTTP wait.
+                # LiveKit only speaks during idle pauses and closes the scheduler on exit.
+                async with generated or nullcontext(), ctx.with_filler(
+                    lambda step: _tool_wait_filler(ctx, current_name, step, generated),
+                    delay=HTTP_TOOL_FILLER_DELAY_SECONDS,
+                    interval=HTTP_TOOL_FILLER_INTERVAL_SECONDS,
+                    max_steps=len(HTTP_TOOL_FILLER_MESSAGES),
+                ):
+                    if is_privileged_action(current_name):
+                        authorized, observer, blocked = await _authorize_privileged_dynamic_tool(
+                            ctx,
+                            tool_name=current_name,
+                            arguments=arguments,
+                        )
+                        if blocked is not None:
+                            result = blocked
+                        else:
+                            result = await _invoke_authorized_dynamic_http_tool(
+                                ctx=ctx,
+                                tool=_tool,
+                                arguments=arguments,
+                                metadata=metadata,
+                                observer=observer,
+                                voice_auth_authorized=authorized,
+                            )
+                    else:
+                        result = await invoke_dynamic_http_tool(
+                            tool=_tool,
+                            raw_arguments=arguments,
+                            metadata=metadata,
+                        )
             completed_at_ms = int(time.time() * 1000)
             _notify_tool_activity(
                 on_tool_activity,

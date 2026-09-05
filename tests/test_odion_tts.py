@@ -377,6 +377,25 @@ class VoiceLabMetadataHydrationTests(unittest.IsolatedAsyncioTestCase):
             {},
         )
 
+    async def test_tool_wait_speech_mode_reaches_userdata_without_runtime_override(self) -> None:
+        for requested, expected in (
+            ("llm_generated", "llm_generated"),
+            ("tool_specific", "tool_specific"),
+            ("invalid", "tool_specific"),
+            (None, "tool_specific"),
+        ):
+            with self.subTest(requested=requested):
+                metadata = {"end_user_email": "research@odion.ai", "identity_type": "web"}
+                if requested is not None:
+                    metadata["tool_wait_speech_mode"] = requested
+                ctx = _FakeVoiceLabContext(
+                    room_name=f"voice_assistant_room_eid{_room_token('research@odion.ai')}_1234",
+                    metadata=json.dumps(metadata),
+                )
+                userdata = await main._init_session_userdata(ctx, language="en")
+                self.assertEqual(userdata["tool_wait_speech_mode"], expected)
+                self.assertEqual(userdata["runtime_overrides"], {})
+
 
 class _FakeTTSContent:
     def __init__(self, chunks: list[bytes] | None = None) -> None:

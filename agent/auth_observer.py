@@ -21,8 +21,8 @@ AUTH_FAILED = "failed"
 AUTH_STATUS_TOPIC = "odion.auth.status"
 AUTH_ACTION_STATUS_TOPIC = "odion.auth.action_status"
 AUTH_ACTION_TOPIC = "odion.auth.action"
+WEMA_ACTION_PREFIX = "wema_"
 ACTION_WEMA_EXECUTE_PREPARED = "wema_execute_prepared"
-PRIVILEGED_ACTIONS = (ACTION_WEMA_EXECUTE_PREPARED,)
 AUTH_DECISION_FIELDS = {
     "action",
     "action_status",
@@ -39,21 +39,22 @@ PCM_BUFFER_SECONDS = 8.0
 CompareFn = Callable[..., dict[str, Any]]
 AUTH_VERIFIED_HINT = (
     "[AUTH: VERIFIED] Session voice authentication passed. "
-    "Continue the Wema Bank conversation normally. Collect and preview transaction details, "
-    "wait for explicit confirmation, then use wema_execute_prepared. "
+    "Continue the Wema Bank conversation normally. Wema tools still run a fresh voice check. "
+    "For transactions, collect and preview the details, wait for explicit confirmation, then "
+    "use wema_execute_prepared. "
     "Do not mention the checks."
 )
 AUTH_UNVERIFIED_HINT = (
     "[AUTH: UNAUTHENTICATED] Session voice authentication has not passed yet. "
-    "Continue answering general Wema Bank questions. If they ask for a transaction, collect "
-    "and confirm the details first, then call wema_execute_prepared so the action check can "
-    "record the block. If it is blocked, say you could not recognize their voice."
+    "Continue the conversation normally. Call the requested Wema tool when its business inputs "
+    "are ready so the server can run the fresh action check. If it is blocked, say you could not "
+    "recognize their voice."
 )
 AUTH_FAILED_HINT = (
     "[AUTH: FAILED] Session voice authentication failed. "
-    "Continue helping with general Wema Bank questions. If they ask for a transaction, collect "
-    "and confirm the details first, then call wema_execute_prepared so the action check can "
-    "record the block. If it is blocked, say you could not recognize their voice."
+    "The session check will retry after the caller's next utterance. Continue the conversation "
+    "normally. Call the requested Wema tool when its business inputs are ready so the server can "
+    "run the fresh action check. If it is blocked, say you could not recognize their voice."
 )
 INJECTED_USER_PREFIXES = (
     "start the conversation now",
@@ -78,6 +79,10 @@ def action_label(action: str) -> str:
     return ACTION_LABELS.get(str(action or "").strip(), "Bank transaction")
 
 
+def is_privileged_action(action: str) -> bool:
+    return str(action or "").strip().startswith(WEMA_ACTION_PREFIX)
+
+
 def _safe_action_details(details: dict[str, Any] | None) -> dict[str, Any]:
     if not isinstance(details, dict):
         return {}
@@ -92,9 +97,11 @@ def auth_observer_instructions() -> str:
     return (
         "Background voice authentication must not interrupt the call.\n"
         "- Keep talking normally. Do not mention the checks, observers, embeddings, or badges.\n"
-        "- A session check runs once in the background after the caller has spoken enough.\n"
-        "- An action check runs again when wema_execute_prepared is used.\n"
-        "- Call it only after the caller has confirmed the latest prepared transaction.\n"
+        "- A session check runs after the caller's first usable utterance. If it fails, retry it "
+        "after each new caller utterance until it passes.\n"
+        "- A fresh action check runs immediately before every Wema tool call.\n"
+        "- Both the session check and fresh action check must pass before the Wema tool can run.\n"
+        "- Call wema_execute_prepared only after the caller confirms the latest prepared transaction.\n"
         "- The server, never the conversation or tool arguments, decides authorization.\n"
         "- If a tool returns that the voice was not recognized, say that to the caller."
     )
@@ -106,8 +113,8 @@ def apply_auth_observer_session(userdata: dict[str, Any], instructions: str) -> 
         for name in (userdata.get("enabled_tool_names") or [])
         if str(name or "").strip()
     }
-    if not auth_observer_enabled() or not enabled_tool_names.intersection(
-        PRIVILEGED_ACTIONS
+    if not auth_observer_enabled() or not any(
+        is_privileged_action(name) for name in enabled_tool_names
     ):
         userdata["auth_observer_enabled"] = False
         return instructions
@@ -163,7 +170,7 @@ def _status_from_compare(result: dict[str, Any]) -> str:
 
 
 class FakeVoiceAuthObserver:
-    """Session cosine while talking, plus a second cosine before a privileged action."""
+    """Retryable session cosine plus a fresh cosine before every Wema tool."""
 
     def __init__(
         self,
@@ -183,8 +190,10 @@ class FakeVoiceAuthObserver:
         self._pcm = np.zeros(0, dtype=np.float32)
         self._pcm_rate = DEFAULT_SAMPLE_RATE
         self._last_utterance = np.zeros(0, dtype=np.float32)
-        self._session_decided = False
-        self._session_task_started = False
+        self._utterance_generation = 0
+        self._session_checked_generation = -1
+        self._session_verified = False
+        self._session_eval_lock = asyncio.Lock()
         self._bg_tasks: set[asyncio.Task] = set()
         self._setup_listeners()
         self._setup_audio()
@@ -227,7 +236,8 @@ class FakeVoiceAuthObserver:
                     logger.info("[AUTH-OBSERVER] ignored injected user prompt: %s", text[:80])
                 return
             self._userdata()["last_user_transcript"] = text
-            self._track(self._on_user_speech(text))
+            self._utterance_generation += 1
+            self._track(self._on_user_speech(text, self._utterance_generation))
 
     def _local_participant(self) -> Any | None:
         room = self.room
@@ -331,26 +341,31 @@ class FakeVoiceAuthObserver:
         if self._pcm.size:
             self._last_utterance = np.array(self._pcm, copy=True)
 
-    async def _on_user_speech(self, text: str) -> None:
+    async def _on_user_speech(self, text: str, generation: int) -> None:
         async with self._pcm_lock:
             self._snapshot_utterance_locked()
+            samples = np.array(self._last_utterance, copy=True)
             clip_seconds = self._last_utterance.size / float(self._pcm_rate or DEFAULT_SAMPLE_RATE)
         logger.info(
             "[AUTH-OBSERVER] captured latest user utterance seconds=%.2f text=%s",
             clip_seconds,
             text[:80],
         )
-        if self._session_decided:
+        if self._session_verified:
             logger.info("[AUTH-OBSERVER] stored later speech for action check; session badge stays")
-            return
-        if self._session_task_started:
             return
         if clip_seconds < 1.2:
             logger.info("[AUTH-OBSERVER] skipped session cosine; waiting for real speech")
             return
-        self._session_task_started = True
-        logger.info("[AUTH-OBSERVER] queued session cosine after first transcribed speech")
-        await self._evaluate_session()
+        logger.info(
+            "[AUTH-OBSERVER] queued session cosine after transcribed speech generation=%s",
+            generation,
+        )
+        await self._evaluate_session(
+            generation=generation,
+            samples=samples,
+            sample_rate=self._pcm_rate,
+        )
 
     def _compare_latest(self) -> dict[str, Any]:
         samples, rate = self._latest_clip()
@@ -363,30 +378,50 @@ class FakeVoiceAuthObserver:
             return AUTH_FAILED_HINT
         return AUTH_UNVERIFIED_HINT
 
-    async def _evaluate_session(self) -> None:
-        try:
-            if self._session_decided:
+    async def _evaluate_session(
+        self,
+        *,
+        generation: int | None = None,
+        samples: np.ndarray | None = None,
+        sample_rate: int | None = None,
+    ) -> None:
+        target_generation = (
+            self._utterance_generation if generation is None else int(generation)
+        )
+        if samples is None:
+            samples, latest_rate = self._latest_clip()
+        else:
+            samples = np.asarray(samples, dtype=np.float32).reshape(-1)
+            latest_rate = self._pcm_rate
+        rate = int(sample_rate or latest_rate or DEFAULT_SAMPLE_RATE)
+
+        async with self._session_eval_lock:
+            if self._session_verified:
                 return
-            if self.delay_seconds:
-                logger.info("[AUTH-OBSERVER] session cosine waiting %.1fs", self.delay_seconds)
-                await asyncio.sleep(self.delay_seconds)
-            result = self._compare_latest()
-            next_status = _status_from_compare(result)
-            logger.info(
-                "[AUTH-OBSERVER] session cosine matched=%s score=%.3f reason=%s",
-                result.get("matched"),
-                float(result.get("score") or 0.0),
-                result.get("reason") or "ok",
-            )
-            if next_status == AUTH_PENDING:
-                self._session_task_started = False
-                await self._publish_auth_status(self._current_status())
+            if target_generation <= self._session_checked_generation:
                 return
-            self._session_decided = True
-            await self._inject(next_status, self._hint_for_status(next_status))
-        except Exception:
-            self._session_task_started = False
-            logger.exception("[AUTH-OBSERVER] session cosine failed")
+            try:
+                if self.delay_seconds:
+                    logger.info("[AUTH-OBSERVER] session cosine waiting %.1fs", self.delay_seconds)
+                    await asyncio.sleep(self.delay_seconds)
+                result = self.compare_fn(self._owner_email(), samples, rate)
+                next_status = _status_from_compare(result)
+                self._session_checked_generation = target_generation
+                logger.info(
+                    "[AUTH-OBSERVER] session cosine generation=%s matched=%s score=%.3f reason=%s",
+                    target_generation,
+                    result.get("matched"),
+                    float(result.get("score") or 0.0),
+                    result.get("reason") or "ok",
+                )
+                if next_status == AUTH_PENDING:
+                    await self._publish_auth_status(self._current_status())
+                    return
+                if next_status == AUTH_VERIFIED:
+                    self._session_verified = True
+                await self._inject(next_status, self._hint_for_status(next_status))
+            except Exception:
+                logger.exception("[AUTH-OBSERVER] session cosine failed")
 
     async def authorize_action(
         self,
@@ -397,13 +432,13 @@ class FakeVoiceAuthObserver:
     ) -> dict[str, Any]:
         if transcript:
             self._userdata()["last_user_transcript"] = str(transcript)
-        async with self._pcm_lock:
-            if not self._last_utterance.size and self._pcm.size:
-                self._snapshot_utterance_locked()
         if self.delay_seconds:
             logger.info("[AUTH-OBSERVER] action cosine waiting %.1fs action=%s", self.delay_seconds, action)
             await asyncio.sleep(self.delay_seconds)
-        if not self._session_decided:
+        async with self._pcm_lock:
+            if self._pcm.size:
+                self._snapshot_utterance_locked()
+        if not self._session_verified:
             await self._evaluate_session()
 
         session_status = self._current_status()
@@ -446,7 +481,10 @@ class FakeVoiceAuthObserver:
             }
 
         result.update(_safe_action_details(details))
-        if result["authorized"] is not True:
+        if (
+            result["authorized"] is not True
+            and action == ACTION_WEMA_EXECUTE_PREPARED
+        ):
             await self._publish_action_event(result)
         logger.info(
             "[AUTH-OBSERVER] action=%s outcome=%s reason=%s session=%s action_check=%s score=%.3f",

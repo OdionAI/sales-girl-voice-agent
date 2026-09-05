@@ -103,6 +103,46 @@ Examples:
 The worker should fall back gracefully and not invent live data when these
 endpoints are missing.
 
+### Speech during tool waits
+
+Dashboard-configured HTTP tools use LiveKit's `RunContext.with_filler()` to speak
+short waiting updates while voice authentication or the API request is pending.
+The first update starts after 0.75 seconds of continuous quiet. Further updates
+are at least 6 seconds apart, capped at three per tool call. Parallel calls share
+that spacing, and fast calls finish without waiting for filler. The scope stops
+scheduling updates on completion, failure, or interruption.
+
+The first Wema update is selected by tool name: balance, transaction history,
+data plans, bank lookup, data purchase preparation, transfer preparation, or
+execution of a confirmed request. For example, balance uses "Let me check your
+available balance." Unknown tools retain the generic acknowledgement; later
+updates remain generic. These are fixed phrases spoken by the existing TTS,
+without an additional LLM request. Edit `HTTP_TOOL_ACKNOWLEDGEMENTS` in
+`agent/dynamic_tools.py` to adjust the tool-specific wording.
+
+The public Wema caller menu offers **Tool-specific** (default) and
+**LLM-generated** under **Speech during tool calls** before starting a call.
+The selection is locked during the call and sent as the allowlisted participant
+metadata field `tool_wait_speech_mode` (`tool_specific` or `llm_generated`).
+It does not change saved agent settings, billing, or authentication.
+
+LLM-generated mode uses the session's existing LLM and TTS, with up to six recent
+text messages for context. This extra LLM request cannot call tools. It starts
+only when filler is due, so fast tools do not make an extra request. Generation
+is bounded by `AGENT_DYNAMIC_TOOL_FILLER_LLM_TIMEOUT_SECONDS` (default 2.5);
+empty, invalid, or failed generation uses the fixed phrase, never another model
+provider. Unfinished generation is cancelled when the tool finishes or the caller
+interrupts. The extra generation step can increase first-filler latency.
+Generated waiting speech is not added to the main LLM conversation history, so
+it cannot split the tool call/result pair. It is still spoken through LiveKit.
+
+Set `AGENT_DYNAMIC_TOOL_FILLER_DELAY_SECONDS` and
+`AGENT_DYNAMIC_TOOL_FILLER_INTERVAL_SECONDS` in the worker environment to tune
+these timings, then restart the voice worker. This uses the session's existing
+TTS voice. Authentication and HTTP execution remain in their original order;
+waiting messages do not indicate authorization or transaction success. This
+requires LiveKit Agents 1.6.3 or newer, matching the stable dependency snapshot.
+
 ## Local run
 
 ```bash
