@@ -549,6 +549,38 @@ class _FakeAudioEmitter:
 
 
 class OdionTTSPayloadTests(unittest.IsolatedAsyncioTestCase):
+    async def test_ascend_initial_frames_override_preserves_stream_payload(self) -> None:
+        for frames in (2, 8):
+            with self.subTest(frames=frames), patch.dict("os.environ", {
+                "ASCEND_TTS_INITIAL_CODEC_CHUNK_FRAMES": str(frames),
+                "ASCEND_TTS_CACHED_VOICE": "helen-mavino-0030",
+                "ASCEND_TTS_TASK_TYPE": "Base",
+                "ASCEND_TTS_X_VECTOR_ONLY": "false",
+            }):
+                fake_session = _FakeTTSSession()
+                engine = OdionTTS(
+                    owner_id="owner-123",
+                    voice_id=None,
+                    language="English",
+                    model="Qwen3-TTS",
+                    base_url="http://102.88.137.124:8080/tts/v1/audio/speech",
+                    http_session=fake_session,
+                )
+                stream = engine.synthesize("Hello")
+                await stream._run(_FakeAudioEmitter())
+                self.assertEqual(len(fake_session.calls), 1)
+                payload = fake_session.calls[0]["json"]
+                self.assertEqual(payload["initial_codec_chunk_frames"], frames)
+                self.assertEqual(payload["model"], "Qwen3-TTS")
+                self.assertEqual(payload["voice"], "helen-mavino-0030")
+                self.assertEqual(payload["task_type"], "Base")
+                self.assertEqual(payload["language"], "English")
+                self.assertEqual(payload["response_format"], "pcm")
+                self.assertEqual(payload["stream_format"], "audio")
+                self.assertTrue(payload["stream"])
+                self.assertFalse(payload["x_vector_only_mode"])
+                self.assertNotIn("codec_chunk_frames", payload)
+
     async def test_tts_request_posts_runtime_model_profile(self) -> None:
         fake_session = _FakeTTSSession()
         engine = OdionTTS(

@@ -6,6 +6,27 @@ The user approved changing only `ASCEND_TTS_INITIAL_CODEC_CHUNK_FRAMES=2` to `8`
 At creation of this note, the live worker still uses 2; apply/restart is pending
 until the active call ends. No NPU service restart is needed for this request field.
 
+## Applied and verified
+
+The pre-application note was committed as `c20665a`. After the user ended the
+call, zero LiveKit rooms were confirmed. The local environment changed on exactly
+one key: `ASCEND_TTS_INITIAL_CODEC_CHUNK_FRAMES`, from `2` to `8`, verified against
+the private `.local/checkpoints/2026-09-05-tts-turn-taking/.env.before-initial8` copy.
+The tracked experiment override file now includes the value. No stable template
+or runtime Python implementation changed.
+
+Only the idle voice worker was restarted, using its original command. It registered
+as `AW_M4vWekmEMAAe` with the same agent name and local LiveKit URL. TTS, caller UI
+and voice-worker health checks returned HTTP 200. A request using the configured
+initial-frame helper returned 119,040 PCM bytes with HTTP 200.
+
+A request-level regression test covers both 2 and 8 frames and verifies that the
+model, voice, language, PCM streaming and Base task remain unchanged, with no
+steady-chunk override added to the request. The isolated suite passes 176 tests:
+`PYTHON_DOTENV_DISABLED=1 .venv/bin/python -m unittest discover tests`.
+The user's next listening test is still needed; no claim of resolved audible
+artifacts is made from health or timing measurements alone.
+
 ## Scope
 
 | Setting | Before | Trial |
