@@ -93,6 +93,7 @@ from agent.auth_observer import (
 from agent.voice_enroll_http import start_voice_enroll_http
 from prompts.en import NIGERIAN_SPOKEN_STYLE_EN, SYSTEM_PROMPT_EN
 from prompts.fr import SYSTEM_PROMPT_FR
+from prompts.wema import with_wema_tool_requirements
 
 
 logging.basicConfig(
@@ -4446,6 +4447,9 @@ async def entrypoint(ctx: JobContext):
         instructions = await _instructions_with_initial_knowledge_context(
             instructions, userdata
         )
+        instructions = with_wema_tool_requirements(
+            instructions, userdata.get("enabled_tool_names") or []
+        )
         instructions = apply_auth_observer_session(userdata, instructions)
         userdata["base_instructions"] = instructions
         started_at = conv_api_utcnow()
@@ -4631,6 +4635,9 @@ async def entrypoint(ctx: JobContext):
         instructions = await _instructions_with_context(instructions, userdata)
         instructions = await _instructions_with_initial_knowledge_context(
             instructions, userdata
+        )
+        instructions = with_wema_tool_requirements(
+            instructions, userdata.get("enabled_tool_names") or []
         )
         instructions = apply_auth_observer_session(userdata, instructions)
         userdata["base_instructions"] = instructions
