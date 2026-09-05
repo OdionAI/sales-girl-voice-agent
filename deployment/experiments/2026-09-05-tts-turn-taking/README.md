@@ -1,8 +1,9 @@
 # Pre-experiment checkpoint: TTS chunking and turn taking
 
 Captured on 2026-09-05 before changing any live service or latency setting.
-The commit that introduces this directory is the voice-agent rollback checkpoint.
+The commit that introduces this directory, `13b4f07`, is the voice-agent rollback checkpoint.
 This is an experiment, not a promotion to the stable deployment defaults.
+See `RESULTS.md` for applied values and verification after the checkpoint.
 
 ## Requested changes and actual baseline
 
@@ -13,16 +14,17 @@ This is an experiment, not a promotion to the stable deployment defaults.
 | Server default initial frames | 1, overridden by request | unchanged | TTS connector configuration |
 | TTS left context | 72 frames | unchanged | Preserve decoder context |
 | TTS playback startup buffer | 0 ms | unchanged | Voice agent |
-| Odion ASR final-silence gate | 0.50 s | 0.25 s requested, clarification pending | Inactive with current Deepgram selection |
-| LiveKit minimum endpointing delay | 0.30 s | 0.25 s proposed, clarification pending | Active turn handling |
-| LiveKit maximum endpointing delay | 0.65 s | unchanged | Active turn handling |
+| Odion ASR final-silence gate | 0.50 s | 0.25 s | Inactive with current Deepgram selection |
+| LiveKit minimum endpointing delay | 0.30 s | 0.25 s | Active turn handling |
+| LiveKit maximum endpointing delay | 0.65 s | 0.50 s | Active turn handling |
 | Minimum interruption duration | 0.10 s | unchanged | Active turn handling |
 
 Current local STT selection is `VOICE_AGENT_STT_PROVIDER=deepgram`, model
 `nova-3`. Its installed plugin defaults `endpointing_ms` to 25 ms; this is a
 different control from the 0.50-second Odion silence setting. Do not silently
 switch providers or change multiple turn-handling controls to satisfy the request.
-The user has been asked which turn control to change.
+After clarification the user requested the Odion silence reduction and also
+authorized reducing LiveKit's delays. Both changes are recorded in `RESULTS.md`.
 
 LLM remains Qwen, with thinking disabled. TTS remains Qwen3-TTS Base using
 `helen-mavino-0030`, English, PCM streaming. No provider fallback is introduced.
@@ -81,6 +83,13 @@ redeployment wrapper elsewhere in the repository.
 
 ## Backup and restart procedure
 
+IMPORTANT correction discovered during application: node1 already manages this
+process through `qwen-tts.service`, with `Restart=always` and `RestartSec=10`.
+Its unchanged definition is captured in `qwen-tts.service.before`. Use the managed
+procedure below, not a detached second launch. The initial manual stop caused
+systemd to restart TTS automatically; a duplicate launched by this experiment
+was stopped, leaving only the systemd-managed instance. No unit was modified.
+
 Before the first service change, create a root-only backup directory on node1:
 `/data/scripts/dwt/qwen3-tts/checkpoints/2026-09-05-before-chunk10` (mode 700).
 Copy the current YAML, startup file and `/proc/<verified-api-pid>/environ` there,
@@ -99,18 +108,17 @@ Apply only `codec_chunk_frames: 25` -> `10` in a candidate YAML, review its diff
 then copy it over the active path. Leave the committed `tts-before.yaml` intact.
 Do not overwrite a live file whose checksum changed since the checkpoint.
 
-For both apply and rollback:
+For both future apply and rollback:
 
-1. Ensure no calls are active. Verify the current API process command, its parent
-   and process group inside `tts`; the group must contain only this TTS service.
-2. Send SIGTERM only to that verified TTS process group and wait for it to exit.
-   Do not use broad `pkill`, reboot, or stop/recreate the container. Escalate if
-   normal shutdown does not complete rather than killing unrelated NPU processes.
-3. Start the original startup file in the original working directory, with the
-   preserved null-delimited environment restored. Use detached `docker exec` and
-   a dedicated log file under the checkpoint directory. This is a TTS-process
-   restart, not a server/container restart. The original startup script, model,
-   engine, NPU selection and listening port remain unchanged.
+1. Ensure no calls or TTS requests are active. Check `systemctl cat
+   qwen-tts.service` and the current process tree inside `tts`. Verify the unit
+   still targets only the TTS container/process and matches the captured unit.
+2. Restart only that unit with `systemctl restart qwen-tts.service`. Do not run a
+   second detached `docker exec` launch: the unit owns process supervision. Do
+   not restart Docker, the container, the server, or any other service.
+3. Check `systemctl status qwen-tts.service` and `journalctl -u qwen-tts.service`.
+   Model initialization takes minutes; unit "active" alone does not mean the
+   HTTP API is ready. Confirm exactly one TTS API process and both model stages.
 4. Wait for the TTS API health endpoint and a successful PCM synthesis request.
    Check logs for initialization/decoder errors and repeat the timing probe.
 5. Verify LLM, ASR, local LiveKit and the registered voice worker remain healthy.
@@ -126,6 +134,7 @@ and startup from this checkpoint commit; do not use a mutable branch tip.
 For a turn-taking rollback, restore only the changed variable in local `.env`:
 `TURN_MIN_ENDPOINTING_DELAY=0.3` or
 `ODION_STT_REALTIME_ENDPOINTING_SILENCE_SECONDS=0.5`, according to which was changed.
+If maximum endpointing was changed, restore `TURN_MAX_ENDPOINTING_DELAY=0.65` too.
 Restart only the idle local voice worker with its existing local service endpoints
 and model selection. Do not restart LiveKit or the dashboard for this setting.
 Verify exactly one worker registers before starting another call.

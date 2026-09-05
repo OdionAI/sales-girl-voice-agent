@@ -1,0 +1,16 @@
+[Unit]
+Description=Qwen3 TTS vLLM-Omni server in the tts container
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/docker exec tts bash /data/scripts/dwt/qwen3-tts/start_tts.sh
+ExecStop=-/usr/bin/docker exec tts pkill -TERM -f vllm-omni
+Restart=always
+RestartSec=10
+TimeoutStartSec=900
+TimeoutStopSec=45
+
+[Install]
+WantedBy=multi-user.target
