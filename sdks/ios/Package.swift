@@ -6,6 +6,7 @@ let package = Package(
     platforms: [.iOS(.v16), .macOS(.v13)],
     products: [
         .library(name: "AttentiveVoice", targets: ["AttentiveVoice"]),
+        .library(name: "AttentiveVoiceUI", targets: ["AttentiveVoiceUI"]),
         .executable(name: "attentive-smoke", targets: ["AttentiveSmoke"]),
     ],
     dependencies: [
@@ -15,8 +16,11 @@ let package = Package(
         .target(name: "AttentiveVoice", dependencies: [
             .product(name: "LiveKit", package: "client-sdk-swift"),
         ]),
+        .target(name: "AttentiveVoiceUI", dependencies: ["AttentiveVoice"],
+                resources: [.process("Resources")]),
         .executableTarget(name: "AttentiveSmoke", dependencies: ["AttentiveVoice"]),
         .testTarget(name: "AttentiveVoiceTests", dependencies: ["AttentiveVoice"]),
+        .testTarget(name: "AttentiveVoiceUITests", dependencies: ["AttentiveVoiceUI", "AttentiveVoice"]),
     ],
     swiftLanguageModes: [.v5]
 )

@@ -1,10 +1,14 @@
+#if os(iOS)
 import AttentiveVoice
 import SwiftUI
 
-struct WemaCallerPanel: View {
-    @ObservedObject var model: SampleModel
+@available(iOS 17, *)
+struct CallerProfilePanel: View {
+    @ObservedObject var controls: CallerControls
     @ObservedObject var call: AttentiveCall
-    var openSettings: () -> Void
+    @Binding var request: CallRequest
+    let configuration: CallerUIConfiguration
+    var openSettings: (() -> Void)?
     var openTranscript: () -> Void
 
     var body: some View {
@@ -12,8 +16,8 @@ struct WemaCallerPanel: View {
             VStack(spacing: 0) {
                 HStack(alignment: .top, spacing: 12) {
                     VStack(alignment: .leading, spacing: 6) {
-                        Text("My Wema").font(.system(size: 16, weight: .semibold))
-                        Text(model.active ? "Profile locked during call" : "Caller profile")
+                        Text(configuration.profileTitle).font(.system(size: 16, weight: .semibold))
+                        Text(controls.active ? "Profile locked during call" : "Caller profile")
                             .font(.system(size: 12)).foregroundStyle(CallerTheme.muted)
                     }.frame(maxWidth: .infinity, alignment: .leading)
                     VStack(alignment: .trailing, spacing: 6) {
@@ -22,27 +26,35 @@ struct WemaCallerPanel: View {
                     }
                 }.padding(18)
                 divider
-                VStack(alignment: .leading, spacing: 18) {
-                    profileField("Wema customer ID", text: $model.configuration.customerID)
-                    if model.configuration.account.isEmpty {
-                        profileField("Phone number", text: $model.configuration.phone, keyboard: .phonePad)
-                    } else {
-                        HStack(alignment: .top, spacing: 12) {
-                            profileField("Account number", text: $model.configuration.account, keyboard: .numberPad)
-                            profileField("Phone number", text: $model.configuration.phone, keyboard: .phonePad)
+                if configuration.showsProfile || configuration.showsToolWaitSelection {
+                    VStack(alignment: .leading, spacing: 18) {
+                        if configuration.showsProfile {
+                            profileField(configuration.customerIDLabel, text: customerID)
+                            if request.wemaContext?.accountNumber?.isEmpty != false {
+                                profileField("Phone number", text: profileValue(\.phoneNumber), keyboard: .phonePad)
+                            } else {
+                                HStack(alignment: .top, spacing: 12) {
+                                    profileField("Account number", text: profileValue(\.accountNumber), keyboard: .numberPad)
+                                    profileField("Phone number", text: profileValue(\.phoneNumber), keyboard: .phonePad)
+                                }
+                            }
                         }
-                    }
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("Speech during tool calls").font(.system(size: 12)).foregroundStyle(CallerTheme.muted)
-                        Picker("Speech during tool calls", selection: $model.configuration.waitMode) {
-                            Text("Tool specific").tag(ToolWaitSpeechMode.toolSpecific)
-                            Text("LLM generated").tag(ToolWaitSpeechMode.llmGenerated)
-                        }.pickerStyle(.segmented).disabled(model.active)
-                    }
-                }.padding(18)
-                divider
+                        if configuration.showsToolWaitSelection {
+                            VStack(alignment: .leading, spacing: 10) {
+                                Text("Speech during tool calls").font(.system(size: 12)).foregroundStyle(CallerTheme.muted)
+                                Picker("Speech during tool calls", selection: Binding(
+                                    get: { request.toolWaitSpeechMode ?? .toolSpecific },
+                                    set: { request.toolWaitSpeechMode = $0 })) {
+                                    Text("Tool specific").tag(ToolWaitSpeechMode.toolSpecific)
+                                    Text("LLM generated").tag(ToolWaitSpeechMode.llmGenerated)
+                                }.pickerStyle(.segmented)
+                            }
+                        }
+                    }.padding(18).disabled(controls.active || controls.enrollmentBusy)
+                    divider
+                }
                 HStack {
-                    Text("Bank activity").font(.system(size: 14, weight: .semibold))
+                    Text(configuration.activityTitle).font(.system(size: 14, weight: .semibold))
                     Spacer()
                     if !call.toolActivity.isEmpty {
                         Text("\(call.toolActivity.count)").font(.system(size: 12)).foregroundStyle(CallerTheme.muted)
@@ -50,12 +62,12 @@ struct WemaCallerPanel: View {
                 }.padding(18)
                 divider
                 if call.toolActivity.isEmpty {
-                    Text("No bank activity yet").font(.system(size: 14)).foregroundStyle(CallerTheme.muted)
+                    Text(configuration.emptyActivityText).font(.system(size: 14)).foregroundStyle(CallerTheme.muted)
                         .frame(maxWidth: .infinity).padding(.vertical, 44)
                 }
                 LazyVStack(spacing: 0) {
                     ForEach(call.toolActivity.reversed()) { item in
-                        ToolActivityRow(item: item)
+                        ToolActivityRow(item: item, displayNames: configuration.toolDisplayNames, accent: configuration.accentColor)
                         divider
                     }
                 }
@@ -65,18 +77,36 @@ struct WemaCallerPanel: View {
                             .font(.system(size: 12)).frame(maxWidth: .infinity, minHeight: 44)
                     }.buttonStyle(.plain).accessibilityIdentifier("viewTranscript")
                 }
-                Button(action: openSettings) {
-                    Label("Call settings", systemImage: "slider.horizontal.3")
-                        .font(.system(size: 12)).frame(maxWidth: .infinity, minHeight: 44)
+                if let openSettings {
+                    Button(action: openSettings) {
+                        Label("Call settings", systemImage: "slider.horizontal.3")
+                            .font(.system(size: 12)).frame(maxWidth: .infinity, minHeight: 44)
+                    }
+                    .buttonStyle(.plain).foregroundStyle(CallerTheme.muted)
+                    .accessibilityIdentifier("callerDetails")
                 }
-                .buttonStyle(.plain).foregroundStyle(CallerTheme.muted)
-                .accessibilityIdentifier("callerDetails")
             }
         }
         .scrollBounceBehavior(.basedOnSize).scrollDismissesKeyboard(.interactively)
     }
 
     private var divider: some View { Rectangle().fill(CallerTheme.divider).frame(height: 1) }
+
+    private var customerID: Binding<String> {
+        Binding(get: { request.wemaContext?.customerId ?? "" }, set: { value in
+            var profile = request.wemaContext ?? CallerProfile(customerId: "")
+            profile.customerId = value
+            request.wemaContext = profile
+        })
+    }
+
+    private func profileValue(_ keyPath: WritableKeyPath<CallerProfile, String?>) -> Binding<String> {
+        Binding(get: { request.wemaContext?[keyPath: keyPath] ?? "" }, set: { value in
+            var profile = request.wemaContext ?? CallerProfile(customerId: "")
+            profile[keyPath: keyPath] = value.isEmpty ? nil : value
+            request.wemaContext = profile
+        })
+    }
 
     private func profileField(_ label: String, text: Binding<String>, keyboard: UIKeyboardType = .default) -> some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -85,9 +115,8 @@ struct WemaCallerPanel: View {
                 .font(.system(size: 14)).keyboardType(keyboard)
                 .textInputAutocapitalization(.never).autocorrectionDisabled()
                 .padding(.horizontal, 12).frame(minHeight: 44)
-                .background(model.active ? CallerTheme.field : .white, in: RoundedRectangle(cornerRadius: 8))
+                .background(controls.active ? CallerTheme.field : .white, in: RoundedRectangle(cornerRadius: 8))
                 .overlay(RoundedRectangle(cornerRadius: 8).stroke(CallerTheme.border, lineWidth: 1))
-                .disabled(model.active)
         }.frame(maxWidth: .infinity, alignment: .leading)
     }
 }
@@ -109,12 +138,14 @@ private struct AuthBadge: View {
 
 private struct ToolActivityRow: View {
     let item: ToolActivity
+    let displayNames: [String: String]
+    let accent: Color
     @State private var expanded = false
 
     private var status: String { item.status.isEmpty ? item.event : item.status }
     private var running: Bool { ["running", "started", "start"].contains(status) }
     private var tint: Color {
-        if running { return CallerTheme.accent }
+        if running { return accent }
         if ["failed", "error", "blocked"].contains(status) { return CallerTheme.red }
         if status == "needs_input" { return .orange }
         if ["ok", "success", "completed", "complete", "prepared"].contains(status) { return CallerTheme.green }
@@ -128,12 +159,7 @@ private struct ToolActivityRow: View {
         }
     }
     private var name: String {
-        let names = ["wema_get_balance": "Check balance", "wema_get_transactions": "Transaction history",
-                     "wema_prepare_transfer": "Prepare transfer", "wema_prepare_airtime": "Prepare airtime",
-                     "wema_prepare_data_purchase": "Prepare data purchase", "wema_list_data_plans": "Find data plans",
-                     "wema_execute_prepared": "Execute prepared request", "wema_list_transfer_banks": "Find transfer bank"]
-        return names[item.toolName] ?? item.toolName.replacingOccurrences(of: "wema_", with: "")
-            .replacingOccurrences(of: "_", with: " ").capitalized
+        displayNames[item.toolName] ?? item.toolName.replacingOccurrences(of: "_", with: " ").capitalized
     }
     private var result: String {
         let encoder = JSONEncoder()
@@ -167,14 +193,16 @@ private struct ToolActivityRow: View {
                     }.frame(maxHeight: 192)
                 }.padding(18).background(CallerTheme.stage)
             }
-        }.background(running ? CallerTheme.accent.opacity(0.06) : .clear)
+        }.background(running ? accent.opacity(0.06) : .clear)
     }
 }
 
+@available(iOS 17, *)
 struct CallerTranscriptPanel: View {
-    @ObservedObject var model: SampleModel
+    @ObservedObject var controls: CallerControls
     @ObservedObject var call: AttentiveCall
     let status: String
+    let agentName: String
     @Binding var draft: String
     @FocusState private var composing: Bool
 
@@ -192,7 +220,7 @@ struct CallerTranscriptPanel: View {
                         .accessibilityIdentifier("transcriptStatus")
                 }
                 Spacer()
-                if model.receivedAudio {
+                if controls.receivedAudio {
                     Image(systemName: "speaker.wave.2").font(.system(size: 12))
                         .foregroundStyle(CallerTheme.green)
                         .accessibilityLabel("Audio connected").accessibilityIdentifier("audioReceived")
@@ -217,7 +245,7 @@ struct CallerTranscriptPanel: View {
             }
             Divider().overlay(CallerTheme.divider)
             HStack(alignment: .bottom, spacing: 10) {
-                TextField("Message SAW", text: $draft, axis: .vertical)
+                TextField("Message \(agentName)", text: $draft, axis: .vertical)
                     .font(.system(size: 14)).lineLimit(1...3).focused($composing)
                     .padding(12).frame(minHeight: 44)
                     .background(CallerTheme.stage, in: RoundedRectangle(cornerRadius: 16))
@@ -225,20 +253,19 @@ struct CallerTranscriptPanel: View {
                     .accessibilityIdentifier("chatInput")
                 Button {
                     let text = draft
-                    Task { if await model.send(text) { draft = ""; composing = false } }
+                    Task { if await controls.send(text) { draft = ""; composing = false } }
                 } label: {
                     Image(systemName: "arrow.up").font(.system(size: 16, weight: .medium))
                         .foregroundStyle(.white).frame(width: 44, height: 44)
                         .background(CallerTheme.ink.opacity(readyToSend && !draft.isEmpty ? 1 : 0.4), in: Circle())
                 }
                 .buttonStyle(.plain)
-                .disabled(!readyToSend || model.sending || draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .disabled(!readyToSend || controls.sending || draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 .accessibilityLabel("Send message").accessibilityIdentifier("sendMessage")
             }.padding(12)
         }
     }
 }
-
 private struct TranscriptBubble: View {
     let item: Transcript
     var body: some View {
@@ -257,3 +284,4 @@ private struct TranscriptBubble: View {
         }.frame(maxWidth: .infinity)
     }
 }
+#endif

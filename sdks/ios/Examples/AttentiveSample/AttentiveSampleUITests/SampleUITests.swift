@@ -3,6 +3,21 @@ import XCTest
 final class SampleUITests: XCTestCase {
     override func setUpWithError() throws { continueAfterFailure = false }
 
+    func testGenericCallerHasNoBankBrandingOrRequiredEnrollmentUI() {
+        let app = XCUIApplication()
+        app.launchArguments = ["--generic-ui"]
+        app.launch()
+        XCTAssertTrue(app.staticTexts["Talk to your agent"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["startCall"].isEnabled)
+        XCTAssertFalse(app.buttons["recordVoice"].exists)
+        app.buttons["bankMenu"].tap()
+        XCTAssertTrue(app.staticTexts["My account"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["No activity yet"].exists)
+        XCTAssertFalse(app.textFields["Wema customer ID"].exists)
+        XCTAssertFalse(app.staticTexts["My Wema"].exists)
+        attachScreen("Generic optional caller UI")
+    }
+
     func testCallerDetailsAndActivity() {
         let app = XCUIApplication()
         app.launch()

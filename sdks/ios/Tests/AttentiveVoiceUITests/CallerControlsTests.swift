@@ -1,0 +1,198 @@
+import Combine
+import XCTest
+@testable import AttentiveVoice
+@testable import AttentiveVoiceUI
+
+final class CallerControlsTests: XCTestCase {
+    @MainActor
+    func testUIObservesWithoutReplacingHostEventsOrAuthorizingTools() async throws {
+        let transport = UITransport()
+        let call = makeCall(transport)
+        var events: [CallEvent] = []
+        call.onEvent = { events.append($0) }
+        let controls = CallerControls(call: call, enrollment: nil)
+        XCTAssertEqual(transport.connections, 0)
+        await controls.start(request, microphoneEnabled: true)
+        transport.onEvent?(.authentication(.init(scope: .session, status: .verified)))
+        transport.onEvent?(.authentication(.init(scope: .action, status: .failed)))
+        let data = Data(#"{"call_id":"test-call","tool_name":"balance","event":"completed","status":"blocked","result":{"message":"Voice check required"}}"#.utf8)
+        let event = try XCTUnwrap(BackendEventDecoder.decode(data: data, topic: "odion.tool.activity"))
+        transport.onEvent?(event)
+        XCTAssertTrue(events.contains(event))
+        XCTAssertEqual(call.toolActivity.first?.status, "blocked")
+        XCTAssertEqual(call.sessionAuthentication, .verified)
+        XCTAssertEqual(call.actionAuthentication, .failed)
+        XCTAssertTrue(call.microphoneEnabled)
+        XCTAssertTrue(transport.messages.isEmpty)
+        await controls.end()
+    }
+
+    @MainActor
+    func testRequestAndMicrophoneSelectionReachCoreUnchanged() async {
+        let provider = UIProvider()
+        let transport = UITransport()
+        let call = makeCall(transport, provider: provider)
+        let controls = CallerControls(call: call, enrollment: nil)
+        await controls.start(request, microphoneEnabled: false)
+        let sent = await provider.request
+        XCTAssertEqual(sent?.wemaContext, request.wemaContext)
+        XCTAssertEqual(sent?.endUserContact, request.endUserContact)
+        XCTAssertEqual(sent?.toolWaitSpeechMode, .llmGenerated)
+        XCTAssertEqual(transport.microphoneSelections, [false])
+        XCTAssertTrue(controls.active)
+        await controls.end()
+    }
+
+    @MainActor
+    func testChatAndMuteUseCoreAndErrorsRemainVisible() async {
+        let transport = UITransport()
+        let call = makeCall(transport)
+        let controls = CallerControls(call: call, enrollment: nil)
+        await controls.start(request, microphoneEnabled: false)
+        transport.onEvent?(.agentStateChanged(.listening))
+        let sent = await controls.send("Hello")
+        XCTAssertTrue(sent)
+        XCTAssertEqual(transport.messages, ["Hello"])
+        XCTAssertFalse(controls.sending)
+        await controls.toggleMicrophone()
+        XCTAssertTrue(call.microphoneEnabled)
+        await controls.end()
+        let afterEnd = await controls.send("Hello")
+        XCTAssertFalse(afterEnd)
+        XCTAssertNotNil(controls.errorMessage)
+    }
+
+    @MainActor
+    func testAudioDoesNotContinuouslyInvalidateCallerScreenAndResetsForNewCall() async {
+        let transport = UITransport()
+        let call = makeCall(transport)
+        let controls = CallerControls(call: call, enrollment: nil)
+        await controls.start(request, microphoneEnabled: false)
+        var updates = 0
+        let observation = controls.objectWillChange.sink { updates += 1 }
+        defer { observation.cancel() }
+        transport.onEvent?(.agentAudioEnergy(0.3))
+        transport.onEvent?(.agentAudioEnergy(0.7))
+        transport.onEvent?(.agentAudioEnergy(0))
+        transport.onEvent?(.agentAudioEnergy(0.1))
+        XCTAssertTrue(controls.receivedAudio)
+        XCTAssertEqual(updates, 1)
+        await controls.end()
+        await controls.start(request, microphoneEnabled: false)
+        XCTAssertFalse(controls.receivedAudio)
+        await controls.end()
+    }
+
+    @MainActor
+    func testEnrollmentCaptureBlocksCallAndCancelsOnDismissal() async {
+        let transport = UITransport()
+        let recorder = UIRecorder()
+        let enrollment = VoiceEnrollment(provider: UIEnrollmentProvider(), recorder: recorder)
+        let controls = CallerControls(call: makeCall(transport), enrollment: enrollment)
+        let recording = Task { await enrollment.record(email: "ui-test@example.com") }
+        while enrollment.stage != .recording { await Task.yield() }
+        XCTAssertTrue(controls.enrollmentBusy)
+        await controls.start(request, microphoneEnabled: true)
+        XCTAssertEqual(transport.connections, 0)
+        await controls.disappear(endsCall: true)
+        await recording.value
+        XCTAssertTrue(recorder.cancelled)
+        XCTAssertFalse(controls.enrollmentBusy)
+        await controls.start(request, microphoneEnabled: false)
+        XCTAssertEqual(transport.connections, 0)
+        controls.appear()
+        await controls.start(request, microphoneEnabled: false)
+        XCTAssertEqual(transport.connections, 1)
+        await controls.end()
+    }
+
+    @MainActor
+    func testDismissalCancelsCallCreationWithoutReconnecting() async {
+        let transport = UITransport()
+        let call = makeCall(transport, provider: UIProvider(delay: .seconds(20)))
+        let controls = CallerControls(call: call, enrollment: nil)
+        let starting = Task { await controls.start(request, microphoneEnabled: false) }
+        while call.state != .connecting { await Task.yield() }
+        await controls.disappear(endsCall: true)
+        await starting.value
+        XCTAssertEqual(call.state, .ended)
+        XCTAssertEqual(transport.connections, 0)
+    }
+
+    @MainActor
+    func testHostCanExplicitlyRetainCallWhenDismissingUI() async {
+        let transport = UITransport()
+        let call = makeCall(transport)
+        let controls = CallerControls(call: call, enrollment: nil)
+        await controls.start(request, microphoneEnabled: false)
+        await controls.disappear(endsCall: false)
+        XCTAssertEqual(call.state, .connected)
+        XCTAssertEqual(transport.disconnects, 0)
+        await call.end()
+    }
+
+    @MainActor
+    func testCorePermissionFailureDoesNotCreateCallOrGetRetriedByUI() async {
+        let transport = UITransport()
+        let call = AttentiveCall(provider: UIProvider(), makeTransport: { transport }, microphonePermission: { false })
+        let controls = CallerControls(call: call, enrollment: nil)
+        await controls.start(request, microphoneEnabled: true)
+        XCTAssertEqual(transport.connections, 0)
+        XCTAssertEqual(call.state, .failed)
+        XCTAssertEqual(controls.errorMessage, CallError.microphoneDenied.localizedDescription)
+        XCTAssertFalse(controls.active)
+    }
+
+    private var request: CallRequest {
+        .init(businessSlug: "test", agentPublicId: "agt_test", endUserContact: "ui-test@example.com",
+              profile: .init(customerId: "TEST_CUSTOMER", accountNumber: "0000000000", phoneNumber: "08000000000"),
+              toolWaitSpeechMode: .llmGenerated)
+    }
+
+    @MainActor
+    private func makeCall(_ transport: UITransport, provider: UIProvider = .init()) -> AttentiveCall {
+        AttentiveCall(provider: provider, makeTransport: { transport }, microphonePermission: { true })
+    }
+}
+
+private actor UIProvider: CallCredentialProvider {
+    private(set) var request: CallRequest?
+    let delay: Duration
+    init(delay: Duration = .zero) { self.delay = delay }
+    func fetch(for request: CallRequest) async throws -> CallCredentials {
+        self.request = request
+        try await Task.sleep(for: delay)
+        return .init(serverUrl: URL(string: "wss://example.invalid")!, roomName: "test", participantToken: "test-only")
+    }
+}
+
+@MainActor
+private final class UITransport: CallTransport {
+    var onEvent: ((CallEvent) -> Void)?
+    var connections = 0
+    var disconnects = 0
+    var microphoneSelections: [Bool] = []
+    var messages: [String] = []
+    func connect(_ credentials: CallCredentials, microphoneEnabled: Bool) async throws {
+        connections += 1
+        microphoneSelections.append(microphoneEnabled)
+    }
+    func disconnect() async { disconnects += 1 }
+    func setMicrophone(enabled: Bool) async throws { microphoneSelections.append(enabled) }
+    func sendText(_ text: String) async throws -> String { messages.append(text); return UUID().uuidString }
+}
+
+private struct UIEnrollmentProvider: VoiceEnrollmentProvider {
+    func isEnrolled(email: String) async throws -> Bool { false }
+    func enroll(email: String, wav: Data) async throws { XCTFail("Cancelled recordings must never upload") }
+}
+
+@MainActor
+private final class UIRecorder: VoiceEnrollmentRecording {
+    var cancelled = false
+    func record(progress: @escaping @MainActor (Int) -> Void) async throws -> Data {
+        try await Task.sleep(for: .seconds(20))
+        return Data()
+    }
+    func cancel() { cancelled = true }
+}

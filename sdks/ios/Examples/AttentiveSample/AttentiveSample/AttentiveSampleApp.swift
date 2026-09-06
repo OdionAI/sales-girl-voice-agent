@@ -7,7 +7,7 @@ struct AttentiveSampleApp: App {
     var body: some Scene {
         WindowGroup {
             CallScreen(model: model, call: model.call)
-                .tint(CallerTheme.accent)
+                .tint(model.appearance.accentColor)
                 .preferredColorScheme(.light)
         }
     }

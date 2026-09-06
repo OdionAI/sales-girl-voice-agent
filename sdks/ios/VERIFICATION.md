@@ -228,3 +228,50 @@ package manifests before placing them in the local SwiftPM artifact cache:
 
 No dependency sources/manifests were patched, no TLS verification was disabled,
 and no binary archives or credentials are committed to this repository.
+
+## Optional Caller UI Extraction (2026-09-06)
+
+Pre-extraction checkpoint: `7db19c6`. Branch: `attentive-ios-sdk`.
+
+The package now exports headless `AttentiveVoice` and optional `AttentiveVoiceUI`.
+The sample consumes `AttentiveCallerView` instead of owning copied caller views.
+Branding, caller request and optional enrollment are supplied by the host. The
+sample retains its developer settings; the library has generic defaults and a
+bundled avatar resource. Core, transport, agent, dashboard, model parameters,
+authentication policy and running service configurations were not changed.
+
+Verification completed on iPhone 17 Pro / iOS 26.5 Simulator:
+
+- `swift test -j 4`: 38 tests passed, including eight new UI-control tests.
+  These cover host event callback preservation, unchanged request forwarding,
+  microphone/chat controls, error handling, enrollment cancellation, pending
+  call cancellation on dismissal, and explicit call retention on dismissal.
+- Xcode build succeeded. All four UI tests passed at 21:42 WAT: Wema profile,
+  activity/settings and portrait/landscape layout; enrollment cancellation;
+  generic caller presentation; and a real chat-driven call with greeting,
+  non-silent decoded agent audio, chat reply, locked in-call fields and hangup.
+- Visually inspected Wema/generic panels, auth badges, call stage and avatar.
+  The original avatar asset is unchanged and renders from the library bundle.
+  The existing audio-energy animation remains; no ring or looping pulse added.
+- Auth statuses and tool events remain backend-owned. The UI observes published
+  state without replacing the host's `onEvent` callback or granting tool access.
+
+Local evidence (not committed build artifacts):
+
+- Unit log: `/tmp/attentive-ui-extraction-unit.log`
+- Build log: `/tmp/attentive-ui-extraction-build.log`
+- UI/live-call log: `/tmp/attentive-ui-extraction-final.log`
+- Result bundle: `/tmp/attentive-ui-extraction-final.xcresult`
+- Screenshots: `/tmp/attentive-ui-extraction-final-images/`
+
+The live test was deliberately chat-only. It does not prove microphone/STT
+reliability, successful voice enrollment, either real speaker check, privileged
+bank transactions or resolution of the earlier TTS artifacts. The existing
+Fidelity Bank greeting on the Wema-targeted backend remains unchanged. A full
+real-voice test and physical-device testing remain release gates.
+
+For rollback, inspect a separate worktree at checkpoint `7db19c6` or revert the
+specific extraction commit after reviewing subsequent changes. Do not reset an
+active dirty worktree. There is no server-state rollback for this extraction:
+no service, DNS, port or model configuration was touched. Gateway, gRPC and
+Android work are tracked separately in `docs/attentive/ROADMAP.md`.

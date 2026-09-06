@@ -5,14 +5,27 @@ The app imports `AttentiveVoice`, not LiveKit. LiveKit 2.16.0 is pinned internal
 for WebRTC media, WebSocket signaling, audio capture/playback and reconnection.
 Requires iOS 16+ (macOS 13+ for the diagnostic executable) and Swift 6.1+ tooling.
 
+## Choose Your UI
+
+| Product | Use | Minimum OS |
+| --- | --- | --- |
+| `AttentiveVoice` | Headless calls with your own UI | iOS 16 |
+| `AttentiveVoiceUI` | Optional SwiftUI caller using the same core | iOS 17 |
+
+The UI product depends on core, never the reverse. See the
+[caller UI integration guide](CALLER_UI.md) and
+[coding-agent integration prompt](INTEGRATION_AGENT.md).
+
 The runnable [SwiftUI sample](Examples/AttentiveSample/README.md) demonstrates
-calls, chat, caller settings, authentication badges and tool activity on iOS.
+calls, chat, caller settings, authentication badges and tool activity by importing
+the public UI product. Its caller panels and avatar are no longer app-local copies.
 The package has not yet been released as a hosted Swift package. In Xcode,
 add `sdks/ios` as a **local package**, then link the `AttentiveVoice` product to
 the customer's app. Because
 the manifest is in a subdirectory, do not add the repository root as a remote
 SwiftPM dependency. Publishing a standalone SDK repository/package is a later
-release step.
+release step. The [roadmap](../../docs/attentive/ROADMAP.md) tracks publication,
+the streaming gateway, gRPC, browser integration and Android SDK work separately.
 
 ## Call From Your UI
 

@@ -1,6 +1,6 @@
 # Attentive iOS Sample
 
-Native SwiftUI caller app using only `AttentiveVoice`. Requires Xcode with Swift
+Native SwiftUI caller app consuming `AttentiveVoice` and `AttentiveVoiceUI`. Requires Xcode with Swift
 6.1+, an installed iOS Simulator runtime, and the existing local backend. The app
 targets iOS 17+; the underlying wrapper supports iOS 16+.
 
@@ -74,8 +74,8 @@ by the sample. The backend may record calls according to its existing settings.
 - Pre-call caller profile and tool-specific/LLM-generated waiting phrase selection.
 - Settings locked during calls; results remain visible until the next call.
 
-`CallerTheme.swift` maps the existing web call-surface and Wema console tokens.
-`Assets.xcassets/CallerAvatar.imageset/caller-avatar.jpg` is the unchanged JPEG
+The UI package's `CallerTheme.swift` maps the existing web call-surface tokens.
+Its bundled `Resources/Assets.xcassets/CallerAvatar.imageset/caller-avatar.jpg` is the unchanged JPEG
 embedded in the dashboard's `public/assets/AI-avatar-2.svg`, center-cropped by
 SwiftUI just as the web SVG does. No new avatar or image service is introduced.
 The avatar has no outer ring or repeating pulse. While the agent is speaking,
@@ -98,12 +98,19 @@ it later. Chat alone cannot satisfy voice authentication.
 
 ## Boundaries
 
-`SampleModel` owns one `AttentiveCall`; `CallScreen` observes its state and calls
-its public methods. The wrapper handles session bootstrap, microphone permission,
+`SampleModel` owns one `AttentiveCall` and the deployment/profile configuration.
+`CallScreen` embeds the public `AttentiveCallerView` with a request binding,
+enrollment and sample-supplied Wema labels. `CallerSettings` is the sample's
+developer configuration form, not part of the UI library. The sample keeps its
+own core event listener for bounded diagnostics; the UI does not replace it.
+The wrapper handles session bootstrap, microphone permission,
 WebRTC audio, WebSocket signaling, reconnect events, chat and event mapping.
 The existing agent retains VAD, turn detection, STT, LLM, TTS, authentication and
 tool execution. No model fallback or server configuration is introduced here.
 This is not yet a gRPC client, CallKit integration or background-call product.
+Use `--generic-ui` to inspect the library's unbranded defaults with no enrollment
+control or bank profile fields; this only changes presentation, never backend
+authorization. See the [UI integration guide](../../CALLER_UI.md).
 
 Insecure HTTP/WS is enabled only in Debug simulator builds. Physical devices
 require reachable HTTPS/WSS endpoints; a phone cannot use the Mac's `127.0.0.1`.

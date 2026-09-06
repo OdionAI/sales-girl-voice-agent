@@ -1,4 +1,5 @@
 import AttentiveVoice
+import AttentiveVoiceUI
 import Combine
 import Foundation
 import OSLog
@@ -29,11 +30,22 @@ struct SampleConfiguration {
     }
 
     var request: CallRequest {
-        let profile: CallerProfile? = customerID.isEmpty ? nil : .init(
-            customerId: customerID, accountNumber: account.isEmpty ? nil : account,
-            phoneNumber: phone.isEmpty ? nil : phone)
-        return .init(businessSlug: business, agentPublicId: agent, endUserContact: contact,
-                     profile: profile, toolWaitSpeechMode: waitMode)
+        get {
+            let profile: CallerProfile? = customerID.isEmpty && phone.isEmpty && account.isEmpty ? nil : .init(
+                customerId: customerID, accountNumber: account.isEmpty ? nil : account,
+                phoneNumber: phone.isEmpty ? nil : phone)
+            return .init(businessSlug: business, agentPublicId: agent, endUserContact: contact,
+                         profile: profile, toolWaitSpeechMode: waitMode)
+        }
+        set {
+            business = newValue.businessSlug
+            agent = newValue.agentPublicId
+            contact = newValue.endUserContact
+            customerID = newValue.wemaContext?.customerId ?? ""
+            account = newValue.wemaContext?.accountNumber ?? ""
+            phone = newValue.wemaContext?.phoneNumber ?? ""
+            waitMode = newValue.toolWaitSpeechMode ?? .toolSpecific
+        }
     }
 
     @MainActor
@@ -68,9 +80,6 @@ final class SampleModel: ObservableObject {
     @Published var call: AttentiveCall
     @Published var enrollment: VoiceEnrollment
     @Published var errorMessage: String?
-    @Published var receivedAudio = false
-    @Published var startedAt: Date?
-    @Published var sending = false
     private let logger = Logger(subsystem: "ai.odion.attentive.sample", category: "call")
 
     init() {
@@ -93,6 +102,19 @@ final class SampleModel: ObservableObject {
 
     var active: Bool { [.connecting, .connected, .reconnecting, .ending].contains(call.state) }
 
+    var appearance: CallerUIConfiguration {
+        if ProcessInfo.processInfo.arguments.contains("--generic-ui") { return .init() }
+        return .init(title: "Talk to Wema Bank", agentName: "SAW", profileTitle: "My Wema",
+                     customerIDLabel: "Wema customer ID", activityTitle: "Bank activity",
+                     emptyActivityText: "No bank activity yet", showsProfile: true,
+                     toolDisplayNames: [
+                        "wema_get_balance": "Check balance", "wema_get_transactions": "Transaction history",
+                        "wema_prepare_transfer": "Prepare transfer", "wema_prepare_airtime": "Prepare airtime",
+                        "wema_prepare_data_purchase": "Prepare data purchase", "wema_list_data_plans": "Find data plans",
+                        "wema_execute_prepared": "Execute prepared request", "wema_list_transfer_banks": "Find transfer bank",
+                     ])
+    }
+
     func apply(_ config: SampleConfiguration) {
         guard !active, !enrollment.isBusy else { return }
         do {
@@ -105,36 +127,7 @@ final class SampleModel: ObservableObject {
             enrollment = replacementEnrollment
             observeCall()
             errorMessage = nil
-            receivedAudio = false
         } catch { errorMessage = error.localizedDescription }
-    }
-
-    func start() async {
-        guard !enrollment.isBusy else { return }
-        // Enrollment is keyed by the same normalized email the caller sends to the backend.
-        if configuration.contact.contains("@") {
-            configuration.contact = configuration.contact.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        }
-        receivedAudio = false
-        errorMessage = nil
-        startedAt = Date()
-        do { try await call.start(configuration.request, microphoneEnabled: configuration.microphoneOnStart) }
-        catch is CancellationError {}
-        catch { errorMessage = error.localizedDescription }
-    }
-
-    func end() async { await call.end() }
-
-    func toggleMicrophone() async {
-        do { try await call.setMicrophone(enabled: !call.microphoneEnabled) }
-        catch { errorMessage = error.localizedDescription }
-    }
-
-    func send(_ text: String) async -> Bool {
-        sending = true
-        defer { sending = false }
-        do { try await call.sendText(text); return true }
-        catch { errorMessage = error.localizedDescription; return false }
     }
 
     private func observeCall() {
@@ -144,13 +137,12 @@ final class SampleModel: ObservableObject {
             case .stateChanged(let state): logger.info("call_state=\(state.rawValue, privacy: .public)")
             case .agentStateChanged(let state): logger.info("agent_state=\(state.rawValue, privacy: .public)")
             case .agentAudioReceived:
-                receivedAudio = true
                 logger.info("non_silent_agent_audio_received")
             case .transcript(let item) where item.isFinal:
                 logger.info("final_transcript speaker=\(item.speaker.rawValue, privacy: .public) characters=\(item.text.count)")
             case .toolActivity(let activity):
                 logger.info("tool_event=\(activity.event, privacy: .public) status=\(activity.status, privacy: .public)")
-            case .failure(let error): errorMessage = error.localizedDescription
+            case .failure: logger.error("call_failed")
             default: break
             }
         }

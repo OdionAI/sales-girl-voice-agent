@@ -1,3 +1,4 @@
+#if os(iOS)
 import AttentiveVoice
 import SwiftUI
 
@@ -38,15 +39,17 @@ struct CallerIconStyle: ButtonStyle {
 
 struct CallerAvatar: View {
     let speaking: Bool
+    let image: Image
     @ObservedObject var audioLevel: AgentAudioLevel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private var scale: Double {
         speaking && !reduceMotion ? 1 + Double(audioLevel.energy) * 0.25 : 1
     }
     var body: some View {
-        Image("CallerAvatar").resizable().scaledToFill()
+        image.resizable().scaledToFill()
             .frame(width: 123, height: 123).clipShape(Circle()).scaleEffect(scale)
             .animation(reduceMotion ? nil : .interpolatingSpring(mass: 0.68, stiffness: 300, damping: 22), value: scale)
             .frame(width: 204, height: 204).accessibilityHidden(true)
     }
 }
+#endif

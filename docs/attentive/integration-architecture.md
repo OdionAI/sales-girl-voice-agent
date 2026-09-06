@@ -2,8 +2,9 @@
 
 Recorded: 2026-09-06. Working branch: `attentive-ios-sdk`.
 
-Status: the product structure below is agreed in discussion. Transport options
-are under evaluation; the gateway recommendation is not an implementation or
+Status: the product structure below is agreed in discussion. The optional iOS UI
+extraction is implemented and verified locally; track delivery in [ROADMAP.md](ROADMAP.md).
+Transport options are under evaluation; the gateway recommendation is not an implementation or
 deployment approval. This note changes no running service or call behavior.
 
 ## Product Requirements
@@ -30,11 +31,11 @@ deployment approval. This note changes no running service or call behavior.
 | Call API | Dashboard `POST /api/public-agent/connection-details` returns RTC connection credentials | Customer-authenticated, versioned public contract; no raw-audio streaming endpoint exists yet |
 | Voice enrollment | Separate dashboard `/api/public-agent/voice-enroll` GET and multipart POST; SDK enrollment flow | Harden identity binding and document lifecycle/security for external use |
 | Swift core | `AttentiveVoice`, wrapping LiveKit 2.16.0; custom-UI call controls and events | Release packaging, compatibility guarantees, customer examples |
-| Swift caller UI | SwiftUI views inside `Examples/AttentiveSample` | Extract a reusable public UI library, then consume it from the sample |
+| Swift caller UI | Optional `AttentiveVoiceUI` product, consumed by `Examples/AttentiveSample`; unit and simulator UI/live-chat tests passed | Release packaging and physical-device/real-voice verification |
 | Web | Existing public caller and dashboard integrations | Reusable headless web SDK and optional UI distribution |
 | Android | No Attentive Android SDK | Later platform implementation and verification |
 | Distribution | Local SwiftPM package at `sdks/ios` | Publish an installable package/repository and versioned releases; repository root is not currently a remote SwiftPM package |
-| Documentation | [Existing API contract](call-api.md), Postman collection, [Swift README](../../sdks/ios/README.md), sample README and verification notes | Complete human and coding-agent integration guides |
+| Documentation | [Existing API contract](call-api.md), Postman collection, [Swift README](../../sdks/ios/README.md), human/coding-agent integration guides, sample README and verification notes | Publish versioned guides and validate external installation |
 
 Current HTTP call creation does not send or receive live PCM. The client's
 realtime connection carries microphone and agent audio over WebRTC and signaling
@@ -152,7 +153,7 @@ the gateway. Paths, protobuf names and event names are not finalized here.
 
 ## Package Structure
 
-Target structure, not all implemented:
+Current local Swift package structure (not yet remotely published):
 
 ```text
 AttentiveVoice       Headless Swift call and enrollment API
@@ -171,9 +172,9 @@ mute, chat, reconnect state, event decoding and cleanup. Optional UI owns visual
 state, forms, transcript, auth badges, tool-result display and audio-reactive
 animation. The sample demonstrates integration, not a second implementation.
 
-The core currently targets iOS 16 and the sample iOS 17. Decide and document the
-UI library's minimum OS when extracting it rather than silently changing core
-requirements. Package versioning and backend compatibility must be explicit.
+The core targets iOS 16; the UI library and sample target iOS 17. Core deployment
+requirements are unchanged. Package versioning and backend compatibility must be
+explicit.
 
 ## Backend and Client Responsibilities
 
