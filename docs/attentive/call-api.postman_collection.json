@@ -1,0 +1,44 @@
+{
+  "info": {
+    "name": "Attentive Call API (WebRTC)",
+    "description": "Existing call bootstrap only. Live audio and events use the Swift wrapper over LiveKit. No transaction execution or secrets are included.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "base_url", "value": "https://your-dashboard.example.com" },
+    { "key": "business_slug", "value": "your-business" },
+    { "key": "agent_public_id", "value": "agt_your_agent" },
+    { "key": "caller_contact", "value": "caller@example.com" }
+  ],
+  "item": [
+    {
+      "name": "Start call (issues participant credentials)",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "url": "{{base_url}}/api/public-agent/connection-details",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"businessSlug\": \"{{business_slug}}\",\n  \"agentPublicId\": \"{{agent_public_id}}\",\n  \"endUserContact\": \"{{caller_contact}}\",\n  \"language\": \"en\",\n  \"toolWaitSpeechMode\": \"tool_specific\"\n}",
+          "options": { "raw": { "language": "json" } }
+        },
+        "description": "Starts a real configured agent session. Add wemaContext only for an authorized Wema test identity. Keep returned participantToken private; the SDK consumes it internally."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Call credentials returned', function () {",
+              "  pm.response.to.have.status(200);",
+              "  const body = pm.response.json();",
+              "  ['serverUrl', 'roomName', 'participantToken', 'participantName'].forEach(key => pm.expect(body[key]).to.be.a('string').and.not.empty);",
+              "});"
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}
