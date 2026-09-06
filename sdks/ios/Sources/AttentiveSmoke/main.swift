@@ -49,10 +49,12 @@ struct AttentiveSmoke {
             try await call.start(.init(businessSlug: business, agentPublicId: agent, endUserContact: contact),
                                  microphoneEnabled: false)
             let deadline = Date().addingTimeInterval(45)
-            while Date() < deadline, call.agentState != .listening, call.state != .failed {
+            // The agent briefly reports listening before its protected greeting starts.
+            while Date() < deadline, transcriptCount == 0 || call.agentState != .listening {
+                if call.state == .failed { break }
                 try await Task.sleep(for: .milliseconds(200))
             }
-            guard call.agentState == .listening else { throw CallError.agentUnavailable }
+            guard transcriptCount > 0, call.agentState == .listening else { throw CallError.agentUnavailable }
             try await call.sendText("Hello. Please reply with one short sentence confirming you can hear from me. Do not call any banking tools.")
             let replyDeadline = Date().addingTimeInterval(30)
             while Date() < replyDeadline, transcriptCount < 2 || !heardAudio {

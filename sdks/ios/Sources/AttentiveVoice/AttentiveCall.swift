@@ -22,6 +22,7 @@ public final class AttentiveCall: ObservableObject {
     @Published public private(set) var transcripts: [Transcript] = []
     @Published public private(set) var toolActivity: [ToolActivity] = []
     @Published public private(set) var lastError: CallError?
+    public let agentAudioLevel = AgentAudioLevel()
 
     /// Called on the main actor. Treat payloads as private caller data.
     public var onEvent: ((CallEvent) -> Void)?
@@ -76,6 +77,7 @@ public final class AttentiveCall: ObservableObject {
         sessionAuthentication = .pending
         actionAuthentication = .pending
         agentState = .waiting
+        agentAudioLevel.reset()
         let id = UUID()
         attempt = id
         let connection = makeTransport()
@@ -169,6 +171,7 @@ public final class AttentiveCall: ObservableObject {
     }
 
     private func setState(_ value: CallState) {
+        if value != .connected && value != .connecting { agentAudioLevel.reset() }
         state = value
         onEvent?(.stateChanged(value))
     }
@@ -221,8 +224,10 @@ public final class AttentiveCall: ObservableObject {
             // Initial readiness is set only after microphone publishing succeeds.
             guard state != .connecting else { return }
             state = value
+            if value != .connected { agentAudioLevel.reset() }
         case .agentStateChanged(let value):
             agentState = value
+            if value != .speaking { agentAudioLevel.reset() }
             if [.listening, .thinking, .speaking].contains(value) { watchdog?.cancel() }
             if value == .disconnected {
                 let id = attempt
@@ -231,6 +236,9 @@ public final class AttentiveCall: ObservableObject {
                     await self.fail(.agentUnavailable)
                 }
             }
+        case .agentAudioEnergy(let value):
+            guard state == .connected || state == .connecting else { return }
+            agentAudioLevel.update(value)
         case .transcript(let transcript):
             if let index = transcripts.firstIndex(where: { $0.id == transcript.id }) {
                 guard !transcripts[index].isFinal || transcript.isFinal else { return }

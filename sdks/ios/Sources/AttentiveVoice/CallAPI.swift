@@ -130,8 +130,8 @@ public struct HTTPCallCredentialProvider: CallCredentialProvider {
     }
 }
 
-// Call creation contains caller data. Do not replay it to a redirected host.
-private final class NoCallRedirects: NSObject, URLSessionTaskDelegate {
+// Call/enrollment requests contain private caller data. Do not replay redirects.
+final class NoCallRedirects: NSObject, URLSessionTaskDelegate {
     func urlSession(_ session: URLSession, task: URLSessionTask,
                     willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest,
                     completionHandler: @escaping (URLRequest?) -> Void) {

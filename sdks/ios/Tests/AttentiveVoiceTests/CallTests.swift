@@ -1,3 +1,4 @@
+import Combine
 import XCTest
 @testable import AttentiveVoice
 
@@ -104,6 +105,29 @@ final class CallTests: XCTestCase {
         do { try await call.start(request); XCTFail() } catch { XCTAssertEqual(error as? CallError, .microphoneDenied) }
         XCTAssertEqual(transport.connections, 0)
         XCTAssertEqual(call.state, .failed)
+    }
+
+    @MainActor
+    func testAudioMeterIsIsolatedFromCallUpdatesAndResetsOnEnd() async throws {
+        let transport = MockTransport()
+        let call = makeCall(transport)
+        try await call.start(request, microphoneEnabled: false)
+        transport.onEvent?(.agentStateChanged(.speaking))
+        var callUpdates = 0
+        let subscription = call.objectWillChange.sink { callUpdates += 1 }
+        defer { subscription.cancel() }
+        transport.onEvent?(.agentAudioEnergy(0.2))
+        transport.onEvent?(.agentAudioEnergy(0.8))
+        XCTAssertEqual(call.agentAudioLevel.energy, 0.8)
+        XCTAssertEqual(callUpdates, 0)
+        transport.onEvent?(.agentStateChanged(.listening))
+        XCTAssertEqual(call.agentAudioLevel.energy, 0)
+        transport.onEvent?(.agentAudioEnergy(0.5))
+        let stale = transport.onEvent
+        await call.end()
+        XCTAssertEqual(call.agentAudioLevel.energy, 0)
+        stale?(.agentAudioEnergy(1))
+        XCTAssertEqual(call.agentAudioLevel.energy, 0)
     }
 
     @MainActor

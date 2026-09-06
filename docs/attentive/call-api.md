@@ -1,5 +1,11 @@
 # Attentive Call API: WebRTC First
 
+For the agreed product structure, optional caller UI, documentation deliverables
+and API-only transport options, see the
+[integration architecture and delivery plan](integration-architecture.md).
+That plan describes future options; the endpoints below remain the current
+WebRTC bootstrap contract, not a raw-audio streaming API.
+
 ## Scope
 
 This phase wraps the existing LiveKit call transport. It does not introduce a

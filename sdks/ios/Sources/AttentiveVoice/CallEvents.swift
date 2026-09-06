@@ -73,6 +73,8 @@ public enum CallEvent: Equatable, Sendable {
     case metrics([String: JSONValue])
     /// First non-silent decoded agent audio in this call, before device playback.
     case agentAudioReceived
+    /// Passive, rate-limited output metering. Does not control playback or authorization.
+    case agentAudioEnergy(Float)
     case failure(CallError)
 }
 

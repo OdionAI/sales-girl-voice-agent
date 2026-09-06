@@ -5,9 +5,11 @@ The app imports `AttentiveVoice`, not LiveKit. LiveKit 2.16.0 is pinned internal
 for WebRTC media, WebSocket signaling, audio capture/playback and reconnection.
 Requires iOS 16+ (macOS 13+ for the diagnostic executable) and Swift 6.1+ tooling.
 
-This package is library-first, not a standalone signed iOS app. It has not yet
-been released as a hosted Swift package. In Xcode, add `sdks/ios` as a **local
-package**, then link the `AttentiveVoice` product to the customer's app. Because
+The runnable [SwiftUI sample](Examples/AttentiveSample/README.md) demonstrates
+calls, chat, caller settings, authentication badges and tool activity on iOS.
+The package has not yet been released as a hosted Swift package. In Xcode,
+add `sdks/ios` as a **local package**, then link the `AttentiveVoice` product to
+the customer's app. Because
 the manifest is in a subdirectory, do not add the repository root as a remote
 SwiftPM dependency. Publishing a standalone SDK repository/package is a later
 release step.
@@ -67,6 +69,14 @@ cleans up microphone/room resources. A second `start` is rejected while a call i
 active. Failed call creation is not automatically retried. LiveKit handles
 reconnection within an active call; the wrapper reports `reconnecting`.
 
+For a speech-reactive avatar, observe `call.agentAudioLevel` in a small dedicated
+view. Its published `energy` is a bounded visualization value (0...1.65), not
+playback gain. The passive agent-audio observer measures RMS/peak at up to 25 Hz;
+it never modifies, saves or plays audio. Silence, missing samples and call end
+reset the level. Meter updates do not publish the whole call object. The same
+readings are available as `.agentAudioEnergy` events. They have no role in VAD,
+turn detection, authentication or tool execution.
+
 The current backend emits legacy transcription segments as well as text streams;
 this version consumes its segment events and sends chat on `lk.chat`. It forwards
 only agent-originated tool/auth data events. These events do not authorize tools
@@ -74,6 +84,34 @@ and cannot bypass the backend's session and action voice checks. Chat-only tests
 cannot pass those voice checks. Profile values are context, not authentication.
 
 ## Local Development and Verification
+
+### Voice Enrollment
+
+The iOS sample includes the web caller's pre-call voice enrollment using
+`HTTPVoiceEnrollmentProvider` and `IOSVoiceEnrollmentRecorder`, exposed through
+the observable `VoiceEnrollment` flow. GET and multipart POST use the existing
+`/api/public-agent/voice-enroll` endpoint. The current backend keys voiceprints
+by **email**, not the bank customer ID or phone number. Use the same normalized
+email for enrollment and `CallRequest.endUserContact`.
+
+`refresh(email:)` only reads enrollment status. `record(email:)` explicitly asks
+for microphone permission, records eight seconds of 16 kHz mono 16-bit WAV and
+uploads it. A re-record replaces the existing voiceprint, just as on the web.
+The temporary file is deleted after capture (including errors/cancellation),
+before upload; it is not saved to app documents. No raw audio or enrollment
+responses are logged by the SDK. Backend voiceprint retention is unchanged.
+
+Record only **before** a call. Disable Start Call/identity edits while `isBusy`
+and call `cancel()` on leaving the screen or entering background. The recorder
+releases and restores its audio session before LiveKit starts. Do not run the
+enrollment recorder alongside a live call in customer apps.
+
+`isEnrolled` means a reference voiceprint exists; it does **not** set either
+live authentication badge to verified. The backend still checks the caller's
+live speech for Session and Action authorization and decides whether tools run.
+No client-side enrollment result bypasses those checks.
+
+### Development Transport
 
 Set `allowsInsecureDevelopmentConnections: true` only for development HTTP/WS
 endpoints. Do not ship that setting. Physical devices need a reachable dashboard

@@ -8,17 +8,23 @@ final class LiveKitCallTransport: NSObject, CallTransport {
     private let room = Room()
     private var closing = false
     private var sawAgent = false
-    private var audioProbe: FirstAudioProbe?
+    private var audioProbe: AgentAudioProbe?
+    private var observedAudioTracks: [RemoteAudioTrack] = []
 
     override init() {
         super.init()
         room.add(delegate: self)
-        audioProbe = FirstAudioProbe { [weak self] in
+        audioProbe = AgentAudioProbe(firstAudio: { [weak self] in
             Task { @MainActor in
                 guard let self, !self.closing else { return }
                 self.onEvent?(.agentAudioReceived)
             }
-        }
+        }, energy: { [weak self] energy in
+            Task { @MainActor in
+                guard let self, !self.closing else { return }
+                self.onEvent?(.agentAudioEnergy(energy))
+            }
+        })
     }
 
     func connect(_ credentials: CallCredentials, microphoneEnabled: Bool) async throws {
@@ -32,6 +38,10 @@ final class LiveKitCallTransport: NSObject, CallTransport {
 
     func disconnect() async {
         closing = true
+        if let probe = audioProbe {
+            for track in observedAudioTracks { track.remove(audioRenderer: probe) }
+        }
+        observedAudioTracks.removeAll()
         room.remove(delegate: self)
         await room.disconnect()
     }
@@ -124,30 +134,38 @@ extension LiveKitCallTransport: RoomDelegate {
         guard participant.kind == .agent, let audio = publication.track as? RemoteAudioTrack else { return }
         Task { @MainActor [weak self] in
             guard let self, !self.closing, let probe = self.audioProbe else { return }
+            guard !self.observedAudioTracks.contains(where: { $0 === audio }) else { return }
+            self.observedAudioTracks.append(audio)
             audio.add(audioRenderer: probe)
         }
     }
 }
 
-/// Observes only the first non-silent buffer, without saving or modifying audio.
-private final class FirstAudioProbe: NSObject, AudioRenderer, @unchecked Sendable {
+/// Observes agent PCM before playback, without saving or modifying audio.
+private final class AgentAudioProbe: NSObject, AudioRenderer, @unchecked Sendable {
     private let lock = NSLock()
     private var delivered = false
-    private let callback: @Sendable () -> Void
+    private var level = AudioBufferLevel()
+    private var lastEmission: TimeInterval = 0
+    private let firstAudio: @Sendable () -> Void
+    private let energy: @Sendable (Float) -> Void
 
-    init(callback: @escaping @Sendable () -> Void) { self.callback = callback }
+    init(firstAudio: @escaping @Sendable () -> Void, energy: @escaping @Sendable (Float) -> Void) {
+        self.firstAudio = firstAudio
+        self.energy = energy
+    }
 
     func render(pcmBuffer: AVAudioPCMBuffer) {
         lock.lock()
-        defer { lock.unlock() }
-        guard !delivered else { return }
-        let count = Int(pcmBuffer.frameLength)
-        let audible: Bool
-        if let samples = pcmBuffer.floatChannelData?[0] {
-            audible = (0..<count).contains { abs(samples[$0]) > 0.0001 }
-        } else if let samples = pcmBuffer.int16ChannelData?[0] {
-            audible = (0..<count).contains { abs(Int(samples[$0])) > 3 }
-        } else { audible = false }
-        if audible { delivered = true; callback() }
+        level.include(pcmBuffer)
+        let first = !delivered && level.peak > 0.0001
+        if first { delivered = true }
+        let now = ProcessInfo.processInfo.systemUptime
+        let emit = now - lastEmission >= 0.04
+        let value = level.energy
+        if emit { level = AudioBufferLevel(); lastEmission = now }
+        lock.unlock()
+        if first { firstAudio() }
+        if emit { energy(value) }
     }
 }
