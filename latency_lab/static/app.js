@@ -83,7 +83,7 @@ async function start() {
     if (msg.type === 'session_id') sessionEl.textContent = msg.content;
     if (msg.type === 'lab_status') {
       const value = String(msg.content || '');
-      const state = /speak|play|tts/i.test(value) ? 'speaking' : /listen|ready/i.test(value) ? 'listening' : 'thinking';
+      const state = /speak|play|tts/i.test(value) ? 'speaking' : /\blisten/i.test(value) ? 'listening' : 'thinking';
       setStatus(value, state);
     }
     if (msg.type === 'lab_ready' && !audioStarted) {

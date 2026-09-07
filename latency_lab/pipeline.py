@@ -5,6 +5,7 @@ import base64
 import math
 import re
 import struct
+import time
 import uuid
 from dataclasses import dataclass, field
 from difflib import SequenceMatcher
@@ -157,6 +158,7 @@ class ConversationPipeline:
         self.preconfirm_partial: tuple[str, str] | None = None
         self.final_timeout_task: asyncio.Task[None] | None = None
         self.turn_pcm16 = bytearray()
+        self._opening_task: asyncio.Task[None] | None = None
 
     async def start(self) -> None:
         self.trace.record(
@@ -195,7 +197,31 @@ class ConversationPipeline:
             stt_rotate_after_final=self.config.stt_rotate_after_final,
         )
         await self.stt.connect()
-        await self.send({"type": "lab_status", "content": "RSTT connected; lab ready"})
+        stt_warmed = False
+        if self.stt.ready:
+            stt_warmed = await self.stt.warmup(self.config.stt_warmup_ms)
+        self.trace.record(
+            "stt_listen_gate",
+            reason="speech_recognition_primed" if stt_warmed else (
+                "speech_recognition_socket_ready"
+                if self.stt.ready
+                else "speech_recognition_not_ready_batch_fallback"
+            ),
+            stt_ready=self.stt.ready,
+            stt_warmed=stt_warmed,
+        )
+        await self.send(
+            {
+                "type": "lab_status",
+                "content": (
+                    "Speech recognition primed"
+                    if stt_warmed
+                    else "Connecting speech recognition"
+                ),
+            }
+        )
+        if stt_warmed or self.stt.ready:
+            await self.send({"type": "stt_ready", "content": "primed"})
         await self.send({"type": "lab_ready", "content": "ready"})
 
     async def speak_opening(self, text: str) -> bool:
@@ -263,6 +289,41 @@ class ConversationPipeline:
                 self._transition("idle", "opening_greeting_completed")
                 self.turn_id = None
                 self.attempt = None
+
+    def opening_greeting_text(self) -> str:
+        configured = str(self.config.opening_greeting_text or "").strip()
+        if configured:
+            return configured
+        name = str(self.agent_context.name or "").strip()
+        if name:
+            return f"Hello! This is {name}. How can I help you today?"
+        return "Hello! How can I help you today?"
+
+    async def _wait_for_stt_ready(self, timeout_seconds: float = 3.0) -> bool:
+        deadline = time.monotonic() + max(0.0, timeout_seconds)
+        while time.monotonic() < deadline:
+            if self.stt.ready:
+                return True
+            await asyncio.sleep(0.05)
+        return self.stt.ready
+
+    async def _run_opening_greeting(self) -> None:
+        await self._wait_for_stt_ready()
+        spoken = False
+        try:
+            if self.config.opening_greeting_enabled:
+                spoken = await self.speak_opening(self.opening_greeting_text())
+        finally:
+            if not spoken:
+                await self.send({"type": "lab_status", "content": "listening"})
+
+    def _schedule_opening_greeting(self) -> None:
+        if self.transport != "browser" or self._opening_task:
+            return
+        self._opening_task = asyncio.create_task(
+            self._run_opening_greeting(),
+            name="rvc-lab-opening-greeting",
+        )
 
     def _provider_event(self, event: str, data: dict[str, Any]) -> None:
         details = dict(data)
@@ -1317,6 +1378,7 @@ class ConversationPipeline:
                 ),
                 **data,
             )
+            self._schedule_opening_greeting()
             return
         if kind == "tts_start":
             self.trace.record(
@@ -1357,6 +1419,8 @@ class ConversationPipeline:
             self.trace.record("history_cleared", reason="browser_request")
 
     async def close(self) -> None:
+        if self._opening_task:
+            self._opening_task.cancel()
         if self.stability_task:
             self.stability_task.cancel()
         if self.final_timeout_task:

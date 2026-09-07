@@ -414,9 +414,9 @@ async def entrypoint(ctx: JobContext) -> None:
         )
         if config.opening_greeting_enabled:
             opening_text = config.opening_greeting_text or (
-                f"Hello, this is {agent_context.name}. How may I help you today?"
+                f"Hello! This is {agent_context.name}. How may I help you today?"
                 if agent_context.name
-                else "Hello. How may I help you today?"
+                else "Hello! How may I help you today?"
             )
             await pipeline.speak_opening(opening_text)
         stream = rtc.AudioStream.from_participant(

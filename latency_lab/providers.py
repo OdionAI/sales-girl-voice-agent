@@ -102,6 +102,38 @@ class RSTTClient:
         self._realtime_skip_reported = False
         self._closing = False
 
+    @property
+    def ready(self) -> bool:
+        return bool(self.ws and not self.ws.closed)
+
+    async def warmup(self, duration_ms: float = 800.0) -> bool:
+        """Prime the realtime ASR socket so the first caller utterance is not dropped."""
+        if not self.ready:
+            return False
+        samples = max(1, int(16000 * max(0.0, duration_ms) / 1000.0))
+        silence = b"\x00\x00" * samples
+        chunk_bytes = 16000 * 2 // 5
+        try:
+            for offset in range(0, len(silence), chunk_bytes):
+                await self.append(silence[offset : offset + chunk_bytes])
+            if self.ws and not self.ws.closed:
+                await self.ws.send_json(
+                    {"type": "input_audio_buffer.commit", "final": False}
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self.on_provider_event(
+                "stt_warmup_failed",
+                {"error": str(exc), "error_type": type(exc).__name__},
+            )
+            return False
+        self.on_provider_event(
+            "stt_warmup_complete",
+            {"duration_ms": round(duration_ms, 1), "bytes": len(silence)},
+        )
+        return True
+
     async def connect(self) -> None:
         if not self.session or self.session.closed:
             self.session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=None))

@@ -105,6 +105,7 @@ class LabConfig:
         "RVC_LAB_STT_RECOVERY_MAX_BACKOFF_SECONDS", 5.0
     )
     stt_rotate_after_final: bool = _bool("RVC_LAB_STT_ROTATE_AFTER_FINAL", False)
+    stt_warmup_ms: float = _float("RVC_LAB_STT_WARMUP_MS", 800.0)
     llm_base_url: str = os.getenv(
         "RVC_LAB_LLM_BASE_URL", "http://102.88.137.124:8080/qwen38/v1"
     ).rstrip("/")

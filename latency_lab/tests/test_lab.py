@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import aiohttp
 
+from latency_lab.agentic import AgentRuntimeContext
 from latency_lab.pipeline import Attempt, ConversationPipeline, PhraseTokenizer, normalize, rms_pcm16
 from latency_lab.config import (
     LabConfig,
@@ -990,6 +991,105 @@ class OpeningGreetingTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(pipeline.state, "idle")
             self.assertIsNone(pipeline.turn_id)
             await pipeline.http.close()
+
+    async def test_browser_client_ready_speaks_opening_after_stt_is_ready(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            messages = []
+
+            async def send(message):
+                messages.append(message)
+
+            pipeline = ConversationPipeline(
+                LabConfig(
+                    trace_dir=root / "traces",
+                    report_dir=root / "reports",
+                    opening_greeting_enabled=True,
+                ),
+                TraceRecorder(root / "traces", "opening-ready-test"),
+                send,
+                transport="browser",
+                agent_context=AgentRuntimeContext(name="Sarah", loaded=True),
+            )
+            pipeline.stt.ws = SimpleNamespace(closed=False)
+            spoken = []
+
+            async def speak(attempt, text, *, phase):
+                self.assertEqual(phase, "opening_greeting")
+                spoken.append(text)
+                attempt.answer = text
+
+            pipeline._speak_text = speak
+            await pipeline.client_event("client_ready", {"mic_sample_rate": 16000})
+            self.assertIsNotNone(pipeline._opening_task)
+            await pipeline._opening_task
+            self.assertEqual(
+                spoken,
+                ["Hello! This is Sarah. How can I help you today?"],
+            )
+            pipeline.stt.ws = None
+            await pipeline.http.close()
+
+    async def test_start_warms_stt_before_lab_ready(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            messages = []
+
+            async def send(message):
+                messages.append(message)
+
+            pipeline = ConversationPipeline(
+                LabConfig(trace_dir=root / "traces", report_dir=root / "reports"),
+                TraceRecorder(root / "traces", "stt-warmup-test"),
+                send,
+            )
+            pipeline.stt.connect = AsyncMock()
+            pipeline.stt.warmup = AsyncMock(return_value=True)
+            pipeline.stt.ws = SimpleNamespace(closed=False)
+
+            await pipeline.start()
+
+            pipeline.stt.connect.assert_awaited_once()
+            pipeline.stt.warmup.assert_awaited_once()
+            types = [message["type"] for message in messages]
+            self.assertEqual(types[:3], ["lab_status", "stt_ready", "lab_ready"])
+            self.assertNotRegex(messages[0]["content"], r"\blisten|\bready")
+            pipeline.stt.ws = None
+            await pipeline.http.close()
+
+
+class STTWarmupTest(unittest.IsolatedAsyncioTestCase):
+    async def test_warmup_sends_silence_then_commit(self) -> None:
+        class FakeSocket:
+            closed = False
+
+            def __init__(self):
+                self.messages = []
+
+            async def send_json(self, message):
+                self.messages.append(message)
+
+            async def close(self):
+                self.closed = True
+
+        events = []
+        client = RSTTClient(
+            LabConfig(),
+            AsyncMock(),
+            AsyncMock(),
+            lambda event, data: events.append((event, data)),
+        )
+        socket = FakeSocket()
+        client.ws = socket
+
+        warmed = await client.warmup(200)
+
+        self.assertTrue(warmed)
+        self.assertTrue(client.ready)
+        self.assertGreaterEqual(len(socket.messages), 2)
+        self.assertEqual(socket.messages[-1]["type"], "input_audio_buffer.commit")
+        self.assertEqual(events[-1][0], "stt_warmup_complete")
+        await client.close()
 
 
 class ReportTest(unittest.TestCase):
