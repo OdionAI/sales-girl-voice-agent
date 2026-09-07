@@ -4,6 +4,7 @@ import asyncio
 import json
 import struct
 import time
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +20,7 @@ from .config import apply_runtime_overrides, lab_config_from_environ, load_platf
 from .pipeline import ConversationPipeline
 from .report import generate_report
 from .trace import TraceRecorder
+from .session_identity import verify_session_token
 
 ROOT = Path(__file__).parent
 STATIC = ROOT / "static"
@@ -64,6 +66,9 @@ _SESSION_CONFIG_META_KEYS = {
     "end_user_email",
     "end_user_id",
     "runtime_overrides",
+    "session_token",
+    "wema_context",
+    "voice_auth_owner",
 }
 
 
@@ -95,6 +100,7 @@ async def websocket_endpoint(ws: WebSocket) -> None:
     await ws.accept()
     config = lab_config_from_environ()
     routing = session_routing_context({})
+    identity = None
     pending_message: dict[str, Any] | None = None
     try:
         first = await asyncio.wait_for(ws.receive(), timeout=0.5)
@@ -107,8 +113,15 @@ async def websocket_endpoint(ws: WebSocket) -> None:
         if first_text:
             data = json.loads(first_text)
             if str(data.get("type") or "") == "session_config":
+                if data.get("session_token"):
+                    try:
+                        identity = verify_session_token(str(data["session_token"]), config.agent_config_service_token)
+                    except ValueError as exc:
+                        await ws.send_json({"type": "lab_error", "content": str(exc)})
+                        await ws.close(code=1008)
+                        return
                 config = _session_config_from_message(data)
-                routing = session_routing_context(data)
+                routing = session_routing_context(identity or data)
             else:
                 pending_message = first
         elif first.get("bytes"):
@@ -138,7 +151,10 @@ async def websocket_endpoint(ws: WebSocket) -> None:
     async def send(message: dict) -> None:
         await ws.send_json(message)
 
-    pipeline = ConversationPipeline(config, trace, send, agent_context=agent_context)
+    if not identity:
+        # The standalone lab stays conversational; tools require dashboard scope.
+        agent_context = replace(agent_context, tools=())
+    pipeline = ConversationPipeline(config, trace, send, agent_context=agent_context, session_identity=identity)
     try:
         try:
             await pipeline.start()

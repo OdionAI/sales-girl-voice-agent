@@ -10,6 +10,7 @@ import aiohttp
 
 from .config import LabConfig
 from .trace import TraceRecorder
+from .banking_tools import bank_records
 
 
 KNOWLEDGE_ACKNOWLEDGEMENT = "Let me check that for you."
@@ -142,12 +143,13 @@ class AgentRuntimeContext:
         lines = [
             "- Keep the spoken answer to one or two short sentences unless the caller asks for more detail."
         ]
-        supported = sorted(enabled.intersection({"create_ticket", "send_email"}))
+        banking = bank_records(self)
+        supported = sorted(enabled.intersection({"create_ticket", "send_email"}) | banking.keys())
         if supported:
             lines.extend(
                 [
                     f"- Configured action tools: {', '.join(supported)}.",
-                    "- When the caller requests one of those actions, call the matching function with complete arguments. The application will ask for confirmation and execute only after a committed confirmation turn.",
+                    "- When the caller requests one of those actions, call the matching function. Banking reads and previews run after the final caller transcript and follow the application's session voice-verification policy. Tickets, emails and prepared transaction execution require a separate confirmation turn.",
                     "- Never claim an action succeeded before its function result confirms success.",
                 ]
             )
@@ -167,7 +169,7 @@ class AgentRuntimeContext:
             lines.append(
                 "- end_call is not enabled. Do not claim that you can hang up the call."
             )
-        lines.append("- Transfers and other unsupported actions remain unavailable.")
+        lines.append("- Only the configured tools are available. A prepared preview is not a completed transaction; report the returned execution status honestly.")
         return "\n".join(lines)
 
     def base_prompt(self, fallback: str) -> str:

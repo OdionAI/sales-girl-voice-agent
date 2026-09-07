@@ -151,9 +151,11 @@ class RSTTClient:
                 {
                     "error": str(exc),
                     "error_type": type(exc).__name__,
-                    "batch_final_available": True,
+                    "batch_final_available": not self.uses_realtime_final,
                 },
             )
+            if self.uses_realtime_final:
+                raise
 
     async def _open_socket(self) -> None:
         async with self._inference_mode_lock:
@@ -179,6 +181,8 @@ class RSTTClient:
                         timeout=aiohttp.ClientWSTimeout(ws_receive=None, ws_close=5),
                     )
                     hello = await asyncio.wait_for(candidate.receive_json(), timeout=8)
+                    if self.uses_realtime_final and hello.get("type") != "session.created":
+                        raise aiohttp.ClientConnectionError("Whisper did not create a realtime session")
                     self.on_provider_event(
                         "stt_session_created", {"provider_event": hello.get("type")}
                     )
@@ -221,7 +225,7 @@ class RSTTClient:
                 self._realtime_skip_reported = True
                 self.on_provider_event(
                     "stt_realtime_audio_skipped",
-                    {"batch_final_available": True},
+                    {"batch_final_available": not self.uses_realtime_final},
                 )
             return
         try:
@@ -239,7 +243,7 @@ class RSTTClient:
                 {
                     "error": str(exc),
                     "error_type": type(exc).__name__,
-                    "batch_final_available": True,
+                    "batch_final_available": not self.uses_realtime_final,
                 },
             )
             if self.ws is ws:
@@ -505,7 +509,7 @@ class RSTTClient:
                 elif kind == "error":
                     self.on_provider_event(
                         "stt_realtime_error",
-                        {"payload": payload, "batch_final_available": True},
+                        {"payload": payload, "batch_final_available": not self.uses_realtime_final},
                     )
                     return
         finally:

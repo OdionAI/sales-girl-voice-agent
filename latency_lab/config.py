@@ -172,6 +172,8 @@ def normalize_stt_ws_url(value: str) -> str:
 
 
 def derive_stt_batch_url(ws_url: str) -> str:
+    if uses_realtime_stt_final(ws_url=ws_url):
+        return ""
     http_url = (
         str(ws_url or "")
         .replace("ws://", "http://")
@@ -231,6 +233,8 @@ def apply_runtime_overrides(
         ws_url = normalize_stt_ws_url(stt_base_url)
         updates["stt_ws_url"] = ws_url
         updates["stt_batch_url"] = derive_stt_batch_url(ws_url)
+    if uses_realtime_stt_final(config, model=stt_model, ws_url=stt_base_url):
+        updates["stt_batch_url"] = ""
     if llm_model:
         updates["llm_model"] = llm_model
     if llm_base_url:

@@ -11,6 +11,7 @@ import aiohttp
 from .agentic import AgentRuntimeContext
 from .config import LabConfig
 from .trace import TraceRecorder
+from .banking_tools import bank_tool_definitions
 
 
 SUPPORTED_ACTION_TOOLS = {"create_ticket", "send_email", "end_call"}
@@ -193,7 +194,7 @@ def action_tool_definitions(context: AgentRuntimeContext) -> list[dict[str, Any]
                 },
             }
         )
-    return definitions
+    return definitions + bank_tool_definitions(context)
 
 
 def parse_tool_arguments(raw: str) -> dict[str, Any]:

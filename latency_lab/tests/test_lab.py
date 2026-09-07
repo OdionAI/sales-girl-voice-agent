@@ -139,8 +139,9 @@ class PipelineHelpersTest(unittest.TestCase):
         self.assertEqual(whisper_config.stt_model, "whisper-large-v3-turbo")
         self.assertEqual(
             whisper_config.stt_batch_url,
-            "http://102.88.137.124:8080/whisper-rt/v1/audio/transcriptions",
+            "",
         )
+        self.assertEqual(derive_stt_batch_url(whisper_config.stt_ws_url), "")
         self.assertEqual(
             normalize_stt_ws_url("ws://102.88.137.124:8080/whisper-rt/v1"),
             "ws://102.88.137.124:8080/whisper-rt/v1/realtime",

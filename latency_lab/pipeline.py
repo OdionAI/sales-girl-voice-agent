@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import json
 import math
 import re
 import struct
@@ -33,6 +34,7 @@ from .action_tools import (
 )
 from .providers import RLLMClient, RSTTClient, RTTSClient
 from .trace import TraceRecorder
+from .banking_tools import BankingTools, BANK_TOOLS
 
 
 class Outbound(Protocol):
@@ -107,6 +109,7 @@ class Attempt:
     knowledge_result: KnowledgeResult | None = None
     tool_calls: list[ActionToolCall] = field(default_factory=list)
     end_call_requested: bool = False
+    tool_messages: list[dict[str, Any]] = field(default_factory=list)
 
 
 class ConversationPipeline:
@@ -120,6 +123,7 @@ class ConversationPipeline:
         *,
         transport: str = "browser",
         agent_context: AgentRuntimeContext | None = None,
+        session_identity: dict | None = None,
     ) -> None:
         self.config = config
         self.trace = trace
@@ -129,7 +133,8 @@ class ConversationPipeline:
         self.tts = RTTSClient(config, self.http)
         self.stt = RSTTClient(config, self.on_partial, self.on_final, self._provider_event)
         self.agent_context = agent_context or AgentRuntimeContext()
-        self.system_prompt = self.agent_context.system_prompt(config.system_prompt)
+        self.banking = BankingTools(self.http, self.agent_context, trace.session_id, send, session_identity)
+        self.system_prompt = self.agent_context.system_prompt(config.system_prompt) + self.banking.prompt()
         self.knowledge = KnowledgeClient(config, self.http, self.agent_context)
         self.action_tools = action_tool_definitions(self.agent_context)
         self.action_executor = ActionToolExecutor(
@@ -365,6 +370,7 @@ class ConversationPipeline:
         client_sent_ms: float | None = None,
         client_network_ms: float | None = None,
     ) -> None:
+        self.banking.ingest_pcm(pcm)
         if self.state == "recovering_stt":
             return
         await self.stt.append(pcm)
@@ -497,6 +503,7 @@ class ConversationPipeline:
         self.silence_ms = 0.0
         self.silence_candidate = False
         committed_audio = bytes(self.turn_pcm16)
+        self.banking.utterance(committed_audio)
         self.turn_pcm16.clear()
         self.trace.record(
             "stt_local_turn_audio_committed",
@@ -690,7 +697,10 @@ class ConversationPipeline:
             self.stability_task = None
         if self.attempt:
             similarity = SequenceMatcher(None, normalize(self.attempt.hypothesis), normalize(text)).ratio()
-            valid = normalize(self.attempt.hypothesis) == normalize(text) or similarity >= 0.92
+            # Approximate text matches cannot authorize banking arguments.
+            valid = (self.attempt.hypothesis.strip().casefold() == text.strip().casefold()
+                     if self.banking.records else
+                     normalize(self.attempt.hypothesis) == normalize(text) or similarity >= 0.92)
             self.trace.record(
                 "speculation_validation",
                 turn_id=self.turn_id,
@@ -765,7 +775,7 @@ class ConversationPipeline:
     async def _generate(self, attempt: Attempt) -> None:
         messages = [
             {"role": "system", "content": self.system_prompt},
-            *self.history[-8:],
+            *self._recent_history(),
             {"role": "user", "content": attempt.hypothesis},
         ]
         try:
@@ -803,7 +813,9 @@ class ConversationPipeline:
                     await attempt.authorization_event.wait()
                 if attempt.cancelled:
                     return
-                if call.name == "end_call":
+                if call.name in BANK_TOOLS:
+                    await self._run_banking_tools(attempt, messages, attempt.tool_calls)
+                elif call.name == "end_call":
                     committed_text = self.final_text if attempt.authorized else ""
                     closing_intent = explicit_end_call_intent(committed_text)
                     self.trace.record(
@@ -837,7 +849,7 @@ class ConversationPipeline:
                                     "call. Do not end or offer to end the call in this response."
                                 ),
                             },
-                            *self.history[-8:],
+                            *self._recent_history(),
                             {"role": "user", "content": committed_text},
                         ]
                         # Recovery is deliberately response-only. A mistaken
@@ -869,6 +881,9 @@ class ConversationPipeline:
                     self.pending_action = PendingAction(
                         call=call, confirmation_prompt=prompt
                     )
+                    await self.banking.activity(call, "completed", {
+                        "status": "needs_confirmation", "message": prompt, "data": {},
+                    })
                     attempt.held_audio.clear()
                     attempt.answer = ""
                     self.trace.record(
@@ -960,7 +975,7 @@ class ConversationPipeline:
                 )
                 followup_messages = [
                     {"role": "system", "content": knowledge_prompt},
-                    *self.history[-8:],
+                    *self._recent_history(),
                     {"role": "user", "content": self.final_text or attempt.hypothesis},
                 ]
                 attempt.answer = ""
@@ -979,10 +994,7 @@ class ConversationPipeline:
                 initial_answer=attempt.initial_answer or None,
                 used_knowledge=attempt.knowledge_result is not None,
                 prepared_tool=(attempt.tool_calls[0].name if attempt.tool_calls else None),
-                awaiting_tool_confirmation=bool(
-                    attempt.tool_calls
-                    and attempt.tool_calls[0].name != "end_call"
-                ),
+                awaiting_tool_confirmation=bool(self.pending_action),
                 end_call_requested=attempt.end_call_requested,
             )
             if attempt.authorized:
@@ -1068,6 +1080,8 @@ class ConversationPipeline:
                 return
             evidence = self.final_text or attempt.hypothesis
             decision = confirmation_decision(evidence)
+            if pending.call.name == "wema_execute_prepared":
+                decision = self._bank_confirmation(evidence)
             self.trace.record(
                 "tool_confirmation_decision",
                 turn_id=self.turn_id,
@@ -1079,6 +1093,7 @@ class ConversationPipeline:
             attempt.answer = ""
             if decision == "rejected":
                 self.pending_action = None
+                self.banking.prepared = None
                 await self._speak_text(
                     attempt,
                     "No problem. I won't carry out that action.",
@@ -1092,7 +1107,7 @@ class ConversationPipeline:
                 )
             else:
                 self.pending_action = None
-                acknowledgement = (
+                acknowledgement = "Okay, I'll submit the confirmed request." if pending.call.name in BANK_TOOLS else (
                     "Okay, one moment while I create that ticket."
                     if pending.call.name == "create_ticket"
                     else "Okay, one moment while I send that email."
@@ -1107,7 +1122,18 @@ class ConversationPipeline:
                     reason="committed_explicit_confirmation_received",
                     tool_name=pending.call.name,
                 )
-                result = await self.action_executor.execute(pending.call)
+                if pending.call.name in BANK_TOOLS:
+                    from .action_tools import ActionResult
+                    body = await self.banking.execute(
+                        pending.call, confirmed_operation=pending.call.arguments.get("operation_id", "")
+                    )
+                    result = ActionResult(body.get("status", "failed"), body.get("message", "Request could not be completed."), body, 0)
+                else:
+                    await self.banking.activity(pending.call, "started")
+                    result = await self.action_executor.execute(pending.call)
+                    await self.banking.activity(pending.call, "completed", {
+                        "status": result.status, "message": result.message, "data": result.data,
+                    })
                 self.trace.record(
                     "tool_execution_complete",
                     turn_id=self.turn_id,
@@ -1153,6 +1179,71 @@ class ConversationPipeline:
                 phase="tool_confirmation_or_execution",
             )
             await self.send({"type": "lab_status", "content": f"Pipeline error: {exc}"})
+
+    @staticmethod
+    def _bank_confirmation(text: str) -> str:
+        words = " ".join(re.sub(r"[^a-z0-9 ]", " ", text.lower()).split())
+        if words in {"no", "no cancel", "cancel", "cancel it", "no cancel that", "do not proceed"}:
+            return "rejected"
+        if words in {"yes", "yes please", "yes go ahead", "go ahead", "confirm", "i confirm", "yes proceed", "proceed"}:
+            return "confirmed"
+        return "unclear"
+
+    def _recent_history(self) -> list[dict]:
+        # Retain whole turns so tool results never lose their tool-call message.
+        starts = [i for i, message in enumerate(self.history) if message["role"] == "user"]
+        return self.history[starts[-4]:] if len(starts) >= 4 else list(self.history)
+
+    async def _run_banking_tools(self, attempt: Attempt, messages: list[dict], calls: list) -> None:
+        for round_number in range(4):
+            if attempt.cancelled or not attempt.authorized:
+                return
+            for call in calls:
+                if call.name not in BANK_TOOLS:
+                    continue
+                if call.name == "wema_execute_prepared" and self.banking.prepared:
+                    await self._request_bank_confirmation(attempt)
+                    return
+                request = {"role": "assistant", "content": None, "tool_calls": [{
+                    "id": call.id, "type": "function", "function": {
+                        "name": call.name, "arguments": json.dumps(call.arguments),
+                    },
+                }]}
+                body = await self.banking.execute(call)
+                reply = {"role": "tool", "tool_call_id": call.id, "content": json.dumps(body)}
+                attempt.tool_messages.extend([request, reply])
+                messages.extend([request, reply])
+                if self.banking.prepared and call.name.startswith("wema_prepare_"):
+                    await self._request_bank_confirmation(attempt)
+                    return
+                if body.get("status") not in {"ok", "success", "completed"}:
+                    # Do not hammer failed authentication or repeat a connector failure.
+                    calls = []
+                    break
+            followup_tools = [item for item in self.action_tools
+                              if item["function"]["name"] in BANK_TOOLS] if calls and round_number < 3 else None
+            if attempt.answer:
+                attempt.answer = attempt.answer.rstrip() + " "
+            calls = await self._stream_llm_and_tts(attempt, messages, phase="bank_tool_result", tools=followup_tools)
+            if not calls:
+                return
+        await self._speak_text(attempt, "Please tell me which request you would like to handle next.", phase="tool_limit")
+
+    async def _request_bank_confirmation(self, attempt: Attempt) -> None:
+        data = self.banking.prepared
+        preview = data["preview"]
+        digits = lambda value: ". ".join(str(value))
+        if "recipient_account" in preview:
+            details = (f"Transfer {preview['amount']} naira to {preview['recipient_name']}, "
+                       f"{preview['bank_name']}, account {digits(preview['recipient_account'])}.")
+        else:
+            details = (f"Buy {preview['package_name']} on {preview['network']} for {preview['amount']} naira, "
+                       f"for {digits(preview['phone_number'])}.")
+        prompt = details + " Do you confirm?"
+        self.pending_action = PendingAction(
+            ActionToolCall(f"call-{uuid.uuid4().hex[:12]}", "wema_execute_prepared", {"operation_id": data["operation_id"]}), prompt
+        )
+        await self._speak_text(attempt, prompt, phase="bank_preview_confirmation")
 
     async def _stream_llm_and_tts(
         self,
@@ -1317,6 +1408,7 @@ class ConversationPipeline:
         self.history.extend(
             [
                 {"role": "user", "content": self.final_text or attempt.hypothesis},
+                *attempt.tool_messages,
                 {"role": "assistant", "content": attempt.answer.strip()},
             ]
         )
@@ -1438,6 +1530,7 @@ class ConversationPipeline:
             self.trace.record("history_cleared", reason="browser_request")
 
     async def close(self) -> None:
+        await self.banking.close()
         if self._opening_task:
             self._opening_task.cancel()
         if self.stability_task:
