@@ -156,6 +156,36 @@ See `LIVEKIT_INTEGRATION_PLAN.md` for the measurement boundaries.
 
 ## Rollback and roadmap
 
+### September 7: internal markup reaching speech
+
+Trace `0b9f4c9847de`, turn 10, showed a knowledge follow-up emitting raw
+`<tool_call><function=wema_list_data_plans>...` content. The exact markup reached
+`tts_request_start`; this was not evidence of an ASR fault or a need to change
+remote TTS chunk settings. The follow-up had omitted the configured banking
+tools and the existing banking instructions/caller context.
+
+The follow-up now retains those definitions and context, and uses the existing
+bank tool runner with its unchanged final-input, voice and confirmation gates.
+An incremental provider filter excludes thinking and tool-markup blocks before
+text reaches transcripts, history or phrase TTS. It handles split/truncated tags
+without buffering ordinary speech until completion. Raw markup is never parsed
+into an executable action; only structured `tool_calls` remain executable.
+Incremental UTF-8 decoding also preserves characters split across network chunks.
+
+Regression suite: 105 tests, 93 passing and 12 existing skips. Coverage includes
+every split of the reported markup, thinking blocks, incomplete tags, TTS and
+transcript filtering, native tool calls, Unicode, and both outcomes of the
+existing voice checks. A real-model follow-up returned a structured
+`wema_list_data_plans` call with `network: MTN`; that probe executed no bank API.
+Live hybrid trace `68f349011c30` then showed plan-tool activity and a clean
+voice-verification response. The chat-only request was correctly denied without
+voice evidence. The smoke call was disconnected after verification.
+This patch is confined to the hybrid backend worktree. Remote configuration,
+saved agent prompts, ASR, TTS tuning, authentication policy and frontend code
+are unchanged. The pre-fix integration checkpoint is `21a3655`.
+
+### Stop the comparison
+
 End hybrid test calls and stop only the processes launched from the two
 integration worktrees (frontend 3004, worker 8189). Verify PID/cwd before stopping;
 do not stop shared LiveKit, models or services. Continue on ports 3000/3003.

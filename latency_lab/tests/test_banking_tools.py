@@ -303,6 +303,53 @@ class BankingTest(unittest.IsolatedAsyncioTestCase):
             finally:
                 await pipe.close()
 
+    async def test_knowledge_followup_keeps_bank_tools_and_both_voice_checks(self):
+        for matched in (False, True):
+            with self.subTest(matched=matched), tempfile.TemporaryDirectory() as directory:
+                self.requests.clear()
+                pipe = ConversationPipeline(LabConfig(), TraceRecorder(Path(directory)), self.send,
+                                            agent_context=self.context, session_identity=identity())
+                pipe.banking.compare = AsyncMock(return_value={"matched": matched, "score": .9 if matched else .1})
+                pipe.banking.generation = 1
+                pipe.banking.clip = self.bank.clip
+
+                async def no_audio(_text):
+                    async def chunks():
+                        if False:
+                            yield b""
+                    return 24000, chunks()
+
+                pipe.tts.stream = no_audio
+                calls = []
+                owner = self
+
+                class LLM:
+                    async def stream(self, messages, *, tools=None):
+                        calls.append((messages.copy(), tools))
+                        if len(calls) == 1:
+                            yield "Let me check that for you."
+                        elif len(calls) == 2:
+                            owner.assertIn("wema_get_balance", {t["function"]["name"] for t in tools})
+                            owner.assertIn("never invent values or placeholders", messages[0]["content"])
+                            owner.assertIn("Both voice checks must pass", messages[0]["content"])
+                            owner.assertIn("test-customer", messages[0]["content"])
+                            yield owner.call()
+                        else:
+                            owner.assertEqual(messages[-1]["role"], "tool")
+                            yield "Your balance is one hundred naira." if matched else "Please speak again to verify your voice."
+
+                pipe.llm = LLM()
+                pipe.turn_id, pipe.final_text = "turn-1", "Check my balance"
+                try:
+                    await pipe._start_attempt(pipe.final_text, speculative=False, authorized=True)
+                    await pipe.attempt.task
+                    self.assertEqual(len(calls), 3)
+                    self.assertEqual(len(self.requests), 1 if matched else 0)
+                    self.assertEqual(pipe.banking.compare.await_count, 2)
+                    self.assertEqual([m["role"] for m in pipe.history], ["user", "assistant", "tool", "assistant"])
+                finally:
+                    await pipe.close()
+
     def test_qualified_yes_does_not_execute(self):
         self.assertEqual(ConversationPipeline._bank_confirmation("Yes, but change the amount to 500"), "unclear")
         self.assertEqual(ConversationPipeline._bank_confirmation("Yes, go ahead"), "confirmed")

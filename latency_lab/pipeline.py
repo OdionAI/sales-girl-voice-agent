@@ -992,16 +992,22 @@ class ConversationPipeline:
                 knowledge_prompt = self.agent_context.knowledge_followup_prompt(
                     self.config.system_prompt,
                     result.prompt_context(),
-                )
+                ) + self.banking.prompt()
                 followup_messages = [
                     {"role": "system", "content": knowledge_prompt},
                     *self._recent_history(),
                     {"role": "user", "content": self.final_text or attempt.hypothesis},
                 ]
                 attempt.answer = ""
-                await self._stream_llm_and_tts(
-                    attempt, followup_messages, phase="knowledge_followup"
+                # A lookup acknowledgement may refer to the bank API, not a KB.
+                # Keep configured banking tools on the structured channel here.
+                bank_tools = [tool for tool in self.action_tools
+                              if tool["function"]["name"] in BANK_TOOLS]
+                attempt.tool_calls = await self._stream_llm_and_tts(
+                    attempt, followup_messages, phase="knowledge_followup", tools=bank_tools
                 )
+                if attempt.tool_calls:
+                    await self._run_banking_tools(attempt, followup_messages, attempt.tool_calls)
             attempt.audio_complete = True
             if attempt.cancelled:
                 return

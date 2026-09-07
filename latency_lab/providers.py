@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import codecs
 import io
 import json
 import re
@@ -15,6 +16,7 @@ import aiohttp
 
 from .action_tools import ActionToolCall, parse_tool_arguments
 from .config import LabConfig, uses_realtime_stt_final
+from .llm_output import SpokenTextFilter
 
 _ASR_MARKER = re.compile(r"(?i).*?<asr_text>\s*")
 _LANGUAGE_NAMES = {
@@ -624,9 +626,11 @@ class RLLMClient:
                         continue
                     response.raise_for_status()
                     buffered = ""
+                    decoder = codecs.getincrementaldecoder("utf-8")()
+                    spoken = SpokenTextFilter()
                     done = False
                     async for raw_line in response.content.iter_any():
-                        buffered += raw_line.decode("utf-8", errors="ignore")
+                        buffered += decoder.decode(raw_line)
                         lines = buffered.split("\n")
                         buffered = lines.pop()
                         for line in lines:
@@ -656,8 +660,10 @@ class RLLMClient:
                             except (KeyError, IndexError, json.JSONDecodeError):
                                 continue
                             if delta:
-                                emitted_output = True
-                                yield str(delta)
+                                text = spoken.push(str(delta))
+                                if text:
+                                    emitted_output = True
+                                    yield text
                         if done:
                             break
                 break
