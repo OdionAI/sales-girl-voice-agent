@@ -14,7 +14,7 @@ from typing import Any, Protocol
 
 import aiohttp
 
-from .config import LabConfig
+from .config import LabConfig, uses_realtime_stt_final
 from .agentic import (
     AgentRuntimeContext,
     KnowledgeClient,
@@ -190,8 +190,16 @@ class ConversationPipeline:
                 and self.config.conversation_service_token
             ),
             system_prompt_chars=len(self.system_prompt),
-            stt_final_authority="qwen_batch",
-            stt_realtime_role="optional_speculation_only",
+            stt_final_authority=(
+                "whisper_realtime"
+                if uses_realtime_stt_final(self.config)
+                else "qwen_batch"
+            ),
+            stt_realtime_role=(
+                "authoritative_final"
+                if uses_realtime_stt_final(self.config)
+                else "optional_speculation_only"
+            ),
             stt_batch_url=self.config.stt_batch_url,
             stt_recovery_buffer_seconds=self.config.stt_recovery_buffer_seconds,
             stt_rotate_after_final=self.config.stt_rotate_after_final,
@@ -493,7 +501,11 @@ class ConversationPipeline:
         self.trace.record(
             "stt_local_turn_audio_committed",
             turn_id=self.turn_id,
-            reason="local_vad_owned_utterance_sent_to_batch_final",
+            reason=(
+                "local_vad_owned_utterance_sent_to_realtime_final"
+                if uses_realtime_stt_final(self.config)
+                else "local_vad_owned_utterance_sent_to_batch_final"
+            ),
             pcm_bytes=len(committed_audio),
             audio_ms=round(len(committed_audio) / 2 / 16000 * 1000, 1),
         )
@@ -505,7 +517,10 @@ class ConversationPipeline:
 
     async def _final_timeout(self, expected_turn: str | None) -> None:
         try:
-            await asyncio.sleep(self.config.stt_batch_timeout_seconds + 1.0)
+            timeout_seconds = self.config.stt_batch_timeout_seconds + 1.0
+            if uses_realtime_stt_final(self.config):
+                timeout_seconds = max(timeout_seconds, 20.0)
+            await asyncio.sleep(timeout_seconds)
             if self.turn_id != expected_turn or self.state != "awaiting_final":
                 return
             self.trace.record(
@@ -662,7 +677,11 @@ class ConversationPipeline:
         self.trace.record(
             "stt_final",
             turn_id=self.turn_id,
-            reason="qwen_batch_transcript_authoritative",
+            reason=(
+                "whisper_realtime_transcript_authoritative"
+                if uses_realtime_stt_final(self.config)
+                else "qwen_batch_transcript_authoritative"
+            ),
             text=text,
         )
         await self.send({"type": "final_user_request", "content": text})

@@ -14,7 +14,7 @@ from typing import Any
 import aiohttp
 
 from .action_tools import ActionToolCall, parse_tool_arguments
-from .config import LabConfig
+from .config import LabConfig, uses_realtime_stt_final
 
 _ASR_MARKER = re.compile(r"(?i).*?<asr_text>\s*")
 _LANGUAGE_NAMES = {
@@ -105,6 +105,10 @@ class RSTTClient:
     @property
     def ready(self) -> bool:
         return bool(self.ws and not self.ws.closed)
+
+    @property
+    def uses_realtime_final(self) -> bool:
+        return uses_realtime_stt_final(self.config)
 
     async def warmup(self, duration_ms: float = 800.0) -> bool:
         """Prime the realtime ASR socket so the first caller utterance is not dropped."""
@@ -242,8 +246,11 @@ class RSTTClient:
                 self.ws = None
 
     async def commit(self, pcm16: bytes) -> None:
-        """Start the authoritative batch final without concurrent realtime work."""
+        """Finish the current utterance on the provider that can actually decode it."""
         audio = bytes(pcm16)
+        if self.uses_realtime_final:
+            await self._commit_realtime_final(audio)
+            return
         self.on_provider_event(
             "stt_batch_final_requested",
             {
@@ -256,6 +263,49 @@ class RSTTClient:
         )
         self._batch_tasks.add(task)
         task.add_done_callback(self._batch_tasks.discard)
+
+    async def _commit_realtime_final(self, pcm16: bytes) -> None:
+        """Keep the Whisper socket open and ask it for the turn transcript."""
+        audio = bytes(pcm16)
+        self.on_provider_event(
+            "stt_realtime_final_requested",
+            {
+                "pcm_bytes": len(audio),
+                "audio_ms": round(len(audio) / 2 / 16000 * 1000, 1),
+            },
+        )
+        ws = self.ws
+        if not ws or ws.closed:
+            try:
+                await self._open_socket()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self.on_provider_event(
+                    "stt_realtime_final_error",
+                    {"error": str(exc), "error_type": type(exc).__name__},
+                )
+                return
+            ws = self.ws
+            if ws and not ws.closed and audio:
+                chunk_bytes = 16000 * 2 // 5
+                for offset in range(0, len(audio), chunk_bytes):
+                    await self.append(audio[offset : offset + chunk_bytes])
+        if not ws or ws.closed:
+            self.on_provider_event(
+                "stt_realtime_final_error",
+                {"error": "realtime socket unavailable", "error_type": "SocketClosed"},
+            )
+            return
+        try:
+            await ws.send_json({"type": "input_audio_buffer.commit", "final": True})
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self.on_provider_event(
+                "stt_realtime_final_error",
+                {"error": str(exc), "error_type": type(exc).__name__},
+            )
 
     async def _run_authoritative_batch(self, pcm16: bytes) -> None:
         """Hand inference ownership from realtime to batch and back.
@@ -430,10 +480,26 @@ class RSTTClient:
                     self.accumulated = ""
                     self._in_language_preamble = False
                     self._drop_hypothesis = False
-                    self.on_provider_event(
-                        "stt_realtime_final_ignored",
-                        {"text": final, "authoritative": False},
-                    )
+                    if self.uses_realtime_final:
+                        self.on_provider_event(
+                            "stt_realtime_final",
+                            {"text": final, "authoritative": True},
+                        )
+                        if final:
+                            await self.on_final(final)
+                        else:
+                            self.on_provider_event(
+                                "stt_realtime_final_error",
+                                {
+                                    "error": "realtime endpoint returned an empty transcript",
+                                    "error_type": "EmptyTranscript",
+                                },
+                            )
+                    else:
+                        self.on_provider_event(
+                            "stt_realtime_final_ignored",
+                            {"text": final, "authoritative": False},
+                        )
                     if not ws.closed:
                         await ws.send_json({"type": "input_audio_buffer.commit", "final": False})
                 elif kind == "error":

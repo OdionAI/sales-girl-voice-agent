@@ -20,6 +20,8 @@ from latency_lab.config import (
     derive_stt_batch_url,
     lab_config_from_environ,
     normalize_llm_base_url,
+    normalize_stt_ws_url,
+    uses_realtime_stt_final,
 )
 from latency_lab.providers import (
     RLLMClient,
@@ -121,6 +123,30 @@ class PipelineHelpersTest(unittest.TestCase):
             derive_stt_batch_url("wss://host/asr-rt/v1/realtime"),
             "https://host/asr-rt/v1/audio/transcriptions",
         )
+        whisper_config = apply_runtime_overrides(
+            LabConfig(),
+            {
+                "stt_provider": "odion_stt",
+                "stt_transport": "ws",
+                "stt_model": "whisper-large-v3-turbo",
+                "stt_base_url": "ws://102.88.137.124:8080/whisper-rt/v1/realtime",
+            },
+        )
+        self.assertEqual(
+            whisper_config.stt_ws_url,
+            "ws://102.88.137.124:8080/whisper-rt/v1/realtime",
+        )
+        self.assertEqual(whisper_config.stt_model, "whisper-large-v3-turbo")
+        self.assertEqual(
+            whisper_config.stt_batch_url,
+            "http://102.88.137.124:8080/whisper-rt/v1/audio/transcriptions",
+        )
+        self.assertEqual(
+            normalize_stt_ws_url("ws://102.88.137.124:8080/whisper-rt/v1"),
+            "ws://102.88.137.124:8080/whisper-rt/v1/realtime",
+        )
+        self.assertTrue(uses_realtime_stt_final(whisper_config))
+        self.assertFalse(uses_realtime_stt_final(config))
 
     def test_phrase_tokenizer_emits_complete_phrases_and_tail(self) -> None:
         tokenizer = PhraseTokenizer()
@@ -740,6 +766,106 @@ class HybridSTTTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(finals, [])
         self.assertIn("stt_realtime_final_ignored", [event for event, _ in events])
         self.assertEqual(socket.messages[-1]["final"], False)
+        await client.close()
+
+    async def test_whisper_realtime_done_is_authoritative_final(self) -> None:
+        events = []
+        finals = []
+
+        async def ignore_partial(_text, _raw):
+            return None
+
+        async def capture_final(text):
+            finals.append(text)
+
+        class FakeSocket:
+            closed = False
+
+            def __init__(self):
+                self.messages = []
+                self._messages = [
+                    SimpleNamespace(
+                        type=aiohttp.WSMsgType.TEXT,
+                        data=json.dumps(
+                            {"type": "transcription.done", "text": "Hello from Whisper"}
+                        ),
+                    )
+                ]
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                if not self._messages:
+                    raise StopAsyncIteration
+                return self._messages.pop(0)
+
+            async def send_json(self, message):
+                self.messages.append(message)
+
+            async def close(self):
+                self.closed = True
+
+        client = RSTTClient(
+            LabConfig(
+                stt_model="whisper-large-v3-turbo",
+                stt_ws_url="ws://102.88.137.124:8080/whisper-rt/v1/realtime",
+            ),
+            ignore_partial,
+            capture_final,
+            lambda event, data: events.append((event, data)),
+        )
+        socket = FakeSocket()
+        client.ws = socket
+
+        await client._receive(socket)
+
+        self.assertEqual(finals, ["Hello from Whisper"])
+        self.assertIn("stt_realtime_final", [event for event, _ in events])
+        self.assertNotIn("stt_realtime_final_ignored", [event for event, _ in events])
+        self.assertEqual(socket.messages[-1]["final"], False)
+        await client.close()
+
+    async def test_whisper_commit_keeps_socket_and_asks_for_final(self) -> None:
+        events = []
+
+        async def ignore_partial(_text, _raw):
+            return None
+
+        async def ignore_final(_text):
+            return None
+
+        class FakeSocket:
+            closed = False
+
+            def __init__(self):
+                self.messages = []
+
+            async def send_json(self, message):
+                self.messages.append(message)
+
+            async def close(self):
+                self.closed = True
+
+        client = RSTTClient(
+            LabConfig(
+                stt_model="whisper-large-v3-turbo",
+                stt_ws_url="ws://102.88.137.124:8080/whisper-rt/v1/realtime",
+            ),
+            ignore_partial,
+            ignore_final,
+            lambda event, data: events.append((event, data)),
+        )
+        socket = FakeSocket()
+        client.ws = socket
+        client._run_authoritative_batch = AsyncMock()
+
+        await client.commit(b"\x01\x00" * 1600)
+
+        self.assertFalse(socket.closed)
+        self.assertEqual(socket.messages[-1], {"type": "input_audio_buffer.commit", "final": True})
+        client._run_authoritative_batch.assert_not_called()
+        self.assertIn("stt_realtime_final_requested", [event for event, _ in events])
         await client.close()
 
     async def test_batch_result_is_the_only_authoritative_final(self) -> None:

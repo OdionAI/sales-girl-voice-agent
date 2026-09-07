@@ -166,7 +166,7 @@ def normalize_stt_ws_url(value: str) -> str:
     elif url.startswith("https://"):
         url = f"wss://{url[len('https://'):]}"
     trimmed = url.rstrip("/")
-    if trimmed.endswith("/v1") or trimmed.endswith("/asr-rt/v1"):
+    if trimmed.endswith("/v1") or trimmed.endswith("/asr-rt/v1") or trimmed.endswith("/whisper-rt/v1"):
         return f"{trimmed}/realtime"
     return url
 
@@ -181,6 +181,18 @@ def derive_stt_batch_url(ws_url: str) -> str:
     if http_url.endswith("/realtime"):
         return f"{http_url[: -len('/realtime')]}/audio/transcriptions"
     return f"{http_url}/audio/transcriptions"
+
+
+def uses_realtime_stt_final(
+    config: LabConfig | None = None,
+    *,
+    model: str = "",
+    ws_url: str = "",
+) -> bool:
+    """Whisper exposes the Odion realtime WS, not the Qwen batch transcription path."""
+    resolved_model = str(model or (config.stt_model if config else "") or "").lower()
+    resolved_url = str(ws_url or (config.stt_ws_url if config else "") or "").lower()
+    return "whisper" in resolved_model or "whisper-rt" in resolved_url
 
 
 def normalize_tts_language(value: str) -> str:
