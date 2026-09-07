@@ -15,16 +15,11 @@ from dotenv import dotenv_values
 from livekit import rtc
 from livekit.agents import AutoSubscribe, JobContext, WorkerOptions, cli
 
-from .agentic import RoomAgentContext, load_agent_runtime_context, room_agent_context
-from .config import LabConfig
+from .agentic import load_agent_runtime_context, session_routing_context
+from .config import apply_runtime_overrides, lab_config_from_environ, load_platform_env
 from .pipeline import ConversationPipeline
 from .report import generate_report
-from .sip_routing import (
-    extract_sip_party_number,
-    is_sip_participant,
-    load_number_agent_map,
-    resolve_sip_agent_route,
-)
+from .session_identity import verify_session_token
 from .trace import TraceRecorder
 
 
@@ -32,7 +27,16 @@ logger = logging.getLogger("rvc-livekit-transport")
 ROOT = Path(__file__).parent
 WORKSPACE = ROOT.parent.parent
 DEFAULT_LIVEKIT_ENV = WORKSPACE / "sales-girl-dashboard" / ".env.local"
-DEFAULT_AGENT_NAME = "sales-girl-agent-en-localhost-noclone"
+DEFAULT_AGENT_NAME = "rvc-livekit-comparison"
+
+
+def resolve_dispatch(metadata: str, room_name: str, service_token: str) -> dict[str, Any]:
+    """Banking identity comes from server dispatch, never editable participant metadata."""
+    payload = json.loads(metadata or "{}")
+    identity = verify_session_token(str(payload.get("session_token") or ""), service_token)
+    if identity.get("room_name") != room_name or not identity.get("participant_identity"):
+        raise ValueError("Call bootstrap does not match this room and caller.")
+    return identity
 
 
 def load_livekit_credentials() -> None:
@@ -84,6 +88,7 @@ class LiveKitPCMTransport:
         self._active_playback_attempt_id = ""
         self._active_playback_started_ns = 0
         self._acknowledged_turns: set[str] = set()
+        self._agent_state = ""
 
     def bind(self, pipeline: ConversationPipeline) -> None:
         self.pipeline = pipeline
@@ -94,23 +99,29 @@ class LiveKitPCMTransport:
             await self._send_audio(message)
             return
         if kind == "tts_end":
+            attempt = self.pipeline.attempt if self.pipeline else None
             if self.playing:
                 await self.source.wait_for_playout()
-                if self.playing:
-                    assert self.pipeline is not None
-                    await self.pipeline.client_event("tts_stop")
-                    self.playing = False
+            await self._finish_playout(attempt)
             return
         if kind in {"stop_tts", "tts_interruption"}:
             self.source.clear_queue()
             if self.playing and self.pipeline is not None:
                 await self.pipeline.client_event("tts_stop")
             self.playing = False
+            await self.set_state("listening")
             self.trace.record(
                 "livekit_playout_cleared",
                 turn_id=self.pipeline.turn_id if self.pipeline else None,
                 reason=kind,
             )
+            return
+        if kind in {"odion.tool.activity", "odion.auth.status", "odion.auth.action_status", "odion.auth.action"}:
+            if self.local_participant is not None and self.user_identity:
+                await self.local_participant.publish_data(
+                    json.dumps(message.get("payload") or message), reliable=True,
+                    topic=kind, destination_identities=[self.user_identity],
+                )
             return
         if kind in {
             "partial_user_request",
@@ -127,6 +138,8 @@ class LiveKitPCMTransport:
                 reason=kind,
                 content=message.get("content"),
             )
+            if kind == "lab_ready":
+                await self.set_state("listening")
             return
         if kind == "end_call":
             reason = str(message.get("reason") or "configured_end_call")
@@ -143,6 +156,21 @@ class LiveKitPCMTransport:
             if self.end_call_handler is None:
                 raise RuntimeError("LiveKit end-call handler is not configured")
             await self.end_call_handler(reason)
+
+    async def set_state(self, state: str) -> None:
+        if state != self._agent_state and self.local_participant is not None:
+            await self.local_participant.set_attributes({"lk.agent.state": state})
+            self._agent_state = state
+
+    async def _finish_playout(self, attempt: Any) -> None:
+        if self.pipeline is not None and self.pipeline.attempt is attempt:
+            await self.pipeline.client_event("tts_stop")
+        if self.pipeline is None or self.pipeline.attempt is None:
+            self.playing = False
+            await self.set_state("listening")
+
+    async def close(self) -> None:
+        self.source.clear_queue()
 
     async def _send_audio(self, message: dict[str, Any]) -> None:
         pcm = base64.b64decode(str(message.get("content") or ""))
@@ -165,6 +193,7 @@ class LiveKitPCMTransport:
             )
             self._active_playback_started_ns = time.perf_counter_ns()
             await self.pipeline.client_event("tts_start")
+            await self.set_state("speaking")
         frame = rtc.AudioFrame(
             data=pcm,
             sample_rate=sample_rate,
@@ -224,6 +253,16 @@ class LiveKitPCMTransport:
         )
         if final:
             self._segment_ids.pop(role, None)
+            # Web components use text streams; Swift also consumes the legacy
+            # transcription packet above. Both carry the same final segment.
+            writer = await self.local_participant.stream_text(
+                topic="lk.transcription", destination_identities=[self.user_identity],
+                sender_identity=identity,
+                attributes={"lk.transcription_final": "true", "lk.segment_id": segment_id,
+                            "lk.transcribed_track_id": track_sid},
+            )
+            await writer.write(text)
+            await writer.aclose()
 
     def receive_browser_playback_ack(
         self,
@@ -273,60 +312,45 @@ def _microphone_track_sid(participant: rtc.RemoteParticipant) -> str:
 
 
 async def entrypoint(ctx: JobContext) -> None:
-    config = LabConfig()
+    load_platform_env()
+    config = lab_config_from_environ()
     trace = TraceRecorder(config.trace_dir)
     pipeline: ConversationPipeline | None = None
     stream: rtc.AudioStream | None = None
     transport: LiveKitPCMTransport | None = None
-    started = False
+    source = None
+    tasks: set[asyncio.Task] = set()
     data_handler = None
+    disconnected = asyncio.Event()
+    participant_handler = None
+    ready = asyncio.Event()
+    input_lock = asyncio.Lock()
     try:
+        identity = resolve_dispatch(ctx.job.metadata, ctx.room.name, config.agent_config_service_token)
+        config = apply_runtime_overrides(config, identity.get("runtime_overrides"), language=identity.get("language", "en"))
         trace.record(
             "livekit_job_received",
             reason="named_agent_dispatch",
             room_name=ctx.room.name,
             agent_name=os.getenv("RVC_LAB_LIVEKIT_AGENT_NAME", DEFAULT_AGENT_NAME),
-            sip_number_map_count=len(load_number_agent_map()),
         )
         await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
-        participant = await ctx.wait_for_participant()
-        base_room_context = room_agent_context(str(ctx.room.name or ""))
-        sip_route = resolve_sip_agent_route(participant)
-        routing_context: RoomAgentContext | None = None
-        sip_party_number = extract_sip_party_number(participant)
-        if sip_route is not None:
-            routing_context = RoomAgentContext(
-                business_id=sip_route.business_id,
-                agent_id=sip_route.agent_id,
-                configured_name=sip_route.configured_name,
-                end_user_id=sip_route.party_number,
-            )
-            trace.record(
-                "sip_number_agent_route",
-                reason="configured_number_map_hit",
-                original_agent_id=base_room_context.agent_id or None,
-                routed_agent_id=sip_route.agent_id,
-                routed_business_id=sip_route.business_id,
-                configured_agent_name=sip_route.configured_name or None,
-                party_number_suffix=sip_route.party_number[-4:],
-            )
-        elif is_sip_participant(participant):
-            trace.record(
-                "sip_number_agent_route",
-                reason=(
-                    "sip_party_number_not_mapped"
-                    if sip_party_number
-                    else "sip_party_number_missing"
-                ),
-                original_agent_id=base_room_context.agent_id or None,
-                party_number_suffix=(sip_party_number[-4:] if sip_party_number else None),
-            )
+        participant = await asyncio.wait_for(
+            ctx.wait_for_participant(identity=identity["participant_identity"]), timeout=30,
+        )
+        def on_participant_disconnected(remote: rtc.RemoteParticipant) -> None:
+            if remote.identity == participant.identity:
+                disconnected.set()
+        participant_handler = on_participant_disconnected
+        ctx.room.on("participant_disconnected", participant_handler)
         agent_context = await load_agent_runtime_context(
             room_name=str(ctx.room.name or ""),
             config=config,
             trace=trace,
-            routing_context=routing_context,
+            routing_context=session_routing_context(identity),
         )
+        if not agent_context.loaded:
+            raise RuntimeError("Configured agent could not be loaded; refusing an unconfigured call.")
 
         async def end_call_handler(reason: str) -> None:
             trace.record(
@@ -337,7 +361,6 @@ async def entrypoint(ctx: JobContext) -> None:
                     else None
                 ),
                 reason=reason,
-                sip_participant=is_sip_participant(participant),
             )
             deleted = ctx.delete_room()
             if hasattr(deleted, "__await__"):
@@ -349,9 +372,9 @@ async def entrypoint(ctx: JobContext) -> None:
                     if pipeline
                     else None
                 ),
-                reason="room_deleted_sip_bye_expected",
-                sip_participant=is_sip_participant(participant),
+                reason="room_deleted",
             )
+            disconnected.set()
 
         source = rtc.AudioSource(sample_rate=24000, num_channels=1, queue_size_ms=240)
         output_track = rtc.LocalAudioTrack.create_audio_track("rvc-tts", source)
@@ -372,11 +395,42 @@ async def entrypoint(ctx: JobContext) -> None:
             transport.send,
             transport="livekit",
             agent_context=agent_context,
+            session_identity=identity,
         )
         transport.bind(pipeline)
+        transport.user_identity = participant.identity
+        transport.user_participant = participant
+        transport.user_track_sid = _microphone_track_sid(participant)
+        await transport.set_state("initializing")
+
+        async def receive_text(reader: rtc.TextStreamReader, sender: str) -> None:
+            if sender != participant.identity:
+                return
+            text = ""
+            async with asyncio.timeout(10):
+                async for chunk in reader:
+                    text += chunk
+                    if len(text) > 4096:
+                        return
+            if not text.strip():
+                return
+            await ready.wait()
+            async with input_lock:
+                await pipeline.text(text)
+
+        def on_text(reader: rtc.TextStreamReader, sender: str) -> None:
+            task = asyncio.create_task(receive_text(reader, sender))
+            tasks.add(task)
+            def completed(task: asyncio.Task) -> None:
+                tasks.discard(task)
+                if not task.cancelled() and task.exception() is not None:
+                    logger.error("RVC caller text failed", exc_info=task.exception())
+            task.add_done_callback(completed)
+        ctx.room.register_text_stream_handler("lk.chat", on_text)
 
         def on_data_received(packet: rtc.DataPacket) -> None:
-            if transport is None or packet.topic != "rvc_latency_ack":
+            if (transport is None or packet.topic != "rvc_latency_ack" or
+                    packet.participant is None or packet.participant.identity != participant.identity):
                 return
             try:
                 payload = json.loads(packet.data.decode("utf-8"))
@@ -392,7 +446,7 @@ async def entrypoint(ctx: JobContext) -> None:
         data_handler = on_data_received
         ctx.room.on("data_received", data_handler)
         await pipeline.start()
-        started = True
+        ready.set()
         await pipeline.client_event(
             "client_ready",
             {
@@ -402,9 +456,6 @@ async def entrypoint(ctx: JobContext) -> None:
                 "livekit_output_queue_ms": 240,
             },
         )
-        transport.user_identity = participant.identity
-        transport.user_participant = participant
-        transport.user_track_sid = _microphone_track_sid(participant)
         trace.record(
             "livekit_participant_ready",
             reason="remote_participant_and_microphone_track_available",
@@ -412,13 +463,6 @@ async def entrypoint(ctx: JobContext) -> None:
             input_track_sid=transport.user_track_sid,
             output_track_sid=transport.publication_sid,
         )
-        if config.opening_greeting_enabled:
-            opening_text = config.opening_greeting_text or (
-                f"Hello! This is {agent_context.name}. How may I help you today?"
-                if agent_context.name
-                else "Hello! How may I help you today?"
-            )
-            await pipeline.speak_opening(opening_text)
         stream = rtc.AudioStream.from_participant(
             participant=participant,
             track_source=rtc.TrackSource.SOURCE_MICROPHONE,
@@ -426,20 +470,24 @@ async def entrypoint(ctx: JobContext) -> None:
             num_channels=1,
             frame_size_ms=100,
         )
-        first_frame = True
-        async for event in stream:
-            received_ns = time.perf_counter_ns()
-            pcm = bytes(event.frame.data)
-            if first_frame:
-                first_frame = False
-                trace.record(
-                    "livekit_first_audio_frame_received",
-                    reason="subscribed_microphone_pcm_entered_rvc_coordinator",
-                    bytes=len(pcm),
-                    sample_rate=event.frame.sample_rate,
-                    received_ns=received_ns,
-                )
-            await pipeline.audio(pcm)
+        async def receive_audio() -> None:
+            first_frame = True
+            async for event in stream:
+                if first_frame:
+                    first_frame = False
+                    trace.record("livekit_first_audio_frame_received", reason="microphone_entered_rvc",
+                                 bytes=len(event.frame.data), sample_rate=event.frame.sample_rate)
+                async with input_lock:
+                    await pipeline.audio(bytes(event.frame.data))
+
+        input_task = asyncio.create_task(receive_audio())
+        stop_task = asyncio.create_task(disconnected.wait())
+        tasks.update((input_task, stop_task))
+        if config.opening_greeting_enabled:
+            tasks.add(asyncio.create_task(pipeline.speak_opening(pipeline.opening_greeting_text())))
+        done, _ = await asyncio.wait((input_task, stop_task), return_when=asyncio.FIRST_COMPLETED)
+        for task in done:
+            task.result()
     except asyncio.CancelledError:
         raise
     except Exception as exc:
@@ -451,6 +499,9 @@ async def entrypoint(ctx: JobContext) -> None:
         )
         logger.exception("RVC LiveKit transport failed")
     finally:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
         if data_handler is not None:
             try:
                 ctx.room.off("data_received", data_handler)
@@ -458,10 +509,18 @@ async def entrypoint(ctx: JobContext) -> None:
                 pass
         if stream is not None:
             await stream.aclose()
+        if participant_handler is not None:
+            ctx.room.off("participant_disconnected", participant_handler)
+        ctx.room.unregister_text_stream_handler("lk.chat")
         if pipeline is not None:
             await pipeline.close()
-        elif not started:
+        else:
             trace.record("session_close", reason="livekit_startup_failed")
+        if transport is not None:
+            await transport.close()
+        if source is not None:
+            await source.aclose()
+        await ctx.room.disconnect()
         if trace.path.exists():
             report = generate_report(trace.path, config.report_dir)
             logger.info("RVC LiveKit latency report: %s", report)
@@ -473,6 +532,7 @@ def main() -> None:
         format="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
     )
     load_livekit_credentials()
+    load_platform_env()
     agent_name = os.getenv("RVC_LAB_LIVEKIT_AGENT_NAME", DEFAULT_AGENT_NAME)
     cli.run_app(
         WorkerOptions(

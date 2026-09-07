@@ -1,9 +1,12 @@
 # RVC orchestration over LiveKit transport
 
-Status: proposed integration, not deployed. Inspected September 7, 2026.
-Neither running worker, model configuration, nor caller routing was changed for
-this investigation. The previously deferred premature-LLM-stop issue remains
-deferred; response-completion recovery is not part of this work.
+Status: initial investigation followed by an isolated comparison implementation,
+September 7, 2026. The findings below describe the pre-integration adapter.
+See [LIVEKIT_COMPARISON.md](LIVEKIT_COMPARISON.md) for implemented changes,
+startup, verification and remaining acceptance work. The original running apps
+and remote model configuration were not changed. The previously deferred
+premature-LLM-stop issue remains deferred; response-completion recovery is not
+part of this work.
 
 ## Decision
 
@@ -222,4 +225,3 @@ Official references checked September 7, 2026:
 - [Raw media processing and dispatched programmatic participants](https://docs.livekit.io/transport/media/raw-tracks/)
 - [AudioSource queue and playout semantics](https://docs.livekit.io/reference/python/livekit/rtc/audio_source.html)
 - [AgentSession orchestration](https://docs.livekit.io/agents/logic/sessions/)
-

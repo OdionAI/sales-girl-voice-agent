@@ -249,6 +249,7 @@ class ConversationPipeline:
             hypothesis="",
             speculative=False,
             authorized=True,
+            task=asyncio.current_task(),
         )
         attempt.authorization_event.set()
         self.turn_id = opening_turn_id
@@ -649,7 +650,7 @@ class ConversationPipeline:
         except asyncio.CancelledError:
             return
 
-    async def on_final(self, text: str) -> None:
+    async def on_final(self, text: str, *, publish_transcript: bool = True) -> None:
         if not self.turn_id:
             if self.last_closed_turn_id:
                 self.trace.record(
@@ -691,7 +692,8 @@ class ConversationPipeline:
             ),
             text=text,
         )
-        await self.send({"type": "final_user_request", "content": text})
+        if publish_transcript:
+            await self.send({"type": "final_user_request", "content": text})
         if self.stability_task:
             self.stability_task.cancel()
             self.stability_task = None
@@ -716,12 +718,30 @@ class ConversationPipeline:
                 self.attempt.authorization_event.set()
                 self._transition("releasing", "final_validated_prepared_response")
                 await self._release_held(self.attempt)
-                if self.attempt.audio_complete:
-                    await self._commit_attempt_text(self.attempt)
                 return
             await self._cancel_attempt("final_transcript_changed", similarity=round(similarity, 3))
         await self._start_attempt(text, speculative=False, authorized=True)
         self._transition("releasing", "final_required_fresh_generation")
+
+    async def text(self, text: str) -> None:
+        """Submit committed chat through the same final/authorization path as speech."""
+        text = text.strip()
+        if not text:
+            return
+        await self._cancel_attempt("caller_text_message")
+        if self.stability_task:
+            self.stability_task.cancel()
+        if self.final_timeout_task:
+            self.final_timeout_task.cancel()
+        self._clear_speech_candidate()
+        self.turn_number += 1
+        self.turn_id = f"turn-{self.turn_number:04d}"
+        self.final_text = ""
+        self.last_partial = ""
+        self.speech_ms = self.silence_ms = 0.0
+        self._transition("awaiting_final", "committed_caller_text")
+        # Chat is not voice evidence and must not mark either voice check passed.
+        await self.on_final(text, publish_transcript=False)
 
     async def _start_attempt(self, text: str, *, speculative: bool, authorized: bool) -> None:
         if self.attempt:
@@ -998,8 +1018,8 @@ class ConversationPipeline:
                 end_call_requested=attempt.end_call_requested,
             )
             if attempt.authorized:
-                await self.send({"type": "tts_end"})
                 await self._commit_attempt_text(attempt)
+                await self.send({"type": "tts_end"})
                 if attempt.end_call_requested:
                     self.trace.record(
                         "end_call_playout_complete",
@@ -1056,8 +1076,8 @@ class ConversationPipeline:
                         awaiting_tool_confirmation=False,
                         end_call_requested=False,
                     )
-                    await self.send({"type": "tts_end"})
                     await self._commit_attempt_text(attempt)
+                    await self.send({"type": "tts_end"})
                     return
                 except Exception as fallback_exc:
                     self.trace.record(
@@ -1165,8 +1185,8 @@ class ConversationPipeline:
                 confirmation_decision=decision,
             )
             if attempt.authorized:
-                await self.send({"type": "tts_end"})
                 await self._commit_attempt_text(attempt)
+                await self.send({"type": "tts_end"})
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -1398,6 +1418,7 @@ class ConversationPipeline:
             await self._send_audio(sample_rate, chunk, attempt)
         attempt.held_audio.clear()
         if attempt.audio_complete:
+            await self._commit_attempt_text(attempt)
             await self.send({"type": "tts_end"})
 
     async def _commit_attempt_text(self, attempt: Attempt) -> None:
