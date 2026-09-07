@@ -1,17 +1,22 @@
 # Distributing the Attentive iOS SDK
 
-Status: binary staging candidate prepared locally, 2026-09-07. The user approved
-`OdionAI/attentive-ios-sdk` as a private repository. Publication is blocked:
-GitHub reports that the authenticated `mavinomichael` account cannot create a
-repository in `OdionAI`. No remote tag, release or production API was created.
+Status: private binary staging prerelease published, 2026-09-08 (WAT).
+[Release `0.1.0-staging.1`](https://github.com/OdionAI/attentive-ios-sdk/releases/tag/0.1.0-staging.1)
+is available in the user-approved `OdionAI/attentive-ios-sdk` repository.
+Fresh GitHub installation and both documented consumer builds passed. This
+does not deploy the backend; physical-iPhone binary call testing remains pending.
 
-## Current Staging Candidate
+## Current Staging Release
 
-- Candidate version: `0.1.0-staging.1`.
+- Published version: `0.1.0-staging.1`.
+- Package commit: `6c9d1131a7754293666ea986f1f8cf180846ec49`.
 - Build: `node script/build_binary_release.mjs` from `sdks/ios`.
 - Output: `.build/binary-release/package`, a standalone root Swift package.
 - Verify documented consumers:
   `node script/check_documentation.mjs .build/binary-release/package`.
+- Verify remote installation:
+  `node script/check_documentation.mjs https://github.com/OdionAI/attentive-ios-sdk.git 0.1.0-staging.1`.
+  This uses system Git credentials and a separate consumer/build directory.
 - Both core-only and optional-UI documentation consumers compile against the
   binaries, without access to implementation source.
 - Artifacts: separate `AttentiveVoice` and `AttentiveVoiceUI` XCFrameworks plus
@@ -34,10 +39,12 @@ and external-symlink audit runs before writing `SHA256SUMS` and `BUILD_INFO.json
 The `--ui-only` option reuses an existing locally built core/native artifact set;
 use a full build for a fresh release.
 
-To unblock publication, an organization owner must create the empty private
-repository and grant the publishing account write access. Then push the reviewed
-package, publish the prerelease tag, and test installation from the remote URL.
-Do not publish to a personal account or change repository visibility as a workaround.
+Repository access is resolved. The initial package seeded `dev` and `staging`
+at the same reviewed commit. Future updates follow `dev` -> PR -> `staging`.
+Do not move the published tag or overwrite its artifacts. Before a new release,
+update the version in the build metadata and release README, rebuild, verify,
+then create a new tag. Do not change repository visibility as a workaround for
+customer access; grant the intended customers GitHub read access instead.
 
 ## Publish a Library, Deploy a Service
 
@@ -55,8 +62,8 @@ accessible to customers. Customers continue configuring agents in our dashboard.
 | --- | --- | --- |
 | SDK | `AttentiveVoice`, optional `AttentiveVoiceUI` | Local source package works; user confirmed the updated physical-iPhone sample works |
 | Sample | Small app demonstrating public library consumption | Exists; developer LAN configuration is not production configuration |
-| Documentation | Human quickstart, reference, coding-agent prompt and version notes | Local files; snippets are compile-checked |
-| Binary package | Compiled implementation installed through SwiftPM | Local candidate built; remote publication/install verification blocked by repository permissions |
+| Documentation | Human quickstart, reference, coding-agent prompt and version notes | Published with `0.1.0-staging.1`; snippets compile against the remote package |
+| Binary package | Compiled implementation installed through SwiftPM | Private prerelease published; fresh remote core/UI builds and checksum verification passed |
 | Customer API deployment | Secure call bootstrap and reachable realtime service | Current POC contract exists; production hardening remains a release gate |
 
 ## Recommended Customer Delivery
@@ -68,8 +75,7 @@ platform variants and distributes them through SwiftPM.
 [Binary packages](https://developer.apple.com/documentation/xcode/distributing-binary-frameworks-as-swift-packages),
 [XCFramework creation](https://developer.apple.com/documentation/xcode/creating-a-multi-platform-binary-framework-bundle).
 
-The private staging candidate uses this layout. Nothing here implies the remote
-repository already exists:
+The published private staging package uses this layout:
 
 ```text
 Dedicated SDK distribution repository
@@ -96,8 +102,9 @@ the generated customer package includes those binaries without upstream download
 
 ## Preview Installation Today
 
-An approved preview consumer can receive the generated binary-package folder and
-add it as a **local package** while repository access is arranged. It contains
+Customers with GitHub read access can install the exact published version below.
+An approved preview consumer can also receive the generated binary-package folder
+and add it as a **local package**. It contains
 compiled implementation, public interfaces and notices, not implementation source.
 The original internal source preview remains an alternative for maintainers.
 Do not hand out the whole voice-agent repository just to install an SDK.
@@ -147,13 +154,19 @@ packaging unchanged. Keep debugging symbols privately for support as appropriate
 
 ### 3. Produce the SwiftPM Manifest
 
-Publish the artifacts at immutable versioned URLs. Compute each archive checksum:
+The current release uses path-based binary targets within the private Git
+repository, pinned by the version tag. `SHA256SUMS` is an additional audit record;
+SwiftPM does not automatically check that file. Preserve framework symlinks and
+`.gitattributes` so Git does not rewrite packaged bytes.
+
+For a future URL-based distribution, publish archives at immutable versioned
+URLs and compute each archive checksum:
 
 ```sh
 swift package compute-checksum /path/to/AttentiveVoice.xcframework.zip
 ```
 
-The release manifest uses binary targets whose names match the compiled modules,
+That URL-based manifest uses binary targets whose names match the compiled modules,
 URLs and checksums. It must expose the two public products and link all required
 dependencies/resources. Core must remain usable without the optional UI. Test
 the complete graph before publishing; a two-line binary-target declaration
@@ -182,7 +195,7 @@ publish matching artifacts, release notes and versioned documentation. SwiftPM
 uses semantic-version Git tags to resolve dependency versions.
 [SwiftPM version selection](https://docs.swift.org/swiftpm/documentation/packagemanagerdocs/addingdependencies/).
 
-The candidate `0.1.0-staging.1` is not a published release until this happens.
+`0.1.0-staging.1` has completed publication as a private prerelease.
 Record the source commit, artifact hashes, supported OS/toolchain versions,
 backend compatibility and known limitations. Breaking public API changes need
 a documented migration. Do not overwrite artifacts under an existing version.
@@ -198,15 +211,14 @@ a documented migration. Do not overwrite artifacts under an existing version.
    of the normal SDK integration.
 4. They run staging acceptance tests, then release their own signed app.
 
-For package-manifest consumers, the eventual dependency has this shape. This
-is a template only, not an installable URL/version today:
+For package-manifest consumers with repository read access:
 
 ```swift
 // In the customer's Package.swift dependencies:
-.package(url: "<APPROVED_SDK_REPOSITORY_URL>", exact: "<PUBLISHED_VERSION>")
+.package(url: "https://github.com/OdionAI/attentive-ios-sdk.git", exact: "0.1.0-staging.1")
 // In its target dependencies, use the published package identity:
-.product(name: "AttentiveVoice", package: "<SDK_PACKAGE_IDENTITY>")
-.product(name: "AttentiveVoiceUI", package: "<SDK_PACKAGE_IDENTITY>") // Optional
+.product(name: "AttentiveVoice", package: "attentive-ios-sdk")
+.product(name: "AttentiveVoiceUI", package: "attentive-ios-sdk") // Optional
 ```
 
 ### 7. Updates and Rollback
@@ -235,11 +247,11 @@ access control is not runtime call authorization. See the [API security notes](.
 
 ## Remaining Release Gates
 
-- Organization repository creation/write access, then remote tag and prerelease.
-- Clean remote SwiftPM install and physical-phone test of the packaged binaries.
+- Physical-phone live-call test of the published binaries against local staging.
+- Installation on a separate customer's machine/CI with that customer's access.
 - Production identity/enrollment, publisher signing and App Store requirements
   before moving beyond the explicitly local/private staging preview.
 
-Next step: resolve repository permissions, publish and verify the private staging
-installation. This does not require replacing transport or building the planned
+Next step: switch a test app to the exact remote package and verify calls on the
+physical iPhone. This does not require replacing transport or building the planned
 gateway/gRPC/Android SDK first.

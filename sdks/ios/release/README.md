@@ -1,8 +1,8 @@
 # Attentive iOS SDK
 
-Private binary staging package. Candidate version: **0.1.0-staging.1**.
-This folder is not evidence of publication; remote installation requires the
-matching tag in `OdionAI/attentive-ios-sdk`.
+Private binary staging prerelease: **0.1.0-staging.1**.
+Use the matching Git tag in `OdionAI/attentive-ios-sdk` for a pinned installation.
+This is a local-backend staging release, not a production service deployment.
 
 | Product | Use | Minimum iOS |
 | --- | --- | --- |
@@ -18,7 +18,7 @@ This release does not change the call engine or add a gateway hop.
 You need read access to the private repository through your GitHub account.
 In Xcode, select **File > Add Package Dependencies**, enter
 `https://github.com/OdionAI/attentive-ios-sdk.git`, and choose exact version
-`0.1.0-staging.1` once that tag is published. Add `AttentiveVoice`; add
+`0.1.0-staging.1`. Add `AttentiveVoice`; add
 `AttentiveVoiceUI` only when using the supplied screen.
 
 For a Swift package consumer:
@@ -35,7 +35,7 @@ Alternatively, add this folder as a local package. The binaries are carried in
 the repository; there are no separately authenticated release downloads or
 upstream source-package installs. Do not manually add the native frameworks.
 
-Use Xcode 26.6 with Swift 6.3.3 for this candidate. Core supports iOS 16+ and the
+Use Xcode 26.6 with Swift 6.3.3 for this release. Core supports iOS 16+ and the
 optional UI iOS 17+. Slices cover arm64 iPhone and arm64/x86_64 iOS Simulator.
 Compatibility with older Xcode compilers is not claimed by this preview.
 
@@ -84,8 +84,8 @@ Candidate checks on September 7, 2026:
   and passed its caller-screen/panel UI test. No live call was started.
 - Public interfaces, native linking, packaged resources, file checksums and
   documentation links were checked. No implementation Swift files are shipped.
-- Remote Git installation and physical-iPhone testing of these release binaries
-  remain pending. The previous source-built phone app worked, but that is not
+- Physical-iPhone testing of these release binaries remains pending. The
+  previous source-built phone app worked, but that is not
   a substitute for testing the packaged release on the phone.
 
 See `BUILD_INFO.json` for the source revision/toolchain and `SHA256SUMS` for the
@@ -99,7 +99,7 @@ third-party credits and native binary identifiers remain discoverable; this is
 not a promise of removing every upstream trace. Preserve `ThirdPartyNotices`
 and the privacy manifests/resource bundles inside the frameworks.
 
-The Attentive frameworks in this staging candidate are unsigned. No Apple
+The Attentive frameworks in this staging release are unsigned. No Apple
 Developer Program purchase is required to download this Swift package. Your
 app's signing and distribution are separate. Before App Store use, complete
 publisher signing, third-party privacy/signature compliance and device testing.

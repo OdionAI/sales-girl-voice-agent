@@ -31,7 +31,10 @@ API. A gateway and gRPC are separate [roadmap](../../docs/attentive/ROADMAP.md) 
    repository and exact version, or **Add Local** for a supplied package folder.
    Add the products from the table to your app target. Do not add the whole
    voice-agent repository as a package: its manifest is nested.
-3. Use Swift 6.1+ tooling. The core requires iOS 16; the supplied UI requires
+3. Use the toolchain stated in your release README. Binary staging version
+   `0.1.0-staging.1` requires Xcode 26.6 / Swift 6.3.3; the source package's
+   Swift 6.1 minimum is not a binary compatibility guarantee. The core requires
+   iOS 16; the supplied UI requires
    iOS 17. The examples using that UI below require iOS 17.
 4. Add this entry to the host app's Info.plist (or its generated Info settings):
 

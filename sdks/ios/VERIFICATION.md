@@ -1,5 +1,27 @@
 # Wrapper Verification: 2026-09-06
 
+## Published Binary Staging Release: 2026-09-08
+
+- Private repository: `https://github.com/OdionAI/attentive-ios-sdk.git`.
+  `dev` and `staging` were bootstrapped at package commit
+  `6c9d1131a7754293666ea986f1f8cf180846ec49`; the immutable exact version is
+  `0.1.0-staging.1`.
+- [GitHub prerelease](https://github.com/OdionAI/attentive-ios-sdk/releases/tag/0.1.0-staging.1)
+  is published, not a draft. Permissions are resolved.
+- `node script/check_documentation.mjs https://github.com/OdionAI/attentive-ios-sdk.git 0.1.0-staging.1`
+  passed both core-only and optional-UI builds for arm64/x86_64 Simulator using
+  a fresh GitHub checkout and separate derived data. Evidence:
+  `.build/remote-documentation-consumer/DocsCore.log` and `DocsCallerUI.log`.
+- The remote checkout resolved to the package commit above. Every entry in its
+  `SHA256SUMS` passed verification. An initial transient GitHub connection failure
+  was resolved by retrying, without network configuration changes.
+- The binary Simulator UI test below passed before publication. The remote
+  documentation check compiles consumers; it does not launch an app or live call.
+  Physical-iPhone live-call testing of the published binaries is still pending.
+- No SDK runtime source, backend/model/authentication configuration or installed
+  physical-phone app was changed for publication. See
+  [release acceptance record](release/0.1.0-staging.1.md).
+
 ## Binary Staging Candidate: 2026-09-07
 
 - Candidate `0.1.0-staging.1` packages compiled core and optional UI plus pinned
@@ -18,11 +40,11 @@
   all artifact files are below GitHub's per-file limit. `SHA256SUMS` and packaged
   documentation file-link checks passed.
 - `verify_transport.mjs`: all 293 vendored files/pins/API boundaries passed.
-- Remote publication is not complete: GitHub denied organization repository
+- At this checkpoint, remote publication was not complete: GitHub denied organization repository
   creation for the authenticated account. Native Chrome fallback reached GitHub
   sign-in. The user must create the private repository or arrange owner access.
-- Remote package installation, physical-device binary smoke testing and signing/
-  App Store compliance remain release gates. No backend/model/auth configuration
+- Remote publication/install was subsequently verified above. Physical-device
+  binary smoke testing and signing/App Store compliance remain release gates. No backend/model/auth configuration
   or installed physical-iPhone app was changed during packaging.
 
 ## Passed

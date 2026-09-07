@@ -8,8 +8,10 @@ Requires iOS 16+ (macOS 13+ for the diagnostic executable) and Swift 6.1+ toolin
 
 Start with the [customer integration quickstart](GETTING_STARTED.md) for complete
 Swift snippets using your own UI or the supplied caller screen. See
-[distribution and release steps](DISTRIBUTION.md) for how we turn this local
-preview into an installable customer package; publication is not complete yet.
+[distribution and release steps](DISTRIBUTION.md) for the published private
+[binary staging package](https://github.com/OdionAI/attentive-ios-sdk/releases/tag/0.1.0-staging.1).
+That binary release requires Xcode 26.6 / Swift 6.3.3; the source package's
+minimum tooling declaration is not a binary compatibility guarantee.
 
 ## Choose Your UI
 
@@ -25,12 +27,11 @@ The UI product depends on core, never the reverse. See the
 The runnable [SwiftUI sample](Examples/AttentiveSample/README.md) demonstrates
 calls, chat, caller settings, authentication badges and tool activity by importing
 the public UI product. Its caller panels and avatar are no longer app-local copies.
-The package has not yet been released as a hosted Swift package. In Xcode,
-add `sdks/ios` as a **local package**, then link the `AttentiveVoice` product to
-the customer's app. Because
-the manifest is in a subdirectory, do not add the repository root as a remote
-SwiftPM dependency. Publishing a standalone SDK repository/package is a later
-release step. The [roadmap](../../docs/attentive/ROADMAP.md) tracks publication,
+Customers can add `https://github.com/OdionAI/attentive-ios-sdk.git` in Xcode
+with exact version `0.1.0-staging.1` and GitHub read access. Link core and, if
+needed, optional UI. Maintainers can still add `sdks/ios` as a **local package**.
+Do not add this voice-agent repository root as a remote SwiftPM dependency:
+its manifest is in a subdirectory. The [roadmap](../../docs/attentive/ROADMAP.md) tracks
 the streaming gateway, gRPC, browser integration and Android SDK work separately.
 
 ## Call From Your UI

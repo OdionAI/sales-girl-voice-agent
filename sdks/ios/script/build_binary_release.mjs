@@ -164,6 +164,7 @@ await writeFile(join(distribution, "BUILD_INFO.json"), JSON.stringify({
   upstream: JSON.parse(await readFile(join(sdk, "Vendor/AttentiveRTC/upstream.json"), "utf8")),
 }, null, 2) + "\n");
 await writeFile(join(distribution, ".gitignore"), ".DS_Store\n.build/\n.swiftpm/\n");
+await writeFile(join(distribution, ".gitattributes"), "* -text\n");
 const hashes = [];
 async function inventory(directory, prefix = "") {
   for (const name of (await readdir(directory)).sort()) {
