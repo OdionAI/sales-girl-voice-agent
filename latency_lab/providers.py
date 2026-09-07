@@ -591,13 +591,15 @@ class RLLMClient:
         messages: list[dict[str, str]],
         *,
         tools: list[dict[str, Any]] | None = None,
+        max_tokens: int = 180,
+        temperature: float = 0.35,
     ) -> AsyncIterator[str | ActionToolCall]:
         payload = {
             "model": self.config.llm_model,
             "messages": messages,
             "stream": True,
-            "temperature": 0.35,
-            "max_tokens": 180,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
             "chat_template_kwargs": {
                 "enable_thinking": bool(self.config.llm_enable_thinking),
                 "thinking": bool(self.config.llm_enable_thinking),

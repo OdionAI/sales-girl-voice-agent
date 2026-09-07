@@ -192,15 +192,21 @@ class BankingTools:
             raise ValueError(errors[0].message)
         return args
 
-    async def execute(self, call, *, confirmed_operation: str = "") -> dict:
+    async def execute(self, call, *, confirmed_operation: str = "", on_result=None) -> dict:
         await self.activity(call, "started")
         try:
             result = await self._execute(call, confirmed_operation=confirmed_operation)
         except asyncio.CancelledError:
-            await self.activity(call, "completed", failed("Request interrupted; its outcome is not confirmed."))
+            result = failed("Request interrupted; its outcome is not confirmed.")
+            if on_result:
+                on_result(result)
+            await self.activity(call, "completed", result)
             raise
         except (aiohttp.ClientError, TimeoutError, ValueError, KeyError):
             result = failed("The configured banking service could not complete this request.")
+        # Preserve the returned outcome before cancellable UI/audio notifications.
+        if on_result:
+            on_result(result)
         await self.activity(call, "completed", result)
         if call.name == "wema_execute_prepared" and self.voice_auth_required:
             completed = result.get("status") in {"ok", "success", "completed"}

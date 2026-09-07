@@ -112,6 +112,11 @@ class LabConfig:
     llm_model: str = os.getenv("RVC_LAB_LLM_MODEL", "qwen3.8-27b")
     llm_api_key: str = os.getenv("RVC_LAB_LLM_API_KEY", "local-npu")
     llm_enable_thinking: bool = _bool("RVC_LAB_LLM_ENABLE_THINKING", False)
+    memory_compaction_enabled: bool = _bool("RVC_LAB_MEMORY_COMPACTION_ENABLED", True)
+    memory_compaction_interval_seconds: float = _float("RVC_LAB_MEMORY_COMPACTION_INTERVAL_SECONDS", 60.0)
+    memory_recent_exchanges: int = int(_float("RVC_LAB_MEMORY_RECENT_EXCHANGES", 8))
+    memory_context_tokens: int = int(_float("RVC_LAB_MEMORY_CONTEXT_TOKENS", 6000))
+    memory_summary_timeout_seconds: float = _float("RVC_LAB_MEMORY_SUMMARY_TIMEOUT_SECONDS", 15.0)
     tts_url: str = os.getenv(
         "RVC_LAB_TTS_URL", "http://102.88.137.124:8080/tts/v1/audio/speech"
     )

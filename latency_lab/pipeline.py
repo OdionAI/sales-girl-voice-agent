@@ -35,6 +35,7 @@ from .action_tools import (
 from .providers import RLLMClient, RSTTClient, RTTSClient
 from .trace import TraceRecorder
 from .banking_tools import BankingTools, BANK_TOOLS
+from .memory import ConversationMemory, CONVERSATION_RULES
 
 
 class Outbound(Protocol):
@@ -110,6 +111,8 @@ class Attempt:
     tool_calls: list[ActionToolCall] = field(default_factory=list)
     end_call_requested: bool = False
     tool_messages: list[dict[str, Any]] = field(default_factory=list)
+    turn_id: str | None = None
+    audio_sent: bool = False
 
 
 class ConversationPipeline:
@@ -134,7 +137,7 @@ class ConversationPipeline:
         self.stt = RSTTClient(config, self.on_partial, self.on_final, self._provider_event)
         self.agent_context = agent_context or AgentRuntimeContext()
         self.banking = BankingTools(self.http, self.agent_context, trace.session_id, send, session_identity)
-        self.system_prompt = self.agent_context.system_prompt(config.system_prompt) + self.banking.prompt()
+        self.system_prompt = self.agent_context.system_prompt(config.system_prompt) + self.banking.prompt() + CONVERSATION_RULES
         self.knowledge = KnowledgeClient(config, self.http, self.agent_context)
         self.action_tools = action_tool_definitions(self.agent_context)
         self.action_executor = ActionToolExecutor(
@@ -151,7 +154,9 @@ class ConversationPipeline:
         self.final_text = ""
         self.attempt: Attempt | None = None
         self.stability_task: asyncio.Task[None] | None = None
-        self.history: list[dict[str, str]] = []
+        self.memory = ConversationMemory(config, trace)
+        self._memory_loop_task: asyncio.Task | None = None
+        self._compaction_task: asyncio.Task | None = None
         self.closed_turns: set[str] = set()
         self.last_closed_turn_id: str | None = None
         self.silence_candidate = False
@@ -165,7 +170,31 @@ class ConversationPipeline:
         self.turn_pcm16 = bytearray()
         self._opening_task: asyncio.Task[None] | None = None
 
+    @property
+    def history(self) -> list[dict]:
+        return self.memory.history
+
+    def _pause_compaction(self) -> None:
+        if self._compaction_task and not self._compaction_task.done():
+            self._compaction_task.cancel()
+
+    def _maybe_compact(self) -> None:
+        if (not self.config.memory_compaction_enabled or self.state != "idle"
+                or self.speech_candidate_active or self.pending_action or self.banking.prepared
+                or (self._compaction_task and not self._compaction_task.done())):
+            return
+        self._compaction_task = asyncio.create_task(
+            self.memory.compact(self.llm), name=f"{self.trace.session_id}-memory"
+        )
+
+    async def _memory_loop(self) -> None:
+        while True:
+            await asyncio.sleep(max(1.0, self.config.memory_compaction_interval_seconds))
+            self._maybe_compact()
+
     async def start(self) -> None:
+        if self.config.memory_compaction_enabled and not self._memory_loop_task:
+            self._memory_loop_task = asyncio.create_task(self._memory_loop())
         self.trace.record(
             "session_open",
             reason=f"{self.transport}_transport_accepted",
@@ -208,6 +237,10 @@ class ConversationPipeline:
             stt_batch_url=self.config.stt_batch_url,
             stt_recovery_buffer_seconds=self.config.stt_recovery_buffer_seconds,
             stt_rotate_after_final=self.config.stt_rotate_after_final,
+            memory_compaction_enabled=self.config.memory_compaction_enabled,
+            memory_compaction_interval_seconds=self.config.memory_compaction_interval_seconds,
+            memory_recent_exchanges=self.config.memory_recent_exchanges,
+            memory_context_tokens_estimate=self.config.memory_context_tokens,
         )
         await self.stt.connect()
         stt_warmed = False
@@ -250,6 +283,7 @@ class ConversationPipeline:
             speculative=False,
             authorized=True,
             task=asyncio.current_task(),
+            turn_id=opening_turn_id,
         )
         attempt.authorization_event.set()
         self.turn_id = opening_turn_id
@@ -268,9 +302,7 @@ class ConversationPipeline:
             await self.send(
                 {"type": "final_assistant_answer", "content": attempt.answer.strip()}
             )
-            self.history.append(
-                {"role": "assistant", "content": attempt.answer.strip()}
-            )
+            self.memory.answer(opening_turn_id, attempt.answer.strip())
             self.trace.record(
                 "opening_greeting_complete",
                 turn_id=opening_turn_id,
@@ -293,6 +325,7 @@ class ConversationPipeline:
             # LiveKit normally closes this synthetic opening lifecycle when its
             # audio queue drains. Keep non-playback/error paths usable too.
             if self.turn_id == opening_turn_id:
+                self.memory.finish(opening_turn_id)
                 self.closed_turns.add(opening_turn_id)
                 self.last_closed_turn_id = opening_turn_id
                 self.trace.record(
@@ -352,6 +385,8 @@ class ConversationPipeline:
         )
 
     def _transition(self, target: str, reason: str, **data: Any) -> None:
+        if target != "idle":
+            self._pause_compaction()
         previous = self.state
         self.state = target
         self.trace.record(
@@ -380,6 +415,7 @@ class ConversationPipeline:
         level = rms_pcm16(pcm)
         speaking = level >= self.config.speech_rms
         if speaking:
+            self._pause_compaction()
             if self.state in {"idle", "playing", "releasing"}:
                 if not self.speech_candidate_active:
                     self.turn_pcm16.clear()
@@ -682,6 +718,7 @@ class ConversationPipeline:
             self.final_timeout_task.cancel()
             self.final_timeout_task = None
         self.final_text = text
+        self.memory.user(self.turn_id, text)
         self.trace.record(
             "stt_final",
             turn_id=self.turn_id,
@@ -744,6 +781,7 @@ class ConversationPipeline:
         await self.on_final(text, publish_transcript=False)
 
     async def _start_attempt(self, text: str, *, speculative: bool, authorized: bool) -> None:
+        self._pause_compaction()
         if self.attempt:
             await self._cancel_attempt("new_attempt_replaced_existing")
         attempt = Attempt(
@@ -751,11 +789,13 @@ class ConversationPipeline:
             hypothesis=text,
             speculative=speculative,
             authorized=authorized,
+            turn_id=self.turn_id or f"turn-{self.turn_number:04d}",
             spoken_knowledge_acknowledgement=spoken_knowledge_acknowledgement(
                 self.turn_number
             ),
         )
         if authorized:
+            self.memory.user(attempt.turn_id, self.final_text or text)
             attempt.authorization_event.set()
         attempt.knowledge_query = text
         attempt.knowledge_gate_reason = "awaiting_explicit_llm_knowledge_request"
@@ -795,7 +835,7 @@ class ConversationPipeline:
     async def _generate(self, attempt: Attempt) -> None:
         messages = [
             {"role": "system", "content": self.system_prompt},
-            *self._recent_history(),
+            *self._recent_history(attempt),
             {"role": "user", "content": attempt.hypothesis},
         ]
         try:
@@ -869,7 +909,7 @@ class ConversationPipeline:
                                     "call. Do not end or offer to end the call in this response."
                                 ),
                             },
-                            *self._recent_history(),
+                            *self._recent_history(attempt),
                             {"role": "user", "content": committed_text},
                         ]
                         # Recovery is deliberately response-only. A mistaken
@@ -992,10 +1032,10 @@ class ConversationPipeline:
                 knowledge_prompt = self.agent_context.knowledge_followup_prompt(
                     self.config.system_prompt,
                     result.prompt_context(),
-                ) + self.banking.prompt()
+                ) + self.banking.prompt() + CONVERSATION_RULES
                 followup_messages = [
                     {"role": "system", "content": knowledge_prompt},
-                    *self._recent_history(),
+                    *self._recent_history(attempt),
                     {"role": "user", "content": self.final_text or attempt.hypothesis},
                 ]
                 attempt.answer = ""
@@ -1151,12 +1191,16 @@ class ConversationPipeline:
                 if pending.call.name in BANK_TOOLS:
                     from .action_tools import ActionResult
                     body = await self.banking.execute(
-                        pending.call, confirmed_operation=pending.call.arguments.get("operation_id", "")
+                        pending.call, confirmed_operation=pending.call.arguments.get("operation_id", ""),
+                        on_result=lambda body: self._retain_tool_result(attempt, pending.call, body),
                     )
                     result = ActionResult(body.get("status", "failed"), body.get("message", "Request could not be completed."), body, 0)
                 else:
                     await self.banking.activity(pending.call, "started")
                     result = await self.action_executor.execute(pending.call)
+                    self._retain_tool_result(attempt, pending.call, {
+                        "status": result.status, "message": result.message, "data": result.data,
+                    })
                     await self.banking.activity(pending.call, "completed", {
                         "status": result.status, "message": result.message, "data": result.data,
                     })
@@ -1215,10 +1259,34 @@ class ConversationPipeline:
             return "confirmed"
         return "unclear"
 
-    def _recent_history(self) -> list[dict]:
-        # Retain whole turns so tool results never lose their tool-call message.
-        starts = [i for i, message in enumerate(self.history) if message["role"] == "user"]
-        return self.history[starts[-4]:] if len(starts) >= 4 else list(self.history)
+    def _recent_history(self, attempt: Attempt | None = None) -> list[dict]:
+        messages = self.memory.context(exclude_turn_id=attempt.turn_id if attempt else self.turn_id)
+        # Pin existing application state; summaries cannot create or confirm actions.
+        state = {}
+        if self.banking.prepared:
+            state["prepared_preview_not_executed"] = self.banking.prepared
+        if self.pending_action:
+            state["awaiting_explicit_confirmation"] = {
+                "tool": self.pending_action.call.name,
+                "arguments": self.pending_action.call.arguments,
+            }
+        if state:
+            messages.append({"role": "user", "content": (
+                "Current application task state (reference, not caller confirmation):\n" + json.dumps(state)
+            )})
+        return messages
+
+    def _retain_tool_result(self, attempt: Attempt, call: ActionToolCall, body: dict) -> tuple[dict, dict]:
+        request = {"role": "assistant", "content": None, "tool_calls": [{
+            "id": call.id, "type": "function", "function": {
+                "name": call.name, "arguments": json.dumps(call.arguments),
+            },
+        }]}
+        reply = {"role": "tool", "tool_call_id": call.id, "content": json.dumps(body)}
+        self.memory.tool(attempt.turn_id or self.turn_id, request, reply)
+        if not any(message.get("tool_call_id") == call.id for message in attempt.tool_messages):
+            attempt.tool_messages.extend([request, reply])
+        return request, reply
 
     async def _run_banking_tools(self, attempt: Attempt, messages: list[dict], calls: list) -> None:
         for round_number in range(4):
@@ -1230,14 +1298,10 @@ class ConversationPipeline:
                 if call.name == "wema_execute_prepared" and self.banking.prepared:
                     await self._request_bank_confirmation(attempt)
                     return
-                request = {"role": "assistant", "content": None, "tool_calls": [{
-                    "id": call.id, "type": "function", "function": {
-                        "name": call.name, "arguments": json.dumps(call.arguments),
-                    },
-                }]}
-                body = await self.banking.execute(call)
-                reply = {"role": "tool", "tool_call_id": call.id, "content": json.dumps(body)}
-                attempt.tool_messages.extend([request, reply])
+                body = await self.banking.execute(
+                    call, on_result=lambda body: self._retain_tool_result(attempt, call, body)
+                )
+                request, reply = self._retain_tool_result(attempt, call, body)
                 messages.extend([request, reply])
                 if self.banking.prepared and call.name.startswith("wema_prepare_"):
                     await self._request_bank_confirmation(attempt)
@@ -1431,16 +1495,13 @@ class ConversationPipeline:
         if attempt.response_committed:
             return
         attempt.response_committed = True
+        turn_id = attempt.turn_id or self.turn_id
+        self.memory.user(turn_id, self.final_text or attempt.hypothesis)
+        self.memory.answer(turn_id, attempt.answer.strip())
         await self.send({"type": "final_assistant_answer", "content": attempt.answer.strip()})
-        self.history.extend(
-            [
-                {"role": "user", "content": self.final_text or attempt.hypothesis},
-                *attempt.tool_messages,
-                {"role": "assistant", "content": attempt.answer.strip()},
-            ]
-        )
 
     async def _send_audio(self, sample_rate: int, chunk: bytes, attempt: Attempt) -> None:
+        attempt.audio_sent = True
         await self.send(
             {
                 "type": "tts_chunk",
@@ -1500,6 +1561,11 @@ class ConversationPipeline:
             discarded_bytes=sum(len(chunk) for _, chunk in attempt.held_audio),
             **data,
         )
+        if not attempt.turn_id or not attempt.turn_id.startswith("opening-"):
+            turn_id = attempt.turn_id or self.turn_id
+            if released and attempt.audio_sent and attempt.answer and not attempt.response_committed:
+                self.memory.answer(turn_id, attempt.answer.strip())
+            self.memory.finish(turn_id, interrupted=True)
         if released:
             await self.send({"type": "stop_tts"})
         self.attempt = None
@@ -1542,6 +1608,7 @@ class ConversationPipeline:
                 ),
             )
             if self.turn_id:
+                self.memory.finish(self.turn_id)
                 self.closed_turns.add(self.turn_id)
                 self.last_closed_turn_id = self.turn_id
                 self.trace.record(
@@ -1553,10 +1620,16 @@ class ConversationPipeline:
             self.turn_id = None
             self.attempt = None
         elif kind == "clear_history":
-            self.history.clear()
+            self._pause_compaction()
+            self.memory.clear()
             self.trace.record("history_cleared", reason="browser_request")
 
     async def close(self) -> None:
+        tasks = [task for task in (self._memory_loop_task, self._compaction_task) if task]
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
         await self.banking.close()
         if self._opening_task:
             self._opening_task.cancel()
