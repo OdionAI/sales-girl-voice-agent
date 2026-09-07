@@ -1,0 +1,9 @@
+# Direct runtime versions observed in the working Python 3.12.7 environment.
+# Use with requirements.txt; this is not a full transitive dependency lock.
+aiohttp==3.14.3
+fastapi==0.141.1
+livekit-agents==1.8.0
+livekit==1.1.17
+python-dotenv==1.2.3
+uvicorn==0.52.4
+jsonschema==4.26.0
