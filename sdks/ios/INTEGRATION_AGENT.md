@@ -1,21 +1,21 @@
 # Coding-Agent Integration Handoff
 
-This document describes the local preview, not a published SDK version. Use the
-source checkout accompanying this file. Follow the host project's own
-instructions and security requirements. Do not invent a package URL, release tag,
-API endpoint, customer identity or credential.
+Follow the installation and release status in the README accompanying this
+package, and the host project's own instructions and security requirements.
+Do not invent a package URL, release tag, API endpoint, customer identity or credential.
 
 ## Copyable Customer Prompt
 
 ```text
 Integrate the Attentive voice caller into this iOS app.
 
-First read the SDK's README.md, CALLER_UI.md and INTEGRATION_AGENT.md, inspect
-Package.swift and its public Swift types, and inspect this app's architecture.
-The local preview package is at <path-to-checkout>/sdks/ios. Ask me for the
-deployment endpoint, business slug, public agent ID and trusted caller context
-if these are not already supplied by the app. There is no published remote
-package/tag to assume for this preview.
+First read the SDK's GETTING_STARTED.md, README.md, CALLER_UI.md and INTEGRATION_AGENT.md, inspect
+Package.swift and its public Swift interfaces, and inspect this app's architecture.
+Use the verified package URL/version or local preview directory supplied by
+Attentive. Ask me for the deployment endpoint, business slug, public agent ID
+and trusted caller context if these are not already supplied by the app.
+Do not clone the entire backend repository, rebuild a binary SDK, or copy vendor
+source into the host app. Keep the package version pinned during integration.
 
 Use AttentiveVoice for headless integration. When using the provided caller UI,
 also link AttentiveVoiceUI and embed AttentiveCallerView. Keep the call instance
@@ -43,6 +43,8 @@ timing, realtime transport or remote infrastructure while integrating the UI.
 gRPC, a raw-audio gateway and Android are roadmap items, not existing APIs.
 Do not present the current public POC bootstrap as production-hardened.
 
+Use the compile-checked snippets in GETTING_STARTED.md as integration examples,
+adapting them to the host's ownership pattern without copying sample internals.
 Build and test. Verify permission denial, start/end/mute/chat, presentation and
 dismissal, transcript updates and package assets. Use a designated test identity
 for a harmless live-call check only with authorization. Report separately what
@@ -65,6 +67,6 @@ the exact changed files, test results and any deployment/release blockers.
 - `CallerUIConfiguration`: presentation only; no provider or server controls.
 
 The source of truth for HTTP is [call-api.md](../../docs/attentive/call-api.md).
-The UI reference is [CALLER_UI.md](CALLER_UI.md). The sample shows actual package
-consumption and developer-only connection settings. Future remote-install steps
-must use a verified released package URL/version, not the local preview setup.
+The UI reference is [CALLER_UI.md](CALLER_UI.md). The quickstart shows package
+consumption. Use only the verified package URL/version or preview folder supplied
+for this integration.

@@ -14,7 +14,7 @@ known intermittent STT/DNS or TTS issues are fixed.
 | Separate headless `AttentiveVoice` and optional `AttentiveVoiceUI` | Complete locally | Separate SwiftPM products, unchanged core/transport sources; 38 Swift tests passed |
 | Make sample consume the public UI product | Complete locally | No copied caller panels, theme or avatar in the app target; live chat call UI test passed |
 | Configure branding and retain enrollment/auth/tool UI | Complete locally | Four iOS UI tests passed, covering Wema/generic layout, enrollment cancellation and live call controls; live voice checks still require manual testing |
-| Human and coding-agent integration instructions | Complete locally | `CALLER_UI.md` and `INTEGRATION_AGENT.md`; local-package instructions and explicit release limitations |
+| Human and coding-agent integration instructions | Complete locally | `GETTING_STARTED.md` compile-checked examples, `CALLER_UI.md`, `INTEGRATION_AGENT.md` and `DISTRIBUTION.md`; local installation and unreleased binary delivery clearly separated |
 | Attentive-branded Swift transport fork | Implemented locally | Pinned `AttentiveRTC` source, unchanged public products, reproducible namespace-only import and preserved notices; see `IOS_TRANSPORT_FORK.md` |
 
 ## Follow-Up Work
@@ -34,6 +34,22 @@ compiled XCFramework package if implementation-source hiding is required; audit
 its exported interfaces, embedded dependencies, resources, notices and signing.
 Do not claim all upstream traces can be removed. Publishing and any native media
 rebuild/rebranding remain separate, uncompleted release work.
+
+The fork implementation is checkpointed at `38efc97`. Its signed physical-iPhone
+sample was installed and launched on September 7; the user reported that it
+works. This is a manual call smoke confirmation, not full mobile release
+acceptance. The customer quickstart now explains how an existing app consumes
+core or optional UI, and `sdks/ios/DISTRIBUTION.md` records the binary-build,
+package-hosting, customer-install and rollback process. No SDK has been published
+and no production API or gateway was deployed as part of these documentation steps.
+
+The user then approved the private `OdionAI/attentive-ios-sdk` distribution
+repository. Candidate `0.1.0-staging.1` now builds compiled core and optional UI
+XCFrameworks with native dependencies, public interfaces, resources, notices and
+file checksums. Core-only and optional-UI documentation examples compile against
+the binaries. GitHub organization permissions currently block repository creation
+by the authenticated publisher; remote install and physical-device binary
+acceptance remain pending. No backend or phone app was changed for packaging.
 
 ### SDK Pause for Speculative Harness Evaluation
 
@@ -66,7 +82,7 @@ current change. Implement and verify them separately, preserving existing calls.
 
 | Order | Deliverable | Scope and release gate | Status |
 | --- | --- | --- | --- |
-| 1 | Distributable iOS package | Select/approve package repository; build/validate compiled distribution; publish a version; validate remote SwiftPM installation, notices, tested snippets and an external consumer app | Source fork/pins/notices implemented locally; binary packaging and publication planned |
+| 1 | Distributable iOS package | Select/approve package repository; build/validate compiled distribution; publish a version; validate remote SwiftPM installation, notices, tested snippets and an external consumer app | Binary staging candidate built locally; repository approved; publication blocked by organization permissions |
 | 2 | Production call API boundary | Versioned session API, tenant/agent/caller identity binding, scoped short-lived credentials, enrollment protection, rate/payload/session limits, sanitized events/errors; retain both voice checks and transaction confirmation | Planned |
 | 3 | Attentive streaming gateway | API-only audio input/output without a customer-side LiveKit dependency; initially bridge to existing internal rooms/workers; preserve auth, tools, transcripts, interruption and recording association | Planned; design and latency benchmark first |
 | 4 | gRPC audio API | Bidirectional native/server audio and events, protobuf contract, generated clients, deadlines, backpressure, cancellation, safe reconnect and examples; share gateway internals | Planned |

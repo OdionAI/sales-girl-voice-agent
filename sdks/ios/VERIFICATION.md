@@ -1,5 +1,30 @@
 # Wrapper Verification: 2026-09-06
 
+## Binary Staging Candidate: 2026-09-07
+
+- Candidate `0.1.0-staging.1` packages compiled core and optional UI plus pinned
+  native frameworks. Runtime source is unchanged from `38efc97`.
+- Release device and Simulator archives succeeded with Xcode 26.6 / Swift 6.3.3.
+  UI links the binary core; it does not compile a duplicate core.
+- Core and UI documentation consumers both compiled against the binary package
+  for arm64/x86_64 Simulator (`.build/binary-documentation-consumer/*.log`).
+- A separate app using only those binaries passed
+  `testGenericCallerHasNoBankBrandingOrRequiredEnrollmentUI` on iPhone 17 Pro
+  Simulator, iOS 26.5: 1 test, 0 failures. Evidence:
+  `.build/binary-release/consumer-ui-tests.xcresult`. This starts no live call.
+- Public interfaces contain no private transport imports. Resource bundles are
+  copied into the frameworks, including avatar assets, privacy data and notices.
+  No source Swift files or external/absolute symlinks are in the release package;
+  all artifact files are below GitHub's per-file limit. `SHA256SUMS` and packaged
+  documentation file-link checks passed.
+- `verify_transport.mjs`: all 293 vendored files/pins/API boundaries passed.
+- Remote publication is not complete: GitHub denied organization repository
+  creation for the authenticated account. Native Chrome fallback reached GitHub
+  sign-in. The user must create the private repository or arrange owner access.
+- Remote package installation, physical-device binary smoke testing and signing/
+  App Store compliance remain release gates. No backend/model/auth configuration
+  or installed physical-iPhone app was changed during packaging.
+
 ## Passed
 
 - `swift test -j 4`: 14 tests, zero failures. Also compiled the native diagnostic.
@@ -357,3 +382,31 @@ are not a new end-to-end banking acceptance result. This source preview retains
 upstream native binary identifiers and legal provenance. Compiled XCFramework
 distribution, complete release-license/privacy review, native rebuild/rebranding
 and external installation remain separate release gates.
+
+## Device Smoke and Integration Documentation - September 7, 2026
+
+The source-fork commit `38efc97` was built for the connected physical iPhone
+using the existing signing team. The build and `codesign --verify --deep
+--strict` passed. Installation succeeded; the first launch was denied because
+the phone was locked. After the user unlocked it, launch succeeded and the user
+reported that it works. The existing Wema deployment was used; no backend or
+agent configuration changed. This is a user-confirmed smoke test, not measured
+latency, complete voice-auth/tool coverage or production release acceptance.
+Build log: `sdks/ios/.build/physical-device-build.log` (ignored).
+
+The developer-experience update adds `GETTING_STARTED.md`, `DISTRIBUTION.md`
+and links from the existing human/AI guides. It changes no SDK/runtime source,
+sample behavior, backend services or agent configuration.
+
+- `node sdks/ios/script/check_documentation.mjs`: passed. The exact five named
+  Swift snippets from the quickstart compile in generated core-only and
+  optional-UI consumers for arm64 and x86_64 iOS Simulator. The core build does
+  not depend on `AttentiveVoiceUI`. Both use only the public SDK products.
+- Local documentation links and whitespace checks: passed.
+- No app, microphone capture, enrollment upload or call is launched by the
+  documentation check. The distribution-template manifest is explicitly a
+  future-release template, not a tested downloadable binary release.
+
+Consumer logs: `sdks/ios/.build/documentation-consumer/DocsCore.log` and
+`DocsCallerUI.log`; generated source/build products remain ignored. Remote
+SwiftPM installation and compiled binary packaging have not been verified.

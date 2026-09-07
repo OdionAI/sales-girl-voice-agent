@@ -5,6 +5,9 @@
 The latter depends on the former, never the reverse. Neither product changes the
 backend's model, turn-taking, authentication or tool settings.
 
+For a complete host-owned session and presentation button, start with
+[GETTING_STARTED.md](GETTING_STARTED.md). This file is the detailed UI reference.
+
 ## Install Locally
 
 This is a preview, not a published package release. Add the `sdks/ios` directory

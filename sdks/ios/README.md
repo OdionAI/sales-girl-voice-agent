@@ -6,6 +6,11 @@ the pinned transport's WebRTC media, WebSocket signaling, audio capture/playback
 and reconnection. See [transport provenance and packaging](Vendor/AttentiveRTC/README.md).
 Requires iOS 16+ (macOS 13+ for the diagnostic executable) and Swift 6.1+ tooling.
 
+Start with the [customer integration quickstart](GETTING_STARTED.md) for complete
+Swift snippets using your own UI or the supplied caller screen. See
+[distribution and release steps](DISTRIBUTION.md) for how we turn this local
+preview into an installable customer package; publication is not complete yet.
+
 ## Choose Your UI
 
 | Product | Use | Minimum OS |
