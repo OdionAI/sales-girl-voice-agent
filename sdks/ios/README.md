@@ -1,8 +1,9 @@
 # AttentiveVoice (Preview)
 
-A native Swift wrapper for the existing Attentive/Odion voice-agent backend.
-The app imports `AttentiveVoice`, not LiveKit. LiveKit 2.16.0 is pinned internally
-for WebRTC media, WebSocket signaling, audio capture/playback and reconnection.
+A native Swift SDK for the existing Attentive/Odion voice-agent backend.
+The app imports `AttentiveVoice`. The internal `AttentiveRTC` source fork retains
+the pinned transport's WebRTC media, WebSocket signaling, audio capture/playback
+and reconnection. See [transport provenance and packaging](Vendor/AttentiveRTC/README.md).
 Requires iOS 16+ (macOS 13+ for the diagnostic executable) and Swift 6.1+ tooling.
 
 ## Choose Your UI
@@ -67,7 +68,7 @@ await call.end()
 `start` requests microphone permission before dispatching a call. Add
 `NSMicrophoneUsageDescription` to your app's Info.plist. Denied permission produces
 `microphoneDenied` and does not start a server session. The wrapper never requests
-camera access. LiveKit manages its audio session using its normal communication
+camera access. The transport manages its audio session using its normal communication
 profile, including echo cancellation, noise suppression and gain control.
 
 Use `state` for the network lifecycle and `agentState` for the assistant's state.
@@ -79,7 +80,7 @@ remain available until the next call or until the object is released.
 
 Call `end()` when leaving the call screen. It cancels pending connection work and
 cleans up microphone/room resources. A second `start` is rejected while a call is
-active. Failed call creation is not automatically retried. LiveKit handles
+active. Failed call creation is not automatically retried. The transport handles
 reconnection within an active call; the wrapper reports `reconnecting`.
 
 For a speech-reactive avatar, observe `call.agentAudioLevel` in a small dedicated
@@ -97,6 +98,13 @@ and cannot bypass the backend's session and action voice checks. Chat-only tests
 cannot pass those voice checks. Profile values are context, not authentication.
 
 ## Local Development and Verification
+
+The local package now vendors the Swift transport under `Vendor/AttentiveRTC`
+instead of fetching `client-sdk-swift`. Customer code still uses the same two
+public products. Native media binaries remain pinned and retain upstream names;
+licenses, compatibility symbols and their download URLs remain inspectable.
+This is not yet a compiled, source-hidden distribution. Do not remove notices.
+Run `node script/verify_transport.mjs` to check fork integrity and package boundaries.
 
 ### Voice Enrollment
 
@@ -116,7 +124,7 @@ responses are logged by the SDK. Backend voiceprint retention is unchanged.
 
 Record only **before** a call. Disable Start Call/identity edits while `isBusy`
 and call `cancel()` on leaving the screen or entering background. The recorder
-releases and restores its audio session before LiveKit starts. Do not run the
+releases and restores its audio session before call transport starts. Do not run the
 enrollment recorder alongside a live call in customer apps.
 
 `isEnrolled` means a reference voiceprint exists; it does **not** set either

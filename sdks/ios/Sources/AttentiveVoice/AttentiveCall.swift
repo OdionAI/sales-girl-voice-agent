@@ -47,7 +47,7 @@ public final class AttentiveCall: ObservableObject {
     public convenience init(credentialProvider: any CallCredentialProvider,
                             allowsInsecureDevelopmentConnections: Bool = false) {
         self.init(provider: credentialProvider, allowInsecure: allowsInsecureDevelopmentConnections,
-                  makeTransport: { LiveKitCallTransport() }, microphonePermission: {
+                  makeTransport: { RealtimeCallTransport() }, microphonePermission: {
             switch AVCaptureDevice.authorizationStatus(for: .audio) {
             case .authorized: return true
             case .notDetermined: return await AVCaptureDevice.requestAccess(for: .audio)

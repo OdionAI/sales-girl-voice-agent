@@ -50,3 +50,27 @@ needed because this work must not touch server state.
 
 The streaming gateway, gRPC, Android SDK, publishing and physical-device
 hardening remain on the [roadmap](ROADMAP.md).
+
+## Local Implementation Result
+
+- The root SDK now builds internal `AttentiveRTC`, `AttentiveMediaBindings` and
+  `AttentiveObjCHelpers` targets from pinned vendored source. Transport/bindings
+  retain Swift 6 language mode; the existing public wrapper/UI remain in Swift 5
+  mode. Public products and call APIs are unchanged.
+- `LiveKitCallTransport.swift` is now `RealtimeCallTransport.swift`; its content
+  is identical to the checkpoint after class/import renaming. Enrollment changes
+  are comments only. No UI or backend runtime source was changed.
+- Both package lockfiles retain only SwiftProtobuf 1.38.1. Native binaries retain
+  their exact original URLs/checksums and ABI; this is not a native-library fork.
+- The import audit verifies 293 files, including duplicated app-bundled notices,
+  against original Git objects and the pinned native WebRTC license. The offline
+  check also guards dependency pins, resources and customer-facing boundaries.
+- All 39 Swift tests pass. The iOS 26.5 simulator sample builds, with licenses and
+  NOTICE present in its transport resource bundle. No physical-device install,
+  live call or new latency measurement was performed for this packaging change.
+
+Pre-fork scope/rollback documentation was committed as `dd128c6` before editing
+the SDK. Implementation and release limits are described in the
+[fork README](../../sdks/ios/Vendor/AttentiveRTC/README.md). The compiled,
+source-hidden customer distribution is still pending; this local source preview
+does not satisfy a requirement to hide every upstream identifier from inspection.

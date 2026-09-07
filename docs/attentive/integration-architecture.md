@@ -30,7 +30,7 @@ deployment approval. This note changes no running service or call behavior.
 | --- | --- | --- |
 | Call API | Dashboard `POST /api/public-agent/connection-details` returns RTC connection credentials | Customer-authenticated, versioned public contract; no raw-audio streaming endpoint exists yet |
 | Voice enrollment | Separate dashboard `/api/public-agent/voice-enroll` GET and multipart POST; SDK enrollment flow | Harden identity binding and document lifecycle/security for external use |
-| Swift core | `AttentiveVoice`, wrapping LiveKit 2.16.0; custom-UI call controls and events | Release packaging, compatibility guarantees, customer examples |
+| Swift core | `AttentiveVoice`, using internal `AttentiveRTC` source fork of the pinned 2.16.0 transport; custom-UI call controls and events | Compiled release packaging, compatibility guarantees, customer examples |
 | Swift caller UI | Optional `AttentiveVoiceUI` product, consumed by `Examples/AttentiveSample`; unit and simulator UI/live-chat tests passed | Release packaging and physical-device/real-voice verification |
 | Web | Existing public caller and dashboard integrations | Reusable headless web SDK and optional UI distribution |
 | Android | No Attentive Android SDK | Later platform implementation and verification |
@@ -40,7 +40,8 @@ deployment approval. This note changes no running service or call behavior.
 Current HTTP call creation does not send or receive live PCM. The client's
 realtime connection carries microphone and agent audio over WebRTC and signaling
 over WebSocket. The normal Swift call interface does not require a LiveKit
-import, but the package dependency is visible. The optional credential-provider
+import. The Swift transport is now vendored under an Attentive module; native
+binary names and provenance remain visible in this source preview. The optional credential-provider
 extension also exposes `serverUrl`, `roomName` and `participantToken`.
 
 The current enrollment backend keys reference voiceprints by normalized email,
@@ -52,7 +53,7 @@ status is not equivalent to passing either live voice check.
 There are separate requirements:
 
 1. **No LiveKit integration work:** the customer calls our SDK and reads our docs.
-   The wrapper can achieve this while retaining LiveKit internally.
+   The wrapper/fork achieves this while retaining the media implementation.
 2. **No LiveKit client dependency or public wire protocol:** even an API-only
    customer uses an Attentive protocol. This requires an Attentive transport
    boundary, such as a streaming gateway.
@@ -68,10 +69,17 @@ or a limitation preventing us from building an independent public protocol.
 
 ### A. Attentive SDK Around the Existing WebRTC Transport
 
-Customer code uses `AttentiveVoice` call controls and events. LiveKit remains an
-internal dependency, with no customer-managed LiveKit account or server secrets.
-This is the current Swift direction. Platform wrappers can preserve existing
-media handling and avoid an additional media gateway hop.
+Customer code uses `AttentiveVoice` call controls and events. The approved Swift
+source fork now packages the pinned client as `AttentiveRTC`, without fetching
+the upstream Swift client package. The same media implementation and protocol
+remain, with no customer-managed LiveKit account or server secrets. This preserves
+media handling and avoids an additional media gateway hop. See
+[fork scope, provenance and rollback](IOS_TRANSPORT_FORK.md).
+
+Compiling this implementation into XCFrameworks can hide source from ordinary
+package browsing. The current source preview does not do that yet. Native
+artifacts, required notices and compatibility symbols remain inspectable; a
+source fork is not a guarantee of vendor-name secrecy.
 
 This solves custom UI integration through our SDK, but does not satisfy an
 API-only client that rejects all LiveKit client dependencies. Branding a domain

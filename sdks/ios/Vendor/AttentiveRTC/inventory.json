@@ -1,0 +1,2053 @@
+[
+  {
+    "component": "client",
+    "source": "LICENSE",
+    "destination": "LICENSE",
+    "upstreamSHA256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+    "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+  },
+  {
+    "component": "bindings",
+    "source": "LICENSE",
+    "destination": "Licenses/MediaBindings-LICENSE",
+    "upstreamSHA256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+    "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+  },
+  {
+    "component": "bindings",
+    "source": "PrivacyInfo.xcprivacy",
+    "destination": "Licenses/MediaBindings-PrivacyInfo.xcprivacy",
+    "upstreamSHA256": "10da67f217824f019288ec328ababc290ab0399c52e9be77a24d494339137da2",
+    "sha256": "10da67f217824f019288ec328ababc290ab0399c52e9be77a24d494339137da2"
+  },
+  {
+    "component": "protobuf",
+    "source": "LICENSE.txt",
+    "destination": "Licenses/SwiftProtobuf-LICENSE",
+    "upstreamSHA256": "186c5f0192a754714a7e542233ddaaad28745626e0ad32e358d3f5af00afb84a",
+    "sha256": "186c5f0192a754714a7e542233ddaaad28745626e0ad32e358d3f5af00afb84a"
+  },
+  {
+    "component": "webrtc",
+    "source": "LiveKitWebRTC.xcframework/LICENSE",
+    "destination": "Licenses/WebRTC-Binary-LICENSE",
+    "upstreamSHA256": "ab00a482b6a3902e40211b43c5d0441962ea99b6cc7c25c0f243fa270b78d482",
+    "sha256": "ab00a482b6a3902e40211b43c5d0441962ea99b6cc7c25c0f243fa270b78d482"
+  },
+  {
+    "component": "webrtc",
+    "source": "LICENSE",
+    "destination": "Licenses/WebRTC-Package-LICENSE",
+    "upstreamSHA256": "97c31210567f082cbd2f1067a491c1d5498a019414948153e98c321810986bfd",
+    "sha256": "97c31210567f082cbd2f1067a491c1d5498a019414948153e98c321810986bfd"
+  },
+  {
+    "component": "client",
+    "source": "NOTICE",
+    "destination": "NOTICE",
+    "upstreamSHA256": "6d0f7c5e0deb284362296c5da110dd353831da2e67ca77cb5abc051b951b0fac",
+    "sha256": "6d0f7c5e0deb284362296c5da110dd353831da2e67ca77cb5abc051b951b0fac"
+  },
+  {
+    "component": "bindings",
+    "source": "Sources/LiveKitUniFFI/livekit_uniffi.swift",
+    "destination": "Sources/AttentiveMediaBindings/MediaBindings.swift",
+    "upstreamSHA256": "5143ebc2137a20e85e3064d55079393bd2641aed5820596c5891ddab594d6fe2",
+    "sha256": "5143ebc2137a20e85e3064d55079393bd2641aed5820596c5891ddab594d6fe2"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LKObjCHelpers/LKObjCHelpers.m",
+    "destination": "Sources/AttentiveObjCHelpers/AttentiveObjCHelpers.m",
+    "upstreamSHA256": "5036cc63451619f1b49d64994784b5dea8a49e4393353bcc1df88b73d8502ab7",
+    "sha256": "4e6428dbe07ae767d5852897bd00c056f8cd160fcdcf3085cf3d01c92803df95"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LKObjCHelpers/include/LKObjCHelpers.h",
+    "destination": "Sources/AttentiveObjCHelpers/include/AttentiveObjCHelpers.h",
+    "upstreamSHA256": "d4b592e2142fd2b6157a7db3eb60e0ed72fc659452013b8e8c102345d48a16ba",
+    "sha256": "3adf3f35f3a0b62e20788fd0eb77790c0cb3faf0f3d511129049224b2a3d1e1d"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LKObjCHelpers/module.modulemap",
+    "destination": "Sources/AttentiveObjCHelpers/module.modulemap",
+    "upstreamSHA256": "df5d3905dba0b04286971065b6f2d5b3881d3ca9baee17c4a85f5baa89e0010f",
+    "sha256": "fbab89dc2736ffadf8d67bddf406924f7549ffb4af9586ed50da98624073d7e9"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Agent/Agent.swift",
+    "destination": "Sources/AttentiveRTC/Agent/Agent.swift",
+    "upstreamSHA256": "959763cca31dad553e64541d1fe33ca98b019d351e3bb52f886cf761bafda55f",
+    "sha256": "959763cca31dad553e64541d1fe33ca98b019d351e3bb52f886cf761bafda55f"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Agent/Chat/Message.swift",
+    "destination": "Sources/AttentiveRTC/Agent/Chat/Message.swift",
+    "upstreamSHA256": "7e1a705c5b819dac3c061faec0be1223186543979d34b3139cf5904022a88b0d",
+    "sha256": "7e1a705c5b819dac3c061faec0be1223186543979d34b3139cf5904022a88b0d"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Agent/Chat/Receive/MessageReceiver.swift",
+    "destination": "Sources/AttentiveRTC/Agent/Chat/Receive/MessageReceiver.swift",
+    "upstreamSHA256": "720d57330f2b45e3b140d1f5cfdaae071d6cbf570eec1accb0e7e6d2dfd7b7de",
+    "sha256": "720d57330f2b45e3b140d1f5cfdaae071d6cbf570eec1accb0e7e6d2dfd7b7de"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Agent/Chat/Receive/TranscriptionDelegateReceiver.swift",
+    "destination": "Sources/AttentiveRTC/Agent/Chat/Receive/TranscriptionDelegateReceiver.swift",
+    "upstreamSHA256": "194ce23a6be3744e9f861974b54819de54c255ad6fefdaea65aa59b75f181e4c",
+    "sha256": "194ce23a6be3744e9f861974b54819de54c255ad6fefdaea65aa59b75f181e4c"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Agent/Chat/Receive/TranscriptionStreamReceiver.swift",
+    "destination": "Sources/AttentiveRTC/Agent/Chat/Receive/TranscriptionStreamReceiver.swift",
+    "upstreamSHA256": "b77785ae29603e0f63ae7a0fee30a89ac9bae15f62de51a1baccc6ae321e45d0",
+    "sha256": "b77785ae29603e0f63ae7a0fee30a89ac9bae15f62de51a1baccc6ae321e45d0"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Agent/Chat/Send/MessageSender.swift",
+    "destination": "Sources/AttentiveRTC/Agent/Chat/Send/MessageSender.swift",
+    "upstreamSHA256": "b9020a4a2eeaaa3e6b0bb10ab4eef8a110999e4f1817417fa78d52ad188962e1",
+    "sha256": "b9020a4a2eeaaa3e6b0bb10ab4eef8a110999e4f1817417fa78d52ad188962e1"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Agent/Chat/Send/TextMessageSender.swift",
+    "destination": "Sources/AttentiveRTC/Agent/Chat/Send/TextMessageSender.swift",
+    "upstreamSHA256": "cab83ff5842f021bc0af5b04b15825ab8fb3605e715dc73484b99903553a213a",
+    "sha256": "cab83ff5842f021bc0af5b04b15825ab8fb3605e715dc73484b99903553a213a"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Agent/Participant+Agent.swift",
+    "destination": "Sources/AttentiveRTC/Agent/Participant+Agent.swift",
+    "upstreamSHA256": "4bb15f92c4b5f6c9444c1c4e3b7928ab146357e50e899d3b8425960ed5f4b311",
+    "sha256": "4bb15f92c4b5f6c9444c1c4e3b7928ab146357e50e899d3b8425960ed5f4b311"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Agent/Room+Agent.swift",
+    "destination": "Sources/AttentiveRTC/Agent/Room+Agent.swift",
+    "upstreamSHA256": "7a70ad87bc1fbfe3767ba6c5ac26583499b693c1089fced787fe65f50f8904a6",
+    "sha256": "7a70ad87bc1fbfe3767ba6c5ac26583499b693c1089fced787fe65f50f8904a6"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Agent/Session.swift",
+    "destination": "Sources/AttentiveRTC/Agent/Session.swift",
+    "upstreamSHA256": "4cc73669d9d2804b8876b51f7ccb4fa07c9a444af8613b1892b07ce25eb574d7",
+    "sha256": "4cc73669d9d2804b8876b51f7ccb4fa07c9a444af8613b1892b07ce25eb574d7"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Agent/SessionOptions.swift",
+    "destination": "Sources/AttentiveRTC/Agent/SessionOptions.swift",
+    "upstreamSHA256": "201bfac98fef26a64754f9390ba07601d5548bc7afbda81210b105da439ae4d3",
+    "sha256": "201bfac98fef26a64754f9390ba07601d5548bc7afbda81210b105da439ae4d3"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/LiveKit.swift",
+    "destination": "Sources/AttentiveRTC/AttentiveRTC.swift",
+    "upstreamSHA256": "f9995f898d09d8c095bd1cb9bf0bbf8c2df0f8128fbcc5c212b997cff779af31",
+    "sha256": "785874cd42dbb98af6f616461335044f350dfb0384765e3606011cb097062d00"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/LiveKit+DeviceHelpers.swift",
+    "destination": "Sources/AttentiveRTC/AttentiveRTC+DeviceHelpers.swift",
+    "upstreamSHA256": "86098ec4e44ef78a1bf9e316d237f6420e35de6b73a44a862aa2c6b081a8ea01",
+    "sha256": "df010fa82695171ae25024d0b3f0e076297216b1fadf9edfd506193814d5eaee"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Audio/AudioDeviceModuleDelegateAdapter.swift",
+    "destination": "Sources/AttentiveRTC/Audio/AudioDeviceModuleDelegateAdapter.swift",
+    "upstreamSHA256": "5cb88d91cbc7e8ec5d95991b2c5b7609c3149321701cd075d6c2a970f11ae971",
+    "sha256": "5cb88d91cbc7e8ec5d95991b2c5b7609c3149321701cd075d6c2a970f11ae971"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Audio/AudioEngineObserver.swift",
+    "destination": "Sources/AttentiveRTC/Audio/AudioEngineObserver.swift",
+    "upstreamSHA256": "0363f51613858d8262c513c9ff4b8b59b382a6744c5dccdba2ddc2b981c2997f",
+    "sha256": "0363f51613858d8262c513c9ff4b8b59b382a6744c5dccdba2ddc2b981c2997f"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Audio/AudioSessionEngineObserver.swift",
+    "destination": "Sources/AttentiveRTC/Audio/AudioSessionEngineObserver.swift",
+    "upstreamSHA256": "a0df4e31bbf7b8d4a8d0cf4e72897b20cae77a236476e2cdb54d630cc9bcb526",
+    "sha256": "a0df4e31bbf7b8d4a8d0cf4e72897b20cae77a236476e2cdb54d630cc9bcb526"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Audio/Manager/AudioManager.swift",
+    "destination": "Sources/AttentiveRTC/Audio/Manager/AudioManager.swift",
+    "upstreamSHA256": "4ff74a285a3cc2f39ca59a8ed3d858d10ea3a326d7f950525ca1ed919d5a114f",
+    "sha256": "4ff74a285a3cc2f39ca59a8ed3d858d10ea3a326d7f950525ca1ed919d5a114f"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Audio/Manager/AudioManager+ModuleType.swift",
+    "destination": "Sources/AttentiveRTC/Audio/Manager/AudioManager+ModuleType.swift",
+    "upstreamSHA256": "915a14b88b50ccb7d4070a550371f15103496c66223e41da6ab3ec4407aea5a0",
+    "sha256": "915a14b88b50ccb7d4070a550371f15103496c66223e41da6ab3ec4407aea5a0"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Audio/Manager/AudioManager+MuteMode.swift",
+    "destination": "Sources/AttentiveRTC/Audio/Manager/AudioManager+MuteMode.swift",
+    "upstreamSHA256": "251f2a088dc3567b9bfe6be534dbc03ba5de7e73f873e5ae4ffbed65d260d3bd",
+    "sha256": "251f2a088dc3567b9bfe6be534dbc03ba5de7e73f873e5ae4ffbed65d260d3bd"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Audio/Manager/AudioManager+Testing.swift",
+    "destination": "Sources/AttentiveRTC/Audio/Manager/AudioManager+Testing.swift",
+    "upstreamSHA256": "1d8728e626f97ea808e817e836d3b1a10cfeb64f5ab79fb9298b06fe03c685d4",
+    "sha256": "1d8728e626f97ea808e817e836d3b1a10cfeb64f5ab79fb9298b06fe03c685d4"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Audio/MixerEngineObserver.swift",
+    "destination": "Sources/AttentiveRTC/Audio/MixerEngineObserver.swift",
+    "upstreamSHA256": "db1dd4b77d970de1dccac25606a6c30e685ce4b7f2cd371da492ab013cef27c6",
+    "sha256": "db1dd4b77d970de1dccac25606a6c30e685ce4b7f2cd371da492ab013cef27c6"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Audio/PlayerNodePool.swift",
+    "destination": "Sources/AttentiveRTC/Audio/PlayerNodePool.swift",
+    "upstreamSHA256": "c106499361be1b4b9ab68e86ee31830c3e2cb9ec52c8f8cf07d41be949422ee7",
+    "sha256": "c106499361be1b4b9ab68e86ee31830c3e2cb9ec52c8f8cf07d41be949422ee7"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Audio/SoundPlayer.swift",
+    "destination": "Sources/AttentiveRTC/Audio/SoundPlayer.swift",
+    "upstreamSHA256": "b71264828d764a39a038b7dedbe8ea658d9232c9fc185cb2cb73decfa0526f25",
+    "sha256": "b71264828d764a39a038b7dedbe8ea658d9232c9fc185cb2cb73decfa0526f25"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Audio/SoundPlayer+Types.swift",
+    "destination": "Sources/AttentiveRTC/Audio/SoundPlayer+Types.swift",
+    "upstreamSHA256": "fb2ecdf31df39279d20e254762d3cf22bef963b20cb85e3934cf84efe30a49cd",
+    "sha256": "fb2ecdf31df39279d20e254762d3cf22bef963b20cb85e3934cf84efe30a49cd"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Broadcast/BroadcastBundleInfo.swift",
+    "destination": "Sources/AttentiveRTC/Broadcast/BroadcastBundleInfo.swift",
+    "upstreamSHA256": "6332638f182ef6e71ec3570e0cc2a326361c8722272214c91a70ee47ade8b766",
+    "sha256": "6332638f182ef6e71ec3570e0cc2a326361c8722272214c91a70ee47ade8b766"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Broadcast/BroadcastManager.swift",
+    "destination": "Sources/AttentiveRTC/Broadcast/BroadcastManager.swift",
+    "upstreamSHA256": "aa254b6a6a23f52f632a04f8b50ab0d7ac89e6626487deaa26b14ad192bfec34",
+    "sha256": "aa254b6a6a23f52f632a04f8b50ab0d7ac89e6626487deaa26b14ad192bfec34"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Broadcast/BroadcastScreenCapturer.swift",
+    "destination": "Sources/AttentiveRTC/Broadcast/BroadcastScreenCapturer.swift",
+    "upstreamSHA256": "2e7948ce2d0278d7c7b2f10ea8eef2a48f02d7b429c8e959d14b04d130e88b74",
+    "sha256": "2e7948ce2d0278d7c7b2f10ea8eef2a48f02d7b429c8e959d14b04d130e88b74"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Broadcast/IPC/BroadcastAudioCodec.swift",
+    "destination": "Sources/AttentiveRTC/Broadcast/IPC/BroadcastAudioCodec.swift",
+    "upstreamSHA256": "88a8f57ef3013ed9dd809cf9fade3fbb37ad982aa2c6bd1b8612a7bbc73a3287",
+    "sha256": "88a8f57ef3013ed9dd809cf9fade3fbb37ad982aa2c6bd1b8612a7bbc73a3287"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Broadcast/IPC/BroadcastImageCodec.swift",
+    "destination": "Sources/AttentiveRTC/Broadcast/IPC/BroadcastImageCodec.swift",
+    "upstreamSHA256": "3df668e9973a704a2012a1b108d961dc4df0015de279663aff3354fb9129d85e",
+    "sha256": "3df668e9973a704a2012a1b108d961dc4df0015de279663aff3354fb9129d85e"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Broadcast/IPC/BroadcastIPCHeader.swift",
+    "destination": "Sources/AttentiveRTC/Broadcast/IPC/BroadcastIPCHeader.swift",
+    "upstreamSHA256": "66cee5500f31e2733413452b357b40f6ea311f5a4417d210e38cbab1e20eb523",
+    "sha256": "66cee5500f31e2733413452b357b40f6ea311f5a4417d210e38cbab1e20eb523"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Broadcast/IPC/BroadcastReceiver.swift",
+    "destination": "Sources/AttentiveRTC/Broadcast/IPC/BroadcastReceiver.swift",
+    "upstreamSHA256": "f22f4a0a8889a06982840bf7c2145bb78910273b7e6a3bb53afee1433fb9e6b3",
+    "sha256": "f22f4a0a8889a06982840bf7c2145bb78910273b7e6a3bb53afee1433fb9e6b3"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Broadcast/IPC/BroadcastUploader.swift",
+    "destination": "Sources/AttentiveRTC/Broadcast/IPC/BroadcastUploader.swift",
+    "upstreamSHA256": "d9f9141c81203e67d8e608c6d764679423f9f40fc4d5da98037cfaf11903841e",
+    "sha256": "d9f9141c81203e67d8e608c6d764679423f9f40fc4d5da98037cfaf11903841e"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Broadcast/IPC/IPCChannel.swift",
+    "destination": "Sources/AttentiveRTC/Broadcast/IPC/IPCChannel.swift",
+    "upstreamSHA256": "ca79b8c04575fa95be5b57a5c778a2a77572beef04809511f9cf9c61c2480715",
+    "sha256": "ca79b8c04575fa95be5b57a5c778a2a77572beef04809511f9cf9c61c2480715"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Broadcast/IPC/IPCProtocol.swift",
+    "destination": "Sources/AttentiveRTC/Broadcast/IPC/IPCProtocol.swift",
+    "upstreamSHA256": "646713de0e33c2f191048d65f7d300b549c2844a9f0cc38f907d316bad72d06e",
+    "sha256": "646713de0e33c2f191048d65f7d300b549c2844a9f0cc38f907d316bad72d06e"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Broadcast/IPC/SocketPath.swift",
+    "destination": "Sources/AttentiveRTC/Broadcast/IPC/SocketPath.swift",
+    "upstreamSHA256": "3269064d14983a1eec9385c4f05a5400e062d77af226b410aec10454e696d5a9",
+    "sha256": "3269064d14983a1eec9385c4f05a5400e062d77af226b410aec10454e696d5a9"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Broadcast/LKSampleHandler.swift",
+    "destination": "Sources/AttentiveRTC/Broadcast/LKSampleHandler.swift",
+    "upstreamSHA256": "11b2fa564e5c4b09bc31a9f421b4413c196d7d970a6c07f751a0836915e6943f",
+    "sha256": "20b3ae1d975e9e7e077992a9154861edd5484ff48d9bbdff243b5eb244e6a5c0"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Broadcast/NOTICE",
+    "destination": "Sources/AttentiveRTC/Broadcast/NOTICE",
+    "upstreamSHA256": "96128422823059c7895ec30d4f84acacdc62731f794934854279331c6bb4dab5",
+    "sha256": "96128422823059c7895ec30d4f84acacdc62731f794934854279331c6bb4dab5"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Broadcast/Support/DarwinNotificationCenter.swift",
+    "destination": "Sources/AttentiveRTC/Broadcast/Support/DarwinNotificationCenter.swift",
+    "upstreamSHA256": "ea978b7cc27642ba9ced9c5bb95a9e794592c01cef038ba2859ec7161e96fdd2",
+    "sha256": "ea978b7cc27642ba9ced9c5bb95a9e794592c01cef038ba2859ec7161e96fdd2"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Convenience/AudioProcessing.swift",
+    "destination": "Sources/AttentiveRTC/Convenience/AudioProcessing.swift",
+    "upstreamSHA256": "cc5f16469d7bbee259255a7338e20ce246cc17c36501be7dfe6072760d7d085b",
+    "sha256": "cc5f16469d7bbee259255a7338e20ce246cc17c36501be7dfe6072760d7d085b"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Core/DataChannelPair.swift",
+    "destination": "Sources/AttentiveRTC/Core/DataChannelPair.swift",
+    "upstreamSHA256": "59e7fc5e6971fd08d73befac31e7c5895e84829d6eb3eaebc810c66044002cb1",
+    "sha256": "59e7fc5e6971fd08d73befac31e7c5895e84829d6eb3eaebc810c66044002cb1"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Core/PreConnectAudioBuffer.swift",
+    "destination": "Sources/AttentiveRTC/Core/PreConnectAudioBuffer.swift",
+    "upstreamSHA256": "919855c7850969261f63782403c0129f03c5aeba5fcc984ebb1f5433578d3990",
+    "sha256": "919855c7850969261f63782403c0129f03c5aeba5fcc984ebb1f5433578d3990"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Core/RegionManager.swift",
+    "destination": "Sources/AttentiveRTC/Core/RegionManager.swift",
+    "upstreamSHA256": "e3f52b4104071392a1c8840e0b11b2afb67681840c03c77691d7885ad0c45bb3",
+    "sha256": "e3f52b4104071392a1c8840e0b11b2afb67681840c03c77691d7885ad0c45bb3"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Core/Room.swift",
+    "destination": "Sources/AttentiveRTC/Core/Room.swift",
+    "upstreamSHA256": "b260a74867c5b6ef261b6bb594884a0ecaa8b0005509ff1e4a32e503f9f586e2",
+    "sha256": "59ddf4dd4e93a5a7371485e50b2373c4aee4ffbaa2cb3cba8495d674386a3f6d"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Core/Room+Convenience.swift",
+    "destination": "Sources/AttentiveRTC/Core/Room+Convenience.swift",
+    "upstreamSHA256": "f9473aa405fff3298d294e64b8900e8ad8b00f3b7c0a720828d1e79b277f9e82",
+    "sha256": "f9473aa405fff3298d294e64b8900e8ad8b00f3b7c0a720828d1e79b277f9e82"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Core/Room+DataStream.swift",
+    "destination": "Sources/AttentiveRTC/Core/Room+DataStream.swift",
+    "upstreamSHA256": "12c264b27f05dc454a0d26f4cca2ed27223cdfbfb1026cb61291f1f8bf9159ed",
+    "sha256": "12c264b27f05dc454a0d26f4cca2ed27223cdfbfb1026cb61291f1f8bf9159ed"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Core/Room+Debug.swift",
+    "destination": "Sources/AttentiveRTC/Core/Room+Debug.swift",
+    "upstreamSHA256": "6b98bb5f1491118ecfab9a2cf314c5dd6d615c70eb63c3f46f0d48c9969d73b9",
+    "sha256": "6b98bb5f1491118ecfab9a2cf314c5dd6d615c70eb63c3f46f0d48c9969d73b9"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Core/Room+Engine.swift",
+    "destination": "Sources/AttentiveRTC/Core/Room+Engine.swift",
+    "upstreamSHA256": "ee5bc59645a47635fff6ddf67204743ca516f09f1f3634c9d43b0a244dad5b10",
+    "sha256": "ee5bc59645a47635fff6ddf67204743ca516f09f1f3634c9d43b0a244dad5b10"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Core/Room+EngineDelegate.swift",
+    "destination": "Sources/AttentiveRTC/Core/Room+EngineDelegate.swift",
+    "upstreamSHA256": "9e73845d2f4b9cc61bbceb40fd79cbfb1bb3a00beadc82790b08ba9aec01aaca",
+    "sha256": "9e73845d2f4b9cc61bbceb40fd79cbfb1bb3a00beadc82790b08ba9aec01aaca"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Core/Room+MulticastDelegate.swift",
+    "destination": "Sources/AttentiveRTC/Core/Room+MulticastDelegate.swift",
+    "upstreamSHA256": "7354f0f36ec22a8bfd25273ce7d865e8493454fe182debb215f1522b05ddf607",
+    "sha256": "7354f0f36ec22a8bfd25273ce7d865e8493454fe182debb215f1522b05ddf607"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Core/Room+PreConnect.swift",
+    "destination": "Sources/AttentiveRTC/Core/Room+PreConnect.swift",
+    "upstreamSHA256": "c8c3df1ec8258a93f0236a2c578c43d8208fd64c96248a6db01e2aa065f2ea72",
+    "sha256": "c8c3df1ec8258a93f0236a2c578c43d8208fd64c96248a6db01e2aa065f2ea72"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Core/Room+Region.swift",
+    "destination": "Sources/AttentiveRTC/Core/Room+Region.swift",
+    "upstreamSHA256": "be9f9a436be209b8c38071092e7a9be41d503614ed7966b334e36f9fdac8f64c",
+    "sha256": "be9f9a436be209b8c38071092e7a9be41d503614ed7966b334e36f9fdac8f64c"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Core/Room+RPC.swift",
+    "destination": "Sources/AttentiveRTC/Core/Room+RPC.swift",
+    "upstreamSHA256": "d717d04f159cf412ae1eaf8b9fa46ead63fa1005d2e62d785d30997a5162553b",
+    "sha256": "d717d04f159cf412ae1eaf8b9fa46ead63fa1005d2e62d785d30997a5162553b"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Core/Room+SignalClientDelegate.swift",
+    "destination": "Sources/AttentiveRTC/Core/Room+SignalClientDelegate.swift",
+    "upstreamSHA256": "199ea785b267a4e2e2e77cb70ca7ea57b2f340229c47951caa414d3667ee0997",
+    "sha256": "199ea785b267a4e2e2e77cb70ca7ea57b2f340229c47951caa414d3667ee0997"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Core/Room+TransportDelegate.swift",
+    "destination": "Sources/AttentiveRTC/Core/Room+TransportDelegate.swift",
+    "upstreamSHA256": "c412347a806c119454ddcd7a83b95402f24457899d9f93235d748290bbd79bba",
+    "sha256": "c412347a806c119454ddcd7a83b95402f24457899d9f93235d748290bbd79bba"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Core/RPC.swift",
+    "destination": "Sources/AttentiveRTC/Core/RPC.swift",
+    "upstreamSHA256": "9806fbc4f44dc5679e20f20a314d7444a0fbf6f16660b74e0c51f461a963de0b",
+    "sha256": "9806fbc4f44dc5679e20f20a314d7444a0fbf6f16660b74e0c51f461a963de0b"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Core/RpcClientManager.swift",
+    "destination": "Sources/AttentiveRTC/Core/RpcClientManager.swift",
+    "upstreamSHA256": "ab84835860f0d2cf432139a8203efc4fa9bbe38a90236b16d946ddedc2ae0a47",
+    "sha256": "ab84835860f0d2cf432139a8203efc4fa9bbe38a90236b16d946ddedc2ae0a47"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Core/RpcServerManager.swift",
+    "destination": "Sources/AttentiveRTC/Core/RpcServerManager.swift",
+    "upstreamSHA256": "7d675a7eb12ba0d43df655dbd219f7ae2100139497c7b8708e23c3f3ce84a719",
+    "sha256": "7d675a7eb12ba0d43df655dbd219f7ae2100139497c7b8708e23c3f3ce84a719"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Core/RTC.swift",
+    "destination": "Sources/AttentiveRTC/Core/RTC.swift",
+    "upstreamSHA256": "80505daa48a90966e5d75bd9843fa5614fb858447ef7cbfbe9c02703899fcbbf",
+    "sha256": "80505daa48a90966e5d75bd9843fa5614fb858447ef7cbfbe9c02703899fcbbf"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Core/SignalClient.swift",
+    "destination": "Sources/AttentiveRTC/Core/SignalClient.swift",
+    "upstreamSHA256": "3ace3fc98702328171c1599e539fc8c32376578c8d8912bf8cc2b779a4b4ab1c",
+    "sha256": "1c225a481014e2263a3c0e03c7185f8ed23110da6d7b0b1d28282c20d94d62c6"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Core/Transport.swift",
+    "destination": "Sources/AttentiveRTC/Core/Transport.swift",
+    "upstreamSHA256": "88435bcdc342d98a94fda376e154c9b088cc496d26d62ca89ac99dbdef46dbec",
+    "sha256": "88435bcdc342d98a94fda376e154c9b088cc496d26d62ca89ac99dbdef46dbec"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Core/TransportMode.swift",
+    "destination": "Sources/AttentiveRTC/Core/TransportMode.swift",
+    "upstreamSHA256": "9d472705d48fad807cbdd75af8821f1dd1d5c8df4844e2b4beb7d56aed285bc7",
+    "sha256": "9d472705d48fad807cbdd75af8821f1dd1d5c8df4844e2b4beb7d56aed285bc7"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/DataStream/FileInfo.swift",
+    "destination": "Sources/AttentiveRTC/DataStream/FileInfo.swift",
+    "upstreamSHA256": "3042319e4c1a4a5442ff926e75fd5bf7d54b1141b5f8c64ce49ea47e876d04c5",
+    "sha256": "3042319e4c1a4a5442ff926e75fd5bf7d54b1141b5f8c64ce49ea47e876d04c5"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/DataStream/Incoming/ByteStreamReader.swift",
+    "destination": "Sources/AttentiveRTC/DataStream/Incoming/ByteStreamReader.swift",
+    "upstreamSHA256": "1373371dcda14d8ee0eb315afa141051502196f2e4bb3555972e621c4d038b88",
+    "sha256": "1373371dcda14d8ee0eb315afa141051502196f2e4bb3555972e621c4d038b88"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/DataStream/Incoming/IncomingStreamManager.swift",
+    "destination": "Sources/AttentiveRTC/DataStream/Incoming/IncomingStreamManager.swift",
+    "upstreamSHA256": "0c3a77a28af76fdb50f428cd20d19cb7e0046c1c122bbf8a3521e2439edc72c4",
+    "sha256": "0c3a77a28af76fdb50f428cd20d19cb7e0046c1c122bbf8a3521e2439edc72c4"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/DataStream/Incoming/StreamReaderSource.swift",
+    "destination": "Sources/AttentiveRTC/DataStream/Incoming/StreamReaderSource.swift",
+    "upstreamSHA256": "e31f67948c3c12b04ed80cc64d49395df745d89f7ebabeffde3d3fda41bbd0ec",
+    "sha256": "e31f67948c3c12b04ed80cc64d49395df745d89f7ebabeffde3d3fda41bbd0ec"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/DataStream/Incoming/TextStreamReader.swift",
+    "destination": "Sources/AttentiveRTC/DataStream/Incoming/TextStreamReader.swift",
+    "upstreamSHA256": "f747ec77ce691045741a4f64cd2ee80c8d1cd8348561f745577a7d6e61f38ec2",
+    "sha256": "f747ec77ce691045741a4f64cd2ee80c8d1cd8348561f745577a7d6e61f38ec2"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/DataStream/Outgoing/ByteStreamWriter.swift",
+    "destination": "Sources/AttentiveRTC/DataStream/Outgoing/ByteStreamWriter.swift",
+    "upstreamSHA256": "163ec3617738b04adb18de02b4012da62fbda7bb5be212e15e5dc6eee5344ad4",
+    "sha256": "163ec3617738b04adb18de02b4012da62fbda7bb5be212e15e5dc6eee5344ad4"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/DataStream/Outgoing/OutgoingStreamManager.swift",
+    "destination": "Sources/AttentiveRTC/DataStream/Outgoing/OutgoingStreamManager.swift",
+    "upstreamSHA256": "dd2b5baedb133b07f0e6d7a5c817902ac090dc21b533eda4c7a41418c8f75cda",
+    "sha256": "dd2b5baedb133b07f0e6d7a5c817902ac090dc21b533eda4c7a41418c8f75cda"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/DataStream/Outgoing/StreamData.swift",
+    "destination": "Sources/AttentiveRTC/DataStream/Outgoing/StreamData.swift",
+    "upstreamSHA256": "c63ed868a4ddc8f063a32f5123db9acf72e3cdb0859f7a46796a8f3dfb5c44c0",
+    "sha256": "c63ed868a4ddc8f063a32f5123db9acf72e3cdb0859f7a46796a8f3dfb5c44c0"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/DataStream/Outgoing/StreamWriterDestination.swift",
+    "destination": "Sources/AttentiveRTC/DataStream/Outgoing/StreamWriterDestination.swift",
+    "upstreamSHA256": "c33c0fed4f9fedbf76d2344fc756f3ed97677b15f544748f7c429c3c917140e4",
+    "sha256": "c33c0fed4f9fedbf76d2344fc756f3ed97677b15f544748f7c429c3c917140e4"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/DataStream/Outgoing/TextStreamWriter.swift",
+    "destination": "Sources/AttentiveRTC/DataStream/Outgoing/TextStreamWriter.swift",
+    "upstreamSHA256": "901fe9532f839b977794c8ad1d3b516155fad9e90d6e980f3aeb6987aa60d4c1",
+    "sha256": "901fe9532f839b977794c8ad1d3b516155fad9e90d6e980f3aeb6987aa60d4c1"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/DataStream/StreamError.swift",
+    "destination": "Sources/AttentiveRTC/DataStream/StreamError.swift",
+    "upstreamSHA256": "e7a589320f71f7c4e856cc620c9d6542bfe7ac8d13daf37212e670b41b6f5f5f",
+    "sha256": "e7a589320f71f7c4e856cc620c9d6542bfe7ac8d13daf37212e670b41b6f5f5f"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/DataStream/StreamInfo.swift",
+    "destination": "Sources/AttentiveRTC/DataStream/StreamInfo.swift",
+    "upstreamSHA256": "a3134ca7b9a28e038bb7b552156dbf24b8b6ccef8833958cab120837365ed928",
+    "sha256": "a3134ca7b9a28e038bb7b552156dbf24b8b6ccef8833958cab120837365ed928"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/DataStream/StreamOptions.swift",
+    "destination": "Sources/AttentiveRTC/DataStream/StreamOptions.swift",
+    "upstreamSHA256": "d9c235a4c1414f8f28856a08ae1dff891e9dd3fede7fc6a584b1f7d790e6179f",
+    "sha256": "d9c235a4c1414f8f28856a08ae1dff891e9dd3fede7fc6a584b1f7d790e6179f"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/E2EE/E2EEManager.swift",
+    "destination": "Sources/AttentiveRTC/E2EE/E2EEManager.swift",
+    "upstreamSHA256": "93224863ffc91c174390e030e6aa75227ec9ff6fb687c7f15d13cc2c2e082f5d",
+    "sha256": "93224863ffc91c174390e030e6aa75227ec9ff6fb687c7f15d13cc2c2e082f5d"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/E2EE/KeyProvider.swift",
+    "destination": "Sources/AttentiveRTC/E2EE/KeyProvider.swift",
+    "upstreamSHA256": "c4420124dd325a7cfb1ad128135d7e15157730cdf744a5f7aa0ce03bf0925bd5",
+    "sha256": "c4420124dd325a7cfb1ad128135d7e15157730cdf744a5f7aa0ce03bf0925bd5"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/E2EE/Options.swift",
+    "destination": "Sources/AttentiveRTC/E2EE/Options.swift",
+    "upstreamSHA256": "7022d0e1303110f711b7fba1fab1cb9454b7e8daf32f2b37eb414969ebe53d69",
+    "sha256": "7022d0e1303110f711b7fba1fab1cb9454b7e8daf32f2b37eb414969ebe53d69"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/E2EE/Protos+E2EE.swift",
+    "destination": "Sources/AttentiveRTC/E2EE/Protos+E2EE.swift",
+    "upstreamSHA256": "c18e10c138bda959671f3adafb2055fd01d7f1ef1b7d50862fff03784338ca25",
+    "sha256": "c18e10c138bda959671f3adafb2055fd01d7f1ef1b7d50862fff03784338ca25"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/E2EE/State.swift",
+    "destination": "Sources/AttentiveRTC/E2EE/State.swift",
+    "upstreamSHA256": "9d84e38064f1a3072563eca3d7997cb234b14d66758c4fa9e945f3a24560dc6c",
+    "sha256": "9d84e38064f1a3072563eca3d7997cb234b14d66758c4fa9e945f3a24560dc6c"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Errors.swift",
+    "destination": "Sources/AttentiveRTC/Errors.swift",
+    "upstreamSHA256": "20d7cc4a6437a3557579dd005f911042b89ba5921fd8d1014f74b6cb826bf2d0",
+    "sha256": "20d7cc4a6437a3557579dd005f911042b89ba5921fd8d1014f74b6cb826bf2d0"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Extensions/AsyncSequence.swift",
+    "destination": "Sources/AttentiveRTC/Extensions/AsyncSequence.swift",
+    "upstreamSHA256": "c7041fcad682697ca23a0b8bcee0fdca18cc3abeb62f735e620f32aeece17f9b",
+    "sha256": "c7041fcad682697ca23a0b8bcee0fdca18cc3abeb62f735e620f32aeece17f9b"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Extensions/AVAudioNode.swift",
+    "destination": "Sources/AttentiveRTC/Extensions/AVAudioNode.swift",
+    "upstreamSHA256": "2c0219405a8ef9ac319a66d5fe3076076de418250dac3177d0812029ab743dd5",
+    "sha256": "b3a26e255b7b54a3007138e9ad51bf13e1ef369f7495797d7e34320fdc668c6b"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Extensions/AVAudioPCMBuffer.swift",
+    "destination": "Sources/AttentiveRTC/Extensions/AVAudioPCMBuffer.swift",
+    "upstreamSHA256": "33249c9e949510ba1c8bbe8e42ea2641069558bbea52f562ff3fa36144dacf7c",
+    "sha256": "33249c9e949510ba1c8bbe8e42ea2641069558bbea52f562ff3fa36144dacf7c"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Extensions/AVCaptureDevice.swift",
+    "destination": "Sources/AttentiveRTC/Extensions/AVCaptureDevice.swift",
+    "upstreamSHA256": "b26e21e657ff30239e85a18d14f85c25cdc32cded62cc76361f8ff553e952ebe",
+    "sha256": "b26e21e657ff30239e85a18d14f85c25cdc32cded62cc76361f8ff553e952ebe"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Extensions/CGFloat.swift",
+    "destination": "Sources/AttentiveRTC/Extensions/CGFloat.swift",
+    "upstreamSHA256": "d3305d92f73545acc737acfdd15c7e1d963d8714026d37b139483ae4da9c5992",
+    "sha256": "d3305d92f73545acc737acfdd15c7e1d963d8714026d37b139483ae4da9c5992"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Extensions/Codable.swift",
+    "destination": "Sources/AttentiveRTC/Extensions/Codable.swift",
+    "upstreamSHA256": "637e032ad1dfd9c663a80cbee6d30ace780cf533bbf71ed33ad2419dd36b9931",
+    "sha256": "637e032ad1dfd9c663a80cbee6d30ace780cf533bbf71ed33ad2419dd36b9931"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Extensions/CoreImage.swift",
+    "destination": "Sources/AttentiveRTC/Extensions/CoreImage.swift",
+    "upstreamSHA256": "2255d10ba114cc633769bc55e6da4cc94e0cfc1fa85a6b964bcb84820a73fbed",
+    "sha256": "2255d10ba114cc633769bc55e6da4cc94e0cfc1fa85a6b964bcb84820a73fbed"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Extensions/CustomStringConvertible.swift",
+    "destination": "Sources/AttentiveRTC/Extensions/CustomStringConvertible.swift",
+    "upstreamSHA256": "5ff6ae0d6acd3bd73c343ec03f3af9359953572cc8f5fb383abb7c70993916f9",
+    "sha256": "5ff6ae0d6acd3bd73c343ec03f3af9359953572cc8f5fb383abb7c70993916f9"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Extensions/DispatchQueue.swift",
+    "destination": "Sources/AttentiveRTC/Extensions/DispatchQueue.swift",
+    "upstreamSHA256": "f25689f75cb89e8520732042bb79dfea0b85782824cd6a95f9383609e7fb4994",
+    "sha256": "1872da1f221a91e7d6f9674c7a2650e5df1927e29056815f4a5293e5735cc72e"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Extensions/LKRTCRtpSender.swift",
+    "destination": "Sources/AttentiveRTC/Extensions/LKRTCRtpSender.swift",
+    "upstreamSHA256": "3fff3b1cdd07fa882e5ede18e297957db5e5b13a8679dfe84dbcc746fd384ff7",
+    "sha256": "3fff3b1cdd07fa882e5ede18e297957db5e5b13a8679dfe84dbcc746fd384ff7"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Extensions/PixelBuffer.swift",
+    "destination": "Sources/AttentiveRTC/Extensions/PixelBuffer.swift",
+    "upstreamSHA256": "bfbd05962dfee0639ed958635332eda4e8933a73bddf86ba6f78eb8881815bce",
+    "sha256": "bfbd05962dfee0639ed958635332eda4e8933a73bddf86ba6f78eb8881815bce"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Extensions/Primitives.swift",
+    "destination": "Sources/AttentiveRTC/Extensions/Primitives.swift",
+    "upstreamSHA256": "dbed8902686f00da3a14163a073ebc540fa5e3affd41f734a4fad90bb74c538d",
+    "sha256": "dbed8902686f00da3a14163a073ebc540fa5e3affd41f734a4fad90bb74c538d"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Extensions/RTCConfiguration.swift",
+    "destination": "Sources/AttentiveRTC/Extensions/RTCConfiguration.swift",
+    "upstreamSHA256": "2444f15cf551dc5afaf531474721953fdd59005617a7ed4f0acacab8cafda9a3",
+    "sha256": "2444f15cf551dc5afaf531474721953fdd59005617a7ed4f0acacab8cafda9a3"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Extensions/RTCDataChannel+Util.swift",
+    "destination": "Sources/AttentiveRTC/Extensions/RTCDataChannel+Util.swift",
+    "upstreamSHA256": "7f3a47042de152a0ece3dc7663705ee640a0c83d45e0074a84423cd422578d79",
+    "sha256": "7f3a47042de152a0ece3dc7663705ee640a0c83d45e0074a84423cd422578d79"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Extensions/RTCI420Buffer.swift",
+    "destination": "Sources/AttentiveRTC/Extensions/RTCI420Buffer.swift",
+    "upstreamSHA256": "90ea5d37394d0fd2d056dde0474d42b0ba56c5186f322bda1cee18a9b99f375f",
+    "sha256": "90ea5d37394d0fd2d056dde0474d42b0ba56c5186f322bda1cee18a9b99f375f"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Extensions/RTCMediaConstraints.swift",
+    "destination": "Sources/AttentiveRTC/Extensions/RTCMediaConstraints.swift",
+    "upstreamSHA256": "c750753eabe03fd9a840423b24b6d66d7476f194bbd97c62adb76b99ce0298b6",
+    "sha256": "c750753eabe03fd9a840423b24b6d66d7476f194bbd97c62adb76b99ce0298b6"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Extensions/RTCRtpTransceiver.swift",
+    "destination": "Sources/AttentiveRTC/Extensions/RTCRtpTransceiver.swift",
+    "upstreamSHA256": "0d1e68872baae87ce7918e3a43351e38f3e08d50f5391b7f5d711edc7855f073",
+    "sha256": "0d1e68872baae87ce7918e3a43351e38f3e08d50f5391b7f5d711edc7855f073"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Extensions/RTCVideoCapturerDelegate+Buffer.swift",
+    "destination": "Sources/AttentiveRTC/Extensions/RTCVideoCapturerDelegate+Buffer.swift",
+    "upstreamSHA256": "2aeb1f3b6a3ff4a5486287a4b2738f5acecf2554461bbcc4dd2ea7f6c58dc51d",
+    "sha256": "2aeb1f3b6a3ff4a5486287a4b2738f5acecf2554461bbcc4dd2ea7f6c58dc51d"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Extensions/Sendable.swift",
+    "destination": "Sources/AttentiveRTC/Extensions/Sendable.swift",
+    "upstreamSHA256": "8c2f8fd5fe2b21163834cb1da7e1dc972f180cadcf5de74e69d565d2b75c4319",
+    "sha256": "8c2f8fd5fe2b21163834cb1da7e1dc972f180cadcf5de74e69d565d2b75c4319"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Extensions/String.swift",
+    "destination": "Sources/AttentiveRTC/Extensions/String.swift",
+    "upstreamSHA256": "53b9dae088655f72ccb3773d8b1a076ffea6848a77495af4fd29d6c997819277",
+    "sha256": "53b9dae088655f72ccb3773d8b1a076ffea6848a77495af4fd29d6c997819277"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Extensions/TimeInterval.swift",
+    "destination": "Sources/AttentiveRTC/Extensions/TimeInterval.swift",
+    "upstreamSHA256": "7820bfb24d9bfc653cde86f56e24790f3c32760e8a73f0184fa5208c5c9074a9",
+    "sha256": "7820bfb24d9bfc653cde86f56e24790f3c32760e8a73f0184fa5208c5c9074a9"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Extensions/URL.swift",
+    "destination": "Sources/AttentiveRTC/Extensions/URL.swift",
+    "upstreamSHA256": "c562d0fe786e5dd921427a02a6958a4d1630577b4d4b90f0be3306faa1dbb234",
+    "sha256": "c562d0fe786e5dd921427a02a6958a4d1630577b4d4b90f0be3306faa1dbb234"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Participant/LocalParticipant.swift",
+    "destination": "Sources/AttentiveRTC/Participant/LocalParticipant.swift",
+    "upstreamSHA256": "a222d2f52adcf703fa6454c8d2f32b57170635a99f267454651eb9024bd7670a",
+    "sha256": "a222d2f52adcf703fa6454c8d2f32b57170635a99f267454651eb9024bd7670a"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Participant/LocalParticipant+DataStream.swift",
+    "destination": "Sources/AttentiveRTC/Participant/LocalParticipant+DataStream.swift",
+    "upstreamSHA256": "4194c4c3edd8b7cf39d93b51201d08b84ea99f66b5580c7f9755eb7d51e3225d",
+    "sha256": "4194c4c3edd8b7cf39d93b51201d08b84ea99f66b5580c7f9755eb7d51e3225d"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Participant/LocalParticipant+RPC.swift",
+    "destination": "Sources/AttentiveRTC/Participant/LocalParticipant+RPC.swift",
+    "upstreamSHA256": "9113e3823353956177f535d478e8fecd12d559f435fbf672a3c8272d6e1becb4",
+    "sha256": "9113e3823353956177f535d478e8fecd12d559f435fbf672a3c8272d6e1becb4"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Participant/Participant.swift",
+    "destination": "Sources/AttentiveRTC/Participant/Participant.swift",
+    "upstreamSHA256": "3becac25aeeb9cd37f1bfea29b7d70fbd56e6b2a7002e51177b9bb58fd8548cb",
+    "sha256": "3becac25aeeb9cd37f1bfea29b7d70fbd56e6b2a7002e51177b9bb58fd8548cb"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Participant/Participant+Convenience.swift",
+    "destination": "Sources/AttentiveRTC/Participant/Participant+Convenience.swift",
+    "upstreamSHA256": "f996ea359164ec8c5cb8e37c62324a4fcce4acfb429386db9757d0458125752a",
+    "sha256": "f996ea359164ec8c5cb8e37c62324a4fcce4acfb429386db9757d0458125752a"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Participant/Participant+Equatable.swift",
+    "destination": "Sources/AttentiveRTC/Participant/Participant+Equatable.swift",
+    "upstreamSHA256": "1d43c2315d36d7ebd8a9465ce29ff99b943f42d78dd44abcf060b45233cd087e",
+    "sha256": "1d43c2315d36d7ebd8a9465ce29ff99b943f42d78dd44abcf060b45233cd087e"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Participant/Participant+Identifiable.swift",
+    "destination": "Sources/AttentiveRTC/Participant/Participant+Identifiable.swift",
+    "upstreamSHA256": "df8b8c8db1e7533299149828e2bb57a059a5b2b992269acec4e1900465baf339",
+    "sha256": "df8b8c8db1e7533299149828e2bb57a059a5b2b992269acec4e1900465baf339"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Participant/Participant+Kind.swift",
+    "destination": "Sources/AttentiveRTC/Participant/Participant+Kind.swift",
+    "upstreamSHA256": "a7fcddba5f7555ef184d797e16eaa97fabf51681e4ac41e31f05cf3edb0c7aa4",
+    "sha256": "a7fcddba5f7555ef184d797e16eaa97fabf51681e4ac41e31f05cf3edb0c7aa4"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Participant/Participant+MulticastDelegate.swift",
+    "destination": "Sources/AttentiveRTC/Participant/Participant+MulticastDelegate.swift",
+    "upstreamSHA256": "28da78108cbe5f84c042c5d2cfe2b91f3b5f26dd732f223a9458432c3ea64200",
+    "sha256": "28da78108cbe5f84c042c5d2cfe2b91f3b5f26dd732f223a9458432c3ea64200"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Participant/RemoteParticipant.swift",
+    "destination": "Sources/AttentiveRTC/Participant/RemoteParticipant.swift",
+    "upstreamSHA256": "d14cb869fc5d3f3a1f60c3de0667f5253f7dd68700b1b15929b1f6f187b001d9",
+    "sha256": "d14cb869fc5d3f3a1f60c3de0667f5253f7dd68700b1b15929b1f6f187b001d9"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Participant/RemoteParticipant+Active.swift",
+    "destination": "Sources/AttentiveRTC/Participant/RemoteParticipant+Active.swift",
+    "upstreamSHA256": "2b08308e1912dd118998884b2bb439250b58afd530b0dbbbf5749cfd4cd50d0b",
+    "sha256": "2b08308e1912dd118998884b2bb439250b58afd530b0dbbbf5749cfd4cd50d0b"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/PrivacyInfo.xcprivacy",
+    "destination": "Sources/AttentiveRTC/PrivacyInfo.xcprivacy",
+    "upstreamSHA256": "7aed2e211fa5ee40e6457423bdb485a3fa0a60b4e182658e9fef5239c918dbc0",
+    "sha256": "7aed2e211fa5ee40e6457423bdb485a3fa0a60b4e182658e9fef5239c918dbc0"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Protocols/AudioCustomProcessingDelegate.swift",
+    "destination": "Sources/AttentiveRTC/Protocols/AudioCustomProcessingDelegate.swift",
+    "upstreamSHA256": "bf775942a5d995ce990c12824e9ddc8acea00833b4806fef45d03a23cc885f5d",
+    "sha256": "bf775942a5d995ce990c12824e9ddc8acea00833b4806fef45d03a23cc885f5d"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Protocols/AudioRenderer.swift",
+    "destination": "Sources/AttentiveRTC/Protocols/AudioRenderer.swift",
+    "upstreamSHA256": "ea1723888595cb44e5b8d88a52b9f2c6900cdd26928cadecbc696337950d7741",
+    "sha256": "ea1723888595cb44e5b8d88a52b9f2c6900cdd26928cadecbc696337950d7741"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Protocols/MediaEncoding.swift",
+    "destination": "Sources/AttentiveRTC/Protocols/MediaEncoding.swift",
+    "upstreamSHA256": "26697359a45cf2853d9fd83425b4671d6b75c91fc26830831c0d792f043554ee",
+    "sha256": "26697359a45cf2853d9fd83425b4671d6b75c91fc26830831c0d792f043554ee"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Protocols/Mirrorable.swift",
+    "destination": "Sources/AttentiveRTC/Protocols/Mirrorable.swift",
+    "upstreamSHA256": "9a9b5f4019caae8e039b43697dc32d07a588f4aca17be1ee4bd606253bb3580f",
+    "sha256": "9a9b5f4019caae8e039b43697dc32d07a588f4aca17be1ee4bd606253bb3580f"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Protocols/NextInvokable.swift",
+    "destination": "Sources/AttentiveRTC/Protocols/NextInvokable.swift",
+    "upstreamSHA256": "6bb8f345ce5bcd2a682a48d9d7d4a1c868b4bc0c83cadeeeb5948f4822f23457",
+    "sha256": "6bb8f345ce5bcd2a682a48d9d7d4a1c868b4bc0c83cadeeeb5948f4822f23457"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Protocols/ParticipantDelegate.swift",
+    "destination": "Sources/AttentiveRTC/Protocols/ParticipantDelegate.swift",
+    "upstreamSHA256": "25f4c0ab6869d80f6b5c04415f619ab756393a878681ceea19583f5b3d996e37",
+    "sha256": "25f4c0ab6869d80f6b5c04415f619ab756393a878681ceea19583f5b3d996e37"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Protocols/RoomDelegate.swift",
+    "destination": "Sources/AttentiveRTC/Protocols/RoomDelegate.swift",
+    "upstreamSHA256": "902f8f71b87485382011e216d8e52e2abda0df1f9c4e08d7040de0fe3af6aa85",
+    "sha256": "902f8f71b87485382011e216d8e52e2abda0df1f9c4e08d7040de0fe3af6aa85"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Protocols/SignalClientDelegate.swift",
+    "destination": "Sources/AttentiveRTC/Protocols/SignalClientDelegate.swift",
+    "upstreamSHA256": "fa8efa1174126128e32e8b46a0dd6917b73556db09780b6c8d83acee01cda86e",
+    "sha256": "fa8efa1174126128e32e8b46a0dd6917b73556db09780b6c8d83acee01cda86e"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Protocols/TrackDelegate.swift",
+    "destination": "Sources/AttentiveRTC/Protocols/TrackDelegate.swift",
+    "upstreamSHA256": "9613ce24f2284e5cc16f1c5a38c2f4094a368dc9fb8db40836eea303ba5718af",
+    "sha256": "9613ce24f2284e5cc16f1c5a38c2f4094a368dc9fb8db40836eea303ba5718af"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Protocols/TransportDelegate.swift",
+    "destination": "Sources/AttentiveRTC/Protocols/TransportDelegate.swift",
+    "upstreamSHA256": "8fcf5890daf6bf8b8d4b59e101837cd40a90a9de5625654405757aa99f9da051",
+    "sha256": "8fcf5890daf6bf8b8d4b59e101837cd40a90a9de5625654405757aa99f9da051"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Protocols/VideoProcessor.swift",
+    "destination": "Sources/AttentiveRTC/Protocols/VideoProcessor.swift",
+    "upstreamSHA256": "781a1aaf0e8c561f6b4d646a5d388bc3d5908d9b9142e19a4372280575f8ed77",
+    "sha256": "781a1aaf0e8c561f6b4d646a5d388bc3d5908d9b9142e19a4372280575f8ed77"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Protocols/VideoRenderer.swift",
+    "destination": "Sources/AttentiveRTC/Protocols/VideoRenderer.swift",
+    "upstreamSHA256": "5f61e043fe805ec0dd2c4c924b560680a2a6370e90a4ad69f2c6acf9f449faa2",
+    "sha256": "5f61e043fe805ec0dd2c4c924b560680a2a6370e90a4ad69f2c6acf9f449faa2"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Protocols/VideoViewDelegate.swift",
+    "destination": "Sources/AttentiveRTC/Protocols/VideoViewDelegate.swift",
+    "upstreamSHA256": "109bae7911157c717295d40a082b7f1412f2a5275d7cbe6e37bb56e6f03ff238",
+    "sha256": "109bae7911157c717295d40a082b7f1412f2a5275d7cbe6e37bb56e6f03ff238"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Protos/livekit_metrics.pb.swift",
+    "destination": "Sources/AttentiveRTC/Protos/livekit_metrics.pb.swift",
+    "upstreamSHA256": "b310c1759116d1129482d7ac85446a5e305208be6386880c2240845038f1130b",
+    "sha256": "b310c1759116d1129482d7ac85446a5e305208be6386880c2240845038f1130b"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Protos/livekit_models.pb.swift",
+    "destination": "Sources/AttentiveRTC/Protos/livekit_models.pb.swift",
+    "upstreamSHA256": "2b3f5eb1dbe1da8ff36402a4fdf00405faadf5ca6cbc108860209ab15168df23",
+    "sha256": "2b3f5eb1dbe1da8ff36402a4fdf00405faadf5ca6cbc108860209ab15168df23"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Protos/livekit_rtc.pb.swift",
+    "destination": "Sources/AttentiveRTC/Protos/livekit_rtc.pb.swift",
+    "upstreamSHA256": "1c83aa0940e30c3353bdd0b0dc0abc6fa041fb901c9c349a282fe111616b7482",
+    "sha256": "1c83aa0940e30c3353bdd0b0dc0abc6fa041fb901c9c349a282fe111616b7482"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Support/AppStateListener.swift",
+    "destination": "Sources/AttentiveRTC/Support/AppStateListener.swift",
+    "upstreamSHA256": "f1c1dc95ebfa68d23ecf35357d90795027ccc149be1fef6af7640f74d877ba5c",
+    "sha256": "f1c1dc95ebfa68d23ecf35357d90795027ccc149be1fef6af7640f74d877ba5c"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Support/Async/AsyncCompleter.swift",
+    "destination": "Sources/AttentiveRTC/Support/Async/AsyncCompleter.swift",
+    "upstreamSHA256": "0da433ef8768dde4f33eecad830e0f4089b414416d270643db9655b6f40fdb10",
+    "sha256": "ffd47eb5c43106dbc2d7424e5268b6e1c385330420d8a55b81266d7ff163cacc"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Support/Async/AsyncDebounce.swift",
+    "destination": "Sources/AttentiveRTC/Support/Async/AsyncDebounce.swift",
+    "upstreamSHA256": "4667d229659a41cde5105d500ee020b61a70ec4ef890e14c1df319dee22ec9f1",
+    "sha256": "4667d229659a41cde5105d500ee020b61a70ec4ef890e14c1df319dee22ec9f1"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Support/Async/AsyncFileStream.swift",
+    "destination": "Sources/AttentiveRTC/Support/Async/AsyncFileStream.swift",
+    "upstreamSHA256": "bb1f04b537daba883d26ffbe06827c3228a7e274ef86b0e8142003eb9da2d4c6",
+    "sha256": "bb1f04b537daba883d26ffbe06827c3228a7e274ef86b0e8142003eb9da2d4c6"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Support/Async/AsyncRetry.swift",
+    "destination": "Sources/AttentiveRTC/Support/Async/AsyncRetry.swift",
+    "upstreamSHA256": "d73679b955ca26317e89e645b16ccaa4ed1a69e572f908351f9bea3427bc2d71",
+    "sha256": "d73679b955ca26317e89e645b16ccaa4ed1a69e572f908351f9bea3427bc2d71"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Support/Async/AsyncSequence+Subscribe.swift",
+    "destination": "Sources/AttentiveRTC/Support/Async/AsyncSequence+Subscribe.swift",
+    "upstreamSHA256": "5ea6c6ee2166040081313cccbb0529bd80c77eb1d3f4deebb28d8a6c0f93a583",
+    "sha256": "5ea6c6ee2166040081313cccbb0529bd80c77eb1d3f4deebb28d8a6c0f93a583"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Support/Async/AsyncSerialDelegate.swift",
+    "destination": "Sources/AttentiveRTC/Support/Async/AsyncSerialDelegate.swift",
+    "upstreamSHA256": "a00f8a6544ee7b52f8f25065303b2dfd6940852b55c53f5bd9a8b847515fff47",
+    "sha256": "a00f8a6544ee7b52f8f25065303b2dfd6940852b55c53f5bd9a8b847515fff47"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Support/Async/AsyncTimer.swift",
+    "destination": "Sources/AttentiveRTC/Support/Async/AsyncTimer.swift",
+    "upstreamSHA256": "087114c90726380a73d054016c9431d560029e83af9ef2d9a41c703ab8501453",
+    "sha256": "087114c90726380a73d054016c9431d560029e83af9ef2d9a41c703ab8501453"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Support/Async/AsyncTryMapSequence.swift",
+    "destination": "Sources/AttentiveRTC/Support/Async/AsyncTryMapSequence.swift",
+    "upstreamSHA256": "61a658a1c66e443448673855288c51ce2eaa4ebc74733ff9f53b1fc271b91e4b",
+    "sha256": "61a658a1c66e443448673855288c51ce2eaa4ebc74733ff9f53b1fc271b91e4b"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Support/Async/ObservableObject+.swift",
+    "destination": "Sources/AttentiveRTC/Support/Async/ObservableObject+.swift",
+    "upstreamSHA256": "3b2ffa8bdabd68b43826373c12396b191372d38564fde82a3be091a1fc0e7211",
+    "sha256": "3b2ffa8bdabd68b43826373c12396b191372d38564fde82a3be091a1fc0e7211"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Support/Async/Task+Discarding.swift",
+    "destination": "Sources/AttentiveRTC/Support/Async/Task+Discarding.swift",
+    "upstreamSHA256": "bc5e4a8b4bd88886237d4cd3fac316d010379ea2522ab7165753a709c623ce7f",
+    "sha256": "bc5e4a8b4bd88886237d4cd3fac316d010379ea2522ab7165753a709c623ce7f"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Support/Audio/AudioConverter.swift",
+    "destination": "Sources/AttentiveRTC/Support/Audio/AudioConverter.swift",
+    "upstreamSHA256": "8c1ca1a73b0c30ad130810b9dd625788258d7746fc1c59d72384eaf9d834c781",
+    "sha256": "8c1ca1a73b0c30ad130810b9dd625788258d7746fc1c59d72384eaf9d834c781"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Support/Audio/AudioMixRecorder.swift",
+    "destination": "Sources/AttentiveRTC/Support/Audio/AudioMixRecorder.swift",
+    "upstreamSHA256": "17d8812a674b64633b62ecc45ef79e987a9568286d105bfdb11fc0f8de8f7f7c",
+    "sha256": "17d8812a674b64633b62ecc45ef79e987a9568286d105bfdb11fc0f8de8f7f7c"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Support/Audio/AudioPlayerRenderer.swift",
+    "destination": "Sources/AttentiveRTC/Support/Audio/AudioPlayerRenderer.swift",
+    "upstreamSHA256": "eee846c94f04d188e36cdd84a12d600d48de5f9c88b1dc399c384b915bf8dea7",
+    "sha256": "eee846c94f04d188e36cdd84a12d600d48de5f9c88b1dc399c384b915bf8dea7"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Support/Audio/AVAudioPCMRingBuffer.swift",
+    "destination": "Sources/AttentiveRTC/Support/Audio/AVAudioPCMRingBuffer.swift",
+    "upstreamSHA256": "c3178ec6291046ca0c182e3bdda09a217c945f5afacfad1a4736dc32122d3689",
+    "sha256": "c3178ec6291046ca0c182e3bdda09a217c945f5afacfad1a4736dc32122d3689"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Support/Audio/FFTProcessor.swift",
+    "destination": "Sources/AttentiveRTC/Support/Audio/FFTProcessor.swift",
+    "upstreamSHA256": "ba61768169e0d5e49f38f946ad0f5aba112921da7a387a7f78a7e4718b8ee332",
+    "sha256": "ba61768169e0d5e49f38f946ad0f5aba112921da7a387a7f78a7e4718b8ee332"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Support/DataStructures/Deque.swift",
+    "destination": "Sources/AttentiveRTC/Support/DataStructures/Deque.swift",
+    "upstreamSHA256": "9495444f75345ddef3cd62f43a6f51bfc422618f9e0ab9aada6bdbf43fcc0c5a",
+    "sha256": "9495444f75345ddef3cd62f43a6f51bfc422618f9e0ab9aada6bdbf43fcc0c5a"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Support/DataStructures/MapTable.swift",
+    "destination": "Sources/AttentiveRTC/Support/DataStructures/MapTable.swift",
+    "upstreamSHA256": "51547a0f295794e05161d483706112f2d2c1ff39f728bac5a7839ab8800b48de",
+    "sha256": "51547a0f295794e05161d483706112f2d2c1ff39f728bac5a7839ab8800b48de"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Support/DataStructures/OrderedDictionary.swift",
+    "destination": "Sources/AttentiveRTC/Support/DataStructures/OrderedDictionary.swift",
+    "upstreamSHA256": "4c9da8f7024dbd017615e510a1fed5818067605a98b1afe84a0d292784812e2f",
+    "sha256": "4c9da8f7024dbd017615e510a1fed5818067605a98b1afe84a0d292784812e2f"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Support/DataStructures/OrderedSet.swift",
+    "destination": "Sources/AttentiveRTC/Support/DataStructures/OrderedSet.swift",
+    "upstreamSHA256": "b8bf3973cd2c4f0158d59fe6f370e56d823d909c88d134a6744f99809d041719",
+    "sha256": "b8bf3973cd2c4f0158d59fe6f370e56d823d909c88d134a6744f99809d041719"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Support/DataStructures/RingBuffer.swift",
+    "destination": "Sources/AttentiveRTC/Support/DataStructures/RingBuffer.swift",
+    "upstreamSHA256": "c4692910c85286d64ad4c50bad32ad190c942f1d806528299cb719d175cd3c75",
+    "sha256": "c4692910c85286d64ad4c50bad32ad190c942f1d806528299cb719d175cd3c75"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Support/DataStructures/TTLDictionary.swift",
+    "destination": "Sources/AttentiveRTC/Support/DataStructures/TTLDictionary.swift",
+    "upstreamSHA256": "e242dbe5a0f455062869fee9bfb69b4125b349c8734c311d085113f38a42a415",
+    "sha256": "e242dbe5a0f455062869fee9bfb69b4125b349c8734c311d085113f38a42a415"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Support/Global.swift",
+    "destination": "Sources/AttentiveRTC/Support/Global.swift",
+    "upstreamSHA256": "58d5e371cb8c4e04e1381dff5069b48bbbd60d1d1f0703dffa40abdbf328bd00",
+    "sha256": "58d5e371cb8c4e04e1381dff5069b48bbbd60d1d1f0703dffa40abdbf328bd00"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Support/Logger.swift",
+    "destination": "Sources/AttentiveRTC/Support/Logger.swift",
+    "upstreamSHA256": "c4d40f5d6112374a84b5a2150d3e085c78f9af69aefd4088c017f91bbdbb859d",
+    "sha256": "708c2a7b34b95a28d2883c105c463bc6f34d03a361ecac5d305e5bdb2eba7bb1"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Support/MulticastDelegate.swift",
+    "destination": "Sources/AttentiveRTC/Support/MulticastDelegate.swift",
+    "upstreamSHA256": "68a725f1ac0c5a8197641177b786f233f8c9db13ce8f9d3fb75a78fd2c40d5e1",
+    "sha256": "de566716d47a4a31886522b122c5a894bf34dd112c96e8c24c291190a7671cad"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Support/Network/ConnectivityListener.swift",
+    "destination": "Sources/AttentiveRTC/Support/Network/ConnectivityListener.swift",
+    "upstreamSHA256": "7ca848e1ba3b8adcfb120c8e5afd527b48ac39ca2f91933a3700159f787c2f49",
+    "sha256": "7b28b3f1391e937c38e1179ccf7b477215bd21a592737fe34a2be058ae507517"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Support/Network/HTTP.swift",
+    "destination": "Sources/AttentiveRTC/Support/Network/HTTP.swift",
+    "upstreamSHA256": "c8623ec7d666e813bd8d60311cd8a63929ff44c4f419b7c0631b5be7f7611f29",
+    "sha256": "c8623ec7d666e813bd8d60311cd8a63929ff44c4f419b7c0631b5be7f7611f29"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Support/Network/WebSocket.swift",
+    "destination": "Sources/AttentiveRTC/Support/Network/WebSocket.swift",
+    "upstreamSHA256": "5d9f6c5b75a70c5179b9b36d26b95fe4126bb2077a13eb78a07754c2602b4ab2",
+    "sha256": "5d9f6c5b75a70c5179b9b36d26b95fe4126bb2077a13eb78a07754c2602b4ab2"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Support/Schedulers/QueueActor.swift",
+    "destination": "Sources/AttentiveRTC/Support/Schedulers/QueueActor.swift",
+    "upstreamSHA256": "83c9d7e51bf9b8ae84590a52f66bd8727a2eb36e0ab60c0942efdb5e0fec9d04",
+    "sha256": "83c9d7e51bf9b8ae84590a52f66bd8727a2eb36e0ab60c0942efdb5e0fec9d04"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Support/Schedulers/SerialRunnerActor.swift",
+    "destination": "Sources/AttentiveRTC/Support/Schedulers/SerialRunnerActor.swift",
+    "upstreamSHA256": "dd3c8c23b88cb19dcdffe47431369101a4c81361398ecd94adc160fd84c36994",
+    "sha256": "dd3c8c23b88cb19dcdffe47431369101a4c81361398ecd94adc160fd84c36994"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Support/SDP/SDP.swift",
+    "destination": "Sources/AttentiveRTC/Support/SDP/SDP.swift",
+    "upstreamSHA256": "d4f7cd32146dcc1a6fcec4455b9b7fab470d77ee8bece9d816e9df6f12c048d0",
+    "sha256": "d4f7cd32146dcc1a6fcec4455b9b7fab470d77ee8bece9d816e9df6f12c048d0"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Support/Sync/Locks.swift",
+    "destination": "Sources/AttentiveRTC/Support/Sync/Locks.swift",
+    "upstreamSHA256": "e6ee39ea331c149450a85f560bdfa48711f9f5b0a06dd466ea2cd666f3dce46c",
+    "sha256": "e6ee39ea331c149450a85f560bdfa48711f9f5b0a06dd466ea2cd666f3dce46c"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Support/Sync/StateSync.swift",
+    "destination": "Sources/AttentiveRTC/Support/Sync/StateSync.swift",
+    "upstreamSHA256": "4d3f2069f192259a2ca196b163da99b26e5841ab7085e818e7d797351f07e09c",
+    "sha256": "4d3f2069f192259a2ca196b163da99b26e5841ab7085e818e7d797351f07e09c"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Support/Tracing.swift",
+    "destination": "Sources/AttentiveRTC/Support/Tracing.swift",
+    "upstreamSHA256": "08f9cc912f239805775da47e08a9643811f55797693345b2efcb28a8f78c8696",
+    "sha256": "6a44ced5fe56245e00b7c6bccc2980ceba545ee9a7cafeedc696d78c966fc374"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Support/Utils.swift",
+    "destination": "Sources/AttentiveRTC/Support/Utils.swift",
+    "upstreamSHA256": "7db0bfe440afdedfa4fa001b410db575771b13951431c6c74bf096fe8e61bff0",
+    "sha256": "895c78bb64205ad9799a0d116d09c7170831242ac7ae856045fd477563fe069c"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Support/Utils+VideoEncodings.swift",
+    "destination": "Sources/AttentiveRTC/Support/Utils+VideoEncodings.swift",
+    "upstreamSHA256": "de266649126507aa5f0017852c06814d8d5eb843a61e612bed5aa3874b6fc27d",
+    "sha256": "de266649126507aa5f0017852c06814d8d5eb843a61e612bed5aa3874b6fc27d"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Support/ValueOrAbsent.swift",
+    "destination": "Sources/AttentiveRTC/Support/ValueOrAbsent.swift",
+    "upstreamSHA256": "e2168d68de259f3a581c02e568bfced28500637c7fdfc9a86daadc9530f67379",
+    "sha256": "e2168d68de259f3a581c02e568bfced28500637c7fdfc9a86daadc9530f67379"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Support/Video/DeviceManager.swift",
+    "destination": "Sources/AttentiveRTC/Support/Video/DeviceManager.swift",
+    "upstreamSHA256": "11546b97a5dc0c3abc052d3c05a5179bd2332527c4937d1a0e6f0f361c696a97",
+    "sha256": "11546b97a5dc0c3abc052d3c05a5179bd2332527c4937d1a0e6f0f361c696a97"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Support/View/NativeView.swift",
+    "destination": "Sources/AttentiveRTC/Support/View/NativeView.swift",
+    "upstreamSHA256": "86e2ea73283ab2b5d7e611cbb3583011bb2a1c05aaaf86358d7f2923d2d7e2b4",
+    "sha256": "86e2ea73283ab2b5d7e611cbb3583011bb2a1c05aaaf86358d7f2923d2d7e2b4"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Support/View/NativeViewRepresentable.swift",
+    "destination": "Sources/AttentiveRTC/Support/View/NativeViewRepresentable.swift",
+    "upstreamSHA256": "07cb32bd3aae43e9cec8524a86b83e314cb6f23b8f20d6c2884d68ae6439099c",
+    "sha256": "07cb32bd3aae43e9cec8524a86b83e314cb6f23b8f20d6c2884d68ae6439099c"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Support/View/TextView.swift",
+    "destination": "Sources/AttentiveRTC/Support/View/TextView.swift",
+    "upstreamSHA256": "6b5ebd4882d5eda21f8676d464a38139e4862673e9869e9e531feb67e8a8ec79",
+    "sha256": "6b5ebd4882d5eda21f8676d464a38139e4862673e9869e9e531feb67e8a8ec79"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/SwiftUI/LocalMedia.swift",
+    "destination": "Sources/AttentiveRTC/SwiftUI/LocalMedia.swift",
+    "upstreamSHA256": "c66941b2bb90d1e991c6ba412a37da7c2e44c59c8f85e8eaca27cc11f6eab182",
+    "sha256": "c66941b2bb90d1e991c6ba412a37da7c2e44c59c8f85e8eaca27cc11f6eab182"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/SwiftUI/SwiftUIAudioRoutePickerButton.swift",
+    "destination": "Sources/AttentiveRTC/SwiftUI/SwiftUIAudioRoutePickerButton.swift",
+    "upstreamSHA256": "0d31c44910d19d719255e591927a1928969a3bccd0a0181eb787b7e68516345f",
+    "sha256": "0d31c44910d19d719255e591927a1928969a3bccd0a0181eb787b7e68516345f"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/SwiftUI/SwiftUIVideoView.swift",
+    "destination": "Sources/AttentiveRTC/SwiftUI/SwiftUIVideoView.swift",
+    "upstreamSHA256": "4a78eaa7213e65ee324e963a899d0e8d326b7804366a6a563dbfc5a0c7d12ba6",
+    "sha256": "4a78eaa7213e65ee324e963a899d0e8d326b7804366a6a563dbfc5a0c7d12ba6"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/SwiftUI/TrackDelegateObserver.swift",
+    "destination": "Sources/AttentiveRTC/SwiftUI/TrackDelegateObserver.swift",
+    "upstreamSHA256": "26764c1d7fb6f7dc337d598c007f42995d77179ef7a7539f28bf3a8a40ea42cf",
+    "sha256": "26764c1d7fb6f7dc337d598c007f42995d77179ef7a7539f28bf3a8a40ea42cf"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Broadcast/NOTICE",
+    "destination": "Sources/AttentiveRTC/ThirdPartyNotices/Broadcast-NOTICE",
+    "upstreamSHA256": "96128422823059c7895ec30d4f84acacdc62731f794934854279331c6bb4dab5",
+    "sha256": "96128422823059c7895ec30d4f84acacdc62731f794934854279331c6bb4dab5"
+  },
+  {
+    "component": "client",
+    "source": "LICENSE",
+    "destination": "Sources/AttentiveRTC/ThirdPartyNotices/LICENSE",
+    "upstreamSHA256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+    "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+  },
+  {
+    "component": "bindings",
+    "source": "LICENSE",
+    "destination": "Sources/AttentiveRTC/ThirdPartyNotices/MediaBindings-LICENSE",
+    "upstreamSHA256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+    "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+  },
+  {
+    "component": "client",
+    "source": "NOTICE",
+    "destination": "Sources/AttentiveRTC/ThirdPartyNotices/NOTICE",
+    "upstreamSHA256": "6d0f7c5e0deb284362296c5da110dd353831da2e67ca77cb5abc051b951b0fac",
+    "sha256": "6d0f7c5e0deb284362296c5da110dd353831da2e67ca77cb5abc051b951b0fac"
+  },
+  {
+    "component": "protobuf",
+    "source": "LICENSE.txt",
+    "destination": "Sources/AttentiveRTC/ThirdPartyNotices/SwiftProtobuf-LICENSE",
+    "upstreamSHA256": "186c5f0192a754714a7e542233ddaaad28745626e0ad32e358d3f5af00afb84a",
+    "sha256": "186c5f0192a754714a7e542233ddaaad28745626e0ad32e358d3f5af00afb84a"
+  },
+  {
+    "component": "webrtc",
+    "source": "LiveKitWebRTC.xcframework/LICENSE",
+    "destination": "Sources/AttentiveRTC/ThirdPartyNotices/WebRTC-Binary-LICENSE",
+    "upstreamSHA256": "ab00a482b6a3902e40211b43c5d0441962ea99b6cc7c25c0f243fa270b78d482",
+    "sha256": "ab00a482b6a3902e40211b43c5d0441962ea99b6cc7c25c0f243fa270b78d482"
+  },
+  {
+    "component": "webrtc",
+    "source": "LICENSE",
+    "destination": "Sources/AttentiveRTC/ThirdPartyNotices/WebRTC-Package-LICENSE",
+    "upstreamSHA256": "97c31210567f082cbd2f1067a491c1d5498a019414948153e98c321810986bfd",
+    "sha256": "97c31210567f082cbd2f1067a491c1d5498a019414948153e98c321810986bfd"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Token/CachingTokenSource.swift",
+    "destination": "Sources/AttentiveRTC/Token/CachingTokenSource.swift",
+    "upstreamSHA256": "d71832fffeaefb5379327c828e248edc8a5898b53fbc21ed5ee7c8fe829d87af",
+    "sha256": "d71832fffeaefb5379327c828e248edc8a5898b53fbc21ed5ee7c8fe829d87af"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Token/DevelopmentTokenSource.swift",
+    "destination": "Sources/AttentiveRTC/Token/DevelopmentTokenSource.swift",
+    "upstreamSHA256": "ed65e8419832b52997224263e7260d832936b0e4347e3fca93bd3e3cea535021",
+    "sha256": "ed65e8419832b52997224263e7260d832936b0e4347e3fca93bd3e3cea535021"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Token/EndpointTokenSource.swift",
+    "destination": "Sources/AttentiveRTC/Token/EndpointTokenSource.swift",
+    "upstreamSHA256": "f266bcdc363f2eed017eb91a2b3ecd0dc06546dc0e6a52f887862b85b8da7082",
+    "sha256": "f266bcdc363f2eed017eb91a2b3ecd0dc06546dc0e6a52f887862b85b8da7082"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Token/LiteralTokenSource.swift",
+    "destination": "Sources/AttentiveRTC/Token/LiteralTokenSource.swift",
+    "upstreamSHA256": "79dddcbd622335ca8beb82e9c6a7c11e8374edb9b4bfca2fb9374beac7df45ad",
+    "sha256": "79dddcbd622335ca8beb82e9c6a7c11e8374edb9b4bfca2fb9374beac7df45ad"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Token/TokenSource.swift",
+    "destination": "Sources/AttentiveRTC/Token/TokenSource.swift",
+    "upstreamSHA256": "246f9f102eaa91fc2f16056dcefa15a452e9cf6b5920ff0df4c21fa3303b1162",
+    "sha256": "08bbf6b98000e6a4bb9955ca6561d4f2a81d28ca24e5eb38eb213514dcadd06e"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Track/AudioTrack.swift",
+    "destination": "Sources/AttentiveRTC/Track/AudioTrack.swift",
+    "upstreamSHA256": "9a44cadfaa6fb9665a2ed3144a95dbd209e0e03c3dda64f914eb6e0cd3e9441a",
+    "sha256": "9a44cadfaa6fb9665a2ed3144a95dbd209e0e03c3dda64f914eb6e0cd3e9441a"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Track/Capturers/ARCameraCapturer.swift",
+    "destination": "Sources/AttentiveRTC/Track/Capturers/ARCameraCapturer.swift",
+    "upstreamSHA256": "a49abd93b8450187a44fefa056b4b653b224f760b16da057edcb3659edd86c1d",
+    "sha256": "a49abd93b8450187a44fefa056b4b653b224f760b16da057edcb3659edd86c1d"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Track/Capturers/BufferCapturer.swift",
+    "destination": "Sources/AttentiveRTC/Track/Capturers/BufferCapturer.swift",
+    "upstreamSHA256": "4d3e7d1c04ad2331ed7c0358c7cf7fb906a5cad6dc071c083f1a7d52dd621fb6",
+    "sha256": "4d3e7d1c04ad2331ed7c0358c7cf7fb906a5cad6dc071c083f1a7d52dd621fb6"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Track/Capturers/CameraCapturer.swift",
+    "destination": "Sources/AttentiveRTC/Track/Capturers/CameraCapturer.swift",
+    "upstreamSHA256": "19c0a0d5d4afb6b9b00acf377e456b0af0eba1de2845c17d8d7e2e07174d338b",
+    "sha256": "19c0a0d5d4afb6b9b00acf377e456b0af0eba1de2845c17d8d7e2e07174d338b"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Track/Capturers/InAppCapturer.swift",
+    "destination": "Sources/AttentiveRTC/Track/Capturers/InAppCapturer.swift",
+    "upstreamSHA256": "1c99f7e26f99758112ec7bf01e3dc61b3e4b6a6c32e9725fa5418b7177a0b5c2",
+    "sha256": "1c99f7e26f99758112ec7bf01e3dc61b3e4b6a6c32e9725fa5418b7177a0b5c2"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Track/Capturers/MacOSScreenCapturer.swift",
+    "destination": "Sources/AttentiveRTC/Track/Capturers/MacOSScreenCapturer.swift",
+    "upstreamSHA256": "35ec6df6e5a94052efa74bb2ad428d4171eaeb69a9b7e7f930ffc0ba35c74aef",
+    "sha256": "e9e6fafdd666d1347c0da11aa3e57f45f162d4422a97ffbba9776690bfadfcfb"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Track/Capturers/VideoCapturer.swift",
+    "destination": "Sources/AttentiveRTC/Track/Capturers/VideoCapturer.swift",
+    "upstreamSHA256": "00659a39c7642abdde8241c7a903149f5f3026a01cd243d781485edcee903349",
+    "sha256": "00659a39c7642abdde8241c7a903149f5f3026a01cd243d781485edcee903349"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Track/Capturers/VideoCapturer+MulticastDelegate.swift",
+    "destination": "Sources/AttentiveRTC/Track/Capturers/VideoCapturer+MulticastDelegate.swift",
+    "upstreamSHA256": "35bae1169a312f2f11b0fb4d355f148a6b5c54abf4caedacf8f1bb5cbf37ff78",
+    "sha256": "35bae1169a312f2f11b0fb4d355f148a6b5c54abf4caedacf8f1bb5cbf37ff78"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Track/Local/LocalAudioTrack.swift",
+    "destination": "Sources/AttentiveRTC/Track/Local/LocalAudioTrack.swift",
+    "upstreamSHA256": "ed1f4cfa3368b55a07d0cd13d925dd59b81d6993c54854da5071b984fc3cce1c",
+    "sha256": "ed1f4cfa3368b55a07d0cd13d925dd59b81d6993c54854da5071b984fc3cce1c"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Track/Local/LocalTrack.swift",
+    "destination": "Sources/AttentiveRTC/Track/Local/LocalTrack.swift",
+    "upstreamSHA256": "2cb7a0ff9e3a260e35cbc7a730fad57359b0bd2bba78358f96ac232338702c38",
+    "sha256": "2cb7a0ff9e3a260e35cbc7a730fad57359b0bd2bba78358f96ac232338702c38"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Track/Local/LocalVideoTrack.swift",
+    "destination": "Sources/AttentiveRTC/Track/Local/LocalVideoTrack.swift",
+    "upstreamSHA256": "ba2cf43302953c8d1b82184b1527e7ed9cc3250dcb73e232d96252ef66fe31af",
+    "sha256": "ba2cf43302953c8d1b82184b1527e7ed9cc3250dcb73e232d96252ef66fe31af"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Track/Metrics/MetricsManager.swift",
+    "destination": "Sources/AttentiveRTC/Track/Metrics/MetricsManager.swift",
+    "upstreamSHA256": "730ced64cc8cb7d74ea9a3c7ebe321a9f0e74dae838837901cb6e255ebbf95f7",
+    "sha256": "730ced64cc8cb7d74ea9a3c7ebe321a9f0e74dae838837901cb6e255ebbf95f7"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Track/Recorders/LocalAudioTrackRecorder.swift",
+    "destination": "Sources/AttentiveRTC/Track/Recorders/LocalAudioTrackRecorder.swift",
+    "upstreamSHA256": "f694ac8a78b4c9e6b82759ff7f45ff4da0199436368eb22d30dd2c365953494a",
+    "sha256": "f694ac8a78b4c9e6b82759ff7f45ff4da0199436368eb22d30dd2c365953494a"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Track/Remote/RemoteAudioTrack.swift",
+    "destination": "Sources/AttentiveRTC/Track/Remote/RemoteAudioTrack.swift",
+    "upstreamSHA256": "61dbdc396e2da7aa361d8eb5209b65d7e96671a76df66185aa46321d44010dc1",
+    "sha256": "61dbdc396e2da7aa361d8eb5209b65d7e96671a76df66185aa46321d44010dc1"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Track/Remote/RemoteTrack.swift",
+    "destination": "Sources/AttentiveRTC/Track/Remote/RemoteTrack.swift",
+    "upstreamSHA256": "3d721f529bcf8a958ae44599a76aae9808dca87a9630d5933c0d6939f4760488",
+    "sha256": "3d721f529bcf8a958ae44599a76aae9808dca87a9630d5933c0d6939f4760488"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Track/Remote/RemoteVideoTrack.swift",
+    "destination": "Sources/AttentiveRTC/Track/Remote/RemoteVideoTrack.swift",
+    "upstreamSHA256": "281d14673b13b9a21a214b906d1d26e3171f8c55e5c8fb12310d0dbfbbfa3ec7",
+    "sha256": "281d14673b13b9a21a214b906d1d26e3171f8c55e5c8fb12310d0dbfbbfa3ec7"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Track/Support/Extensions.swift",
+    "destination": "Sources/AttentiveRTC/Track/Support/Extensions.swift",
+    "upstreamSHA256": "d25d7a5f85e229aba61f73b513045cbd9395bb1fc806be7c099b9a17e163b21b",
+    "sha256": "d25d7a5f85e229aba61f73b513045cbd9395bb1fc806be7c099b9a17e163b21b"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Track/Track.swift",
+    "destination": "Sources/AttentiveRTC/Track/Track.swift",
+    "upstreamSHA256": "3a59f0e57560eb02f096b7b9838e8076925e99bccdce1d0af27dc8445cacb05f",
+    "sha256": "3a59f0e57560eb02f096b7b9838e8076925e99bccdce1d0af27dc8445cacb05f"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Track/Track+Equatable.swift",
+    "destination": "Sources/AttentiveRTC/Track/Track+Equatable.swift",
+    "upstreamSHA256": "72614edf3f42f507ca3d9d8db2084712bce3bc72e6542df0ab6171d93979980c",
+    "sha256": "72614edf3f42f507ca3d9d8db2084712bce3bc72e6542df0ab6171d93979980c"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Track/Track+MulticastDelegate.swift",
+    "destination": "Sources/AttentiveRTC/Track/Track+MulticastDelegate.swift",
+    "upstreamSHA256": "06d06c7f4a08e0f7d7bc6b1c921372329b1d615d1b6648d326e4ad32fcc18adf",
+    "sha256": "06d06c7f4a08e0f7d7bc6b1c921372329b1d615d1b6648d326e4ad32fcc18adf"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Track/VideoTrack.swift",
+    "destination": "Sources/AttentiveRTC/Track/VideoTrack.swift",
+    "upstreamSHA256": "57d71024ff48ebca418a44538e8a63fbb1941ca295952bfbd4b36cce93fdd82d",
+    "sha256": "57d71024ff48ebca418a44538e8a63fbb1941ca295952bfbd4b36cce93fdd82d"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/TrackPublications/LocalTrackPublication.swift",
+    "destination": "Sources/AttentiveRTC/TrackPublications/LocalTrackPublication.swift",
+    "upstreamSHA256": "e551509b59d91a1f0ae5954a13250a9b2bb3194a633190a840cb8070ddd7771e",
+    "sha256": "e551509b59d91a1f0ae5954a13250a9b2bb3194a633190a840cb8070ddd7771e"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/TrackPublications/RemoteTrackPublication.swift",
+    "destination": "Sources/AttentiveRTC/TrackPublications/RemoteTrackPublication.swift",
+    "upstreamSHA256": "21ee7ed4117b60c4396a49c34b3ff80f168cde05749631489c91f9ca0edfdedd",
+    "sha256": "21ee7ed4117b60c4396a49c34b3ff80f168cde05749631489c91f9ca0edfdedd"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/TrackPublications/TrackPublication.swift",
+    "destination": "Sources/AttentiveRTC/TrackPublications/TrackPublication.swift",
+    "upstreamSHA256": "0d522452fb7ef9287452bc6ac16ab81938d12d0d6a10bc11ca7c4e1e55d8b1ce",
+    "sha256": "772b234f73cc058844830abe25910caa8a5aa54d78646d332ccc36c8fc62159f"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/TrackPublications/TrackPublication+Equatable.swift",
+    "destination": "Sources/AttentiveRTC/TrackPublications/TrackPublication+Equatable.swift",
+    "upstreamSHA256": "c6ab748bc57a11b694eaf2eeefd51c4dc8bf28a248364d63887febbe98cbe9c1",
+    "sha256": "c6ab748bc57a11b694eaf2eeefd51c4dc8bf28a248364d63887febbe98cbe9c1"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/TrackPublications/TrackPublication+Identifiable.swift",
+    "destination": "Sources/AttentiveRTC/TrackPublications/TrackPublication+Identifiable.swift",
+    "upstreamSHA256": "5a959a8bc9b5408a71b2ed01a9b1c58c5965307a4813ab1eae4a357d773f4881",
+    "sha256": "5a959a8bc9b5408a71b2ed01a9b1c58c5965307a4813ab1eae4a357d773f4881"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Types/Attributes/AttributeTypings.swift",
+    "destination": "Sources/AttentiveRTC/Types/Attributes/AttributeTypings.swift",
+    "upstreamSHA256": "43c72cab93bb33e826b8d94335bdfa3fb031b4beb0750dcf5973526b3e2717b9",
+    "sha256": "43c72cab93bb33e826b8d94335bdfa3fb031b4beb0750dcf5973526b3e2717b9"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Types/AudioBuffer.swift",
+    "destination": "Sources/AttentiveRTC/Types/AudioBuffer.swift",
+    "upstreamSHA256": "9fb92228fac17c346570331734381d71db5a2b5bedddeba9a12cd8fa93cbbb0a",
+    "sha256": "9fb92228fac17c346570331734381d71db5a2b5bedddeba9a12cd8fa93cbbb0a"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Types/AudioDevice.swift",
+    "destination": "Sources/AttentiveRTC/Types/AudioDevice.swift",
+    "upstreamSHA256": "09113ac9646a6448c0e63536c811a34d0e9f495c3387294b88dfeda29f03f41e",
+    "sha256": "09113ac9646a6448c0e63536c811a34d0e9f495c3387294b88dfeda29f03f41e"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Types/AudioDuckingLevel.swift",
+    "destination": "Sources/AttentiveRTC/Types/AudioDuckingLevel.swift",
+    "upstreamSHA256": "aa7a235c9338d92ceeeeeb7845a8d804e953259a901e6bf6c000714f2b6d66c9",
+    "sha256": "aa7a235c9338d92ceeeeeb7845a8d804e953259a901e6bf6c000714f2b6d66c9"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Types/AudioEncoding.swift",
+    "destination": "Sources/AttentiveRTC/Types/AudioEncoding.swift",
+    "upstreamSHA256": "86d8eff738a488e32a09076763ffb2bc834fcc79e62be1a3fc3884082315ecbb",
+    "sha256": "86d8eff738a488e32a09076763ffb2bc834fcc79e62be1a3fc3884082315ecbb"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Types/AudioEncoding+Comparable.swift",
+    "destination": "Sources/AttentiveRTC/Types/AudioEncoding+Comparable.swift",
+    "upstreamSHA256": "1232207d661f3b0079ed951dafb5a6d4af851ed5d42d4e4cdfb02a10519a2c2e",
+    "sha256": "1232207d661f3b0079ed951dafb5a6d4af851ed5d42d4e4cdfb02a10519a2c2e"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Types/AudioEngineAvailability.swift",
+    "destination": "Sources/AttentiveRTC/Types/AudioEngineAvailability.swift",
+    "upstreamSHA256": "dd7450286d390359a817e5b711ae29bb3d5e6734e9c26189b6a3221469e5335d",
+    "sha256": "dd7450286d390359a817e5b711ae29bb3d5e6734e9c26189b6a3221469e5335d"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Types/AudioProcessingModes.swift",
+    "destination": "Sources/AttentiveRTC/Types/AudioProcessingModes.swift",
+    "upstreamSHA256": "fc12fe8f1de88e8a19bef58e6125cd4e55324a0193b716e74e2269a4040369e3",
+    "sha256": "fc12fe8f1de88e8a19bef58e6125cd4e55324a0193b716e74e2269a4040369e3"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Types/AudioProcessingOptions.swift",
+    "destination": "Sources/AttentiveRTC/Types/AudioProcessingOptions.swift",
+    "upstreamSHA256": "3345fb04197e2ec4b27910b22197045058c00c8df8b66e0604c45f8035e731c0",
+    "sha256": "3345fb04197e2ec4b27910b22197045058c00c8df8b66e0604c45f8035e731c0"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Types/AudioProcessingOptionsError.swift",
+    "destination": "Sources/AttentiveRTC/Types/AudioProcessingOptionsError.swift",
+    "upstreamSHA256": "1cdf120b83fbb5886947a550ef3b4239480a4bc7fa891b60cead14643c1cbdcf",
+    "sha256": "1cdf120b83fbb5886947a550ef3b4239480a4bc7fa891b60cead14643c1cbdcf"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Types/AudioSessionConfiguration.swift",
+    "destination": "Sources/AttentiveRTC/Types/AudioSessionConfiguration.swift",
+    "upstreamSHA256": "5b00014ddffd78b4fbbaa6ba84f2bb4ed6071e460841d943feabbc8e5e46d690",
+    "sha256": "5b00014ddffd78b4fbbaa6ba84f2bb4ed6071e460841d943feabbc8e5e46d690"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Types/ClientProtocol.swift",
+    "destination": "Sources/AttentiveRTC/Types/ClientProtocol.swift",
+    "upstreamSHA256": "cd3d20f6236ff70b25ca8adbac7cd7a330fdee9d301507c03515ffd03e528205",
+    "sha256": "cd3d20f6236ff70b25ca8adbac7cd7a330fdee9d301507c03515ffd03e528205"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Types/Codec/Codec.swift",
+    "destination": "Sources/AttentiveRTC/Types/Codec/Codec.swift",
+    "upstreamSHA256": "1a3bf03b81f077593e216c5453247ff3ae6ef74d149ed609f67f1d70c0ee9df3",
+    "sha256": "1a3bf03b81f077593e216c5453247ff3ae6ef74d149ed609f67f1d70c0ee9df3"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Types/Codec/VideoCodec.swift",
+    "destination": "Sources/AttentiveRTC/Types/Codec/VideoCodec.swift",
+    "upstreamSHA256": "a0b18f9a48fd10609e4ea6fe9ce0729df219f1ee90965c5c8e6d176cd5952518",
+    "sha256": "a0b18f9a48fd10609e4ea6fe9ce0729df219f1ee90965c5c8e6d176cd5952518"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Types/ConnectionQuality.swift",
+    "destination": "Sources/AttentiveRTC/Types/ConnectionQuality.swift",
+    "upstreamSHA256": "8d4bdc85964dc1c864af9f8340fe2ee0774f72a4cd9c9667220f5f34c8a225b6",
+    "sha256": "8d4bdc85964dc1c864af9f8340fe2ee0774f72a4cd9c9667220f5f34c8a225b6"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Types/ConnectionState.swift",
+    "destination": "Sources/AttentiveRTC/Types/ConnectionState.swift",
+    "upstreamSHA256": "12b0ba16b74be4267e604e30e6b0db8acfe8ac54e90dfe86bc16e0133bfa482f",
+    "sha256": "12b0ba16b74be4267e604e30e6b0db8acfe8ac54e90dfe86bc16e0133bfa482f"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Types/DegradationPreference.swift",
+    "destination": "Sources/AttentiveRTC/Types/DegradationPreference.swift",
+    "upstreamSHA256": "139520a2f860b34f9afa25e9a2acf52dcaa34b6f15eeca23cf9c0833b43b5d7a",
+    "sha256": "139520a2f860b34f9afa25e9a2acf52dcaa34b6f15eeca23cf9c0833b43b5d7a"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Types/Dimensions.swift",
+    "destination": "Sources/AttentiveRTC/Types/Dimensions.swift",
+    "upstreamSHA256": "156c78a24047d4d1e6a0690efc2139e3a4544ac3c49ea7a955c70be7820c8920",
+    "sha256": "156c78a24047d4d1e6a0690efc2139e3a4544ac3c49ea7a955c70be7820c8920"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Types/IceCandidate.swift",
+    "destination": "Sources/AttentiveRTC/Types/IceCandidate.swift",
+    "upstreamSHA256": "ba11c85f543c11ff2f853274698fe4a6d83a988d83e345e9d84a7a75e0f66674",
+    "sha256": "ba11c85f543c11ff2f853274698fe4a6d83a988d83e345e9d84a7a75e0f66674"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Types/IceServer.swift",
+    "destination": "Sources/AttentiveRTC/Types/IceServer.swift",
+    "upstreamSHA256": "af6c06c4ab6e072942a7c720ad2fbb796b0a56b4ead830b4d3a6969f803b27db",
+    "sha256": "af6c06c4ab6e072942a7c720ad2fbb796b0a56b4ead830b4d3a6969f803b27db"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Types/IceTransportPolicy.swift",
+    "destination": "Sources/AttentiveRTC/Types/IceTransportPolicy.swift",
+    "upstreamSHA256": "1e648a2d88ac8c0348317f6d87938247ba655a5cd244e13eb88a8c2028bfbead",
+    "sha256": "1e648a2d88ac8c0348317f6d87938247ba655a5cd244e13eb88a8c2028bfbead"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Types/MediaDevice.swift",
+    "destination": "Sources/AttentiveRTC/Types/MediaDevice.swift",
+    "upstreamSHA256": "d07c5d198f12450feb69286c4e8020004110492ef44c5691dad786ad02037ca9",
+    "sha256": "d07c5d198f12450feb69286c4e8020004110492ef44c5691dad786ad02037ca9"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Types/Options/ARCameraCaptureOptions.swift",
+    "destination": "Sources/AttentiveRTC/Types/Options/ARCameraCaptureOptions.swift",
+    "upstreamSHA256": "35b19b91a04f0be19d8a76bf85b71a1d9550d985c6d1e75aba95f10d39b6ee30",
+    "sha256": "35b19b91a04f0be19d8a76bf85b71a1d9550d985c6d1e75aba95f10d39b6ee30"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Types/Options/AudioCaptureOptions.swift",
+    "destination": "Sources/AttentiveRTC/Types/Options/AudioCaptureOptions.swift",
+    "upstreamSHA256": "25187a46aafed7cbac4504f38a2f85782b702c4052486c0d463dd8ed191f96d8",
+    "sha256": "25187a46aafed7cbac4504f38a2f85782b702c4052486c0d463dd8ed191f96d8"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Types/Options/AudioPublishOptions.swift",
+    "destination": "Sources/AttentiveRTC/Types/Options/AudioPublishOptions.swift",
+    "upstreamSHA256": "4013a9414d7b5b9e3f8d2803a6e518941f98c442b5a4d76ee0f798588ba28942",
+    "sha256": "4013a9414d7b5b9e3f8d2803a6e518941f98c442b5a4d76ee0f798588ba28942"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Types/Options/BufferCaptureOptions.swift",
+    "destination": "Sources/AttentiveRTC/Types/Options/BufferCaptureOptions.swift",
+    "upstreamSHA256": "186fd8c420cb752fb794b7967af2dc87075bdf72eabd2af6fe1ebb9051739e97",
+    "sha256": "186fd8c420cb752fb794b7967af2dc87075bdf72eabd2af6fe1ebb9051739e97"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Types/Options/CameraCaptureOptions.swift",
+    "destination": "Sources/AttentiveRTC/Types/Options/CameraCaptureOptions.swift",
+    "upstreamSHA256": "de85a6ebb7941fe57fcf5ef7d8215839402e526b5976f08504fc09bf3851e67f",
+    "sha256": "de85a6ebb7941fe57fcf5ef7d8215839402e526b5976f08504fc09bf3851e67f"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Types/Options/CameraCaptureOptions+Copy.swift",
+    "destination": "Sources/AttentiveRTC/Types/Options/CameraCaptureOptions+Copy.swift",
+    "upstreamSHA256": "40b536565537f215d5c8018e1c5e29f2a532e4df74b7db116855314f6d9f3a27",
+    "sha256": "40b536565537f215d5c8018e1c5e29f2a532e4df74b7db116855314f6d9f3a27"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Types/Options/CaptureOptions.swift",
+    "destination": "Sources/AttentiveRTC/Types/Options/CaptureOptions.swift",
+    "upstreamSHA256": "37811cbb926f03b131ff8599b21e7b61f1401ca112cbba62e78225ce118a9ef7",
+    "sha256": "37811cbb926f03b131ff8599b21e7b61f1401ca112cbba62e78225ce118a9ef7"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Types/Options/ConnectOptions.swift",
+    "destination": "Sources/AttentiveRTC/Types/Options/ConnectOptions.swift",
+    "upstreamSHA256": "82a7898204b0475d1dec019af0e43f46df58ed4faeb040829fc27c0497a4d8de",
+    "sha256": "82a7898204b0475d1dec019af0e43f46df58ed4faeb040829fc27c0497a4d8de"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Types/Options/ConnectOptions+Copy.swift",
+    "destination": "Sources/AttentiveRTC/Types/Options/ConnectOptions+Copy.swift",
+    "upstreamSHA256": "beb9c638420c3e0409c682fcbadad5f7afa18e9299fc08aea9ab30a8f93cea92",
+    "sha256": "beb9c638420c3e0409c682fcbadad5f7afa18e9299fc08aea9ab30a8f93cea92"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Types/Options/DataPublishOptions.swift",
+    "destination": "Sources/AttentiveRTC/Types/Options/DataPublishOptions.swift",
+    "upstreamSHA256": "14d7899043dac7b749b691c9ab1e4a1e223f5a048821d36c57ce6d6af9d7b158",
+    "sha256": "14d7899043dac7b749b691c9ab1e4a1e223f5a048821d36c57ce6d6af9d7b158"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Types/Options/PublishOptions.swift",
+    "destination": "Sources/AttentiveRTC/Types/Options/PublishOptions.swift",
+    "upstreamSHA256": "18a244111ec872107213d929dc84f664e9d7d7ed84f7f44e55e24d302ba2feb5",
+    "sha256": "18a244111ec872107213d929dc84f664e9d7d7ed84f7f44e55e24d302ba2feb5"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Types/Options/RoomOptions.swift",
+    "destination": "Sources/AttentiveRTC/Types/Options/RoomOptions.swift",
+    "upstreamSHA256": "acea7b2abf06519b327d04672c1a07b9c2c81b9738ae60d11d4a1404c03bcd08",
+    "sha256": "acea7b2abf06519b327d04672c1a07b9c2c81b9738ae60d11d4a1404c03bcd08"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Types/Options/ScreenShareCaptureOptions.swift",
+    "destination": "Sources/AttentiveRTC/Types/Options/ScreenShareCaptureOptions.swift",
+    "upstreamSHA256": "cab5ef805fb1227b32784cab39419a6c0f93987db6d8cc670c7e94041ddb368a",
+    "sha256": "cab5ef805fb1227b32784cab39419a6c0f93987db6d8cc670c7e94041ddb368a"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Types/Options/VideoCaptureOptions.swift",
+    "destination": "Sources/AttentiveRTC/Types/Options/VideoCaptureOptions.swift",
+    "upstreamSHA256": "a23359a6978641a471900d56d07ff5736adb3ec7db7503601c577247a3935760",
+    "sha256": "a23359a6978641a471900d56d07ff5736adb3ec7db7503601c577247a3935760"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Types/Options/VideoPublishOptions.swift",
+    "destination": "Sources/AttentiveRTC/Types/Options/VideoPublishOptions.swift",
+    "upstreamSHA256": "9f47251ab098b14aa3a86d075c024a8a4cdba9d83b9a91ca390daecaa40c6951",
+    "sha256": "9f47251ab098b14aa3a86d075c024a8a4cdba9d83b9a91ca390daecaa40c6951"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Types/Participant+Types.swift",
+    "destination": "Sources/AttentiveRTC/Types/Participant+Types.swift",
+    "upstreamSHA256": "5f69ef23542e4fb6c170e4334bd825c0c1883ba709950104064b4dd9e93e4f09",
+    "sha256": "5f69ef23542e4fb6c170e4334bd825c0c1883ba709950104064b4dd9e93e4f09"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Types/ParticipantPermissions.swift",
+    "destination": "Sources/AttentiveRTC/Types/ParticipantPermissions.swift",
+    "upstreamSHA256": "6ed04420366fe83a65fdc69cd28479b7862cb9463ebfb07d08f241e77a898ad5",
+    "sha256": "6ed04420366fe83a65fdc69cd28479b7862cb9463ebfb07d08f241e77a898ad5"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Types/ParticipantState.swift",
+    "destination": "Sources/AttentiveRTC/Types/ParticipantState.swift",
+    "upstreamSHA256": "3df1e116edbf518b8ede171175a82371601897c652680e340ddc5e09869fc56b",
+    "sha256": "3df1e116edbf518b8ede171175a82371601897c652680e340ddc5e09869fc56b"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Types/ParticipantTrackPermission.swift",
+    "destination": "Sources/AttentiveRTC/Types/ParticipantTrackPermission.swift",
+    "upstreamSHA256": "9d7d05a13cb478ad14c85466c236c64408653a6638bff5cda45bb945404b8e7c",
+    "sha256": "9d7d05a13cb478ad14c85466c236c64408653a6638bff5cda45bb945404b8e7c"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Types/Priority.swift",
+    "destination": "Sources/AttentiveRTC/Types/Priority.swift",
+    "upstreamSHA256": "78e425fe98c0d61777bf809f02dd93bf214500b692e69fb6c3781e37841b4ee2",
+    "sha256": "78e425fe98c0d61777bf809f02dd93bf214500b692e69fb6c3781e37841b4ee2"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Types/ProtocolVersion.swift",
+    "destination": "Sources/AttentiveRTC/Types/ProtocolVersion.swift",
+    "upstreamSHA256": "0acce647c60f0b0fec22055732d0397c53c3470922f5baea44ebc654c3edf69c",
+    "sha256": "0acce647c60f0b0fec22055732d0397c53c3470922f5baea44ebc654c3edf69c"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Types/RegionInfo.swift",
+    "destination": "Sources/AttentiveRTC/Types/RegionInfo.swift",
+    "upstreamSHA256": "4ca92d03946610cfd4c5b887cb9d3418067e73d5ff7e9462b4939f46934ce93a",
+    "sha256": "4ca92d03946610cfd4c5b887cb9d3418067e73d5ff7e9462b4939f46934ce93a"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Types/Room+Types.swift",
+    "destination": "Sources/AttentiveRTC/Types/Room+Types.swift",
+    "upstreamSHA256": "9089b2a7f1cfecefb55b2ecbb536315de853e8d1236544c234841151094ee18b",
+    "sha256": "9089b2a7f1cfecefb55b2ecbb536315de853e8d1236544c234841151094ee18b"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Types/RoomConfiguration.swift",
+    "destination": "Sources/AttentiveRTC/Types/RoomConfiguration.swift",
+    "upstreamSHA256": "0dcfc5cac14bc834248ea765a3bacd889cdf998ea045cbc15e0418939dabbc9f",
+    "sha256": "0dcfc5cac14bc834248ea765a3bacd889cdf998ea045cbc15e0418939dabbc9f"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Types/ScalabilityMode.swift",
+    "destination": "Sources/AttentiveRTC/Types/ScalabilityMode.swift",
+    "upstreamSHA256": "5dc15ab984fef1da8cd56e889b268287b2996cf305b211539c6685eea1d25b24",
+    "sha256": "5dc15ab984fef1da8cd56e889b268287b2996cf305b211539c6685eea1d25b24"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Types/SessionDescription.swift",
+    "destination": "Sources/AttentiveRTC/Types/SessionDescription.swift",
+    "upstreamSHA256": "58df1343f53084baccb276af179762b1bc1cc927aaa43bb9a7e12c9a438ba901",
+    "sha256": "58df1343f53084baccb276af179762b1bc1cc927aaa43bb9a7e12c9a438ba901"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Types/SpeechActivityEvent.swift",
+    "destination": "Sources/AttentiveRTC/Types/SpeechActivityEvent.swift",
+    "upstreamSHA256": "012f329d5c0f7723d9a40c94d1610f146a8abe4b2f5639aedb0e5cdf5658bab2",
+    "sha256": "012f329d5c0f7723d9a40c94d1610f146a8abe4b2f5639aedb0e5cdf5658bab2"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Types/Statistics.swift",
+    "destination": "Sources/AttentiveRTC/Types/Statistics.swift",
+    "upstreamSHA256": "c357bb2fcc480871d8f9238ecc541e1e583fcba9cb9bdbeb975d608e18a58054",
+    "sha256": "c357bb2fcc480871d8f9238ecc541e1e583fcba9cb9bdbeb975d608e18a58054"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Types/Track+Types.swift",
+    "destination": "Sources/AttentiveRTC/Types/Track+Types.swift",
+    "upstreamSHA256": "3ea8bc9c1bc17bec3802ff7d668cef06103d80fe83fc2ca204c1e7d691459e2b",
+    "sha256": "3ea8bc9c1bc17bec3802ff7d668cef06103d80fe83fc2ca204c1e7d691459e2b"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Types/TrackSettings.swift",
+    "destination": "Sources/AttentiveRTC/Types/TrackSettings.swift",
+    "upstreamSHA256": "87a8d3090e6f737c317c9e2ca23461a8298c85a4ed02e00c2acc3aac1169eda5",
+    "sha256": "87a8d3090e6f737c317c9e2ca23461a8298c85a4ed02e00c2acc3aac1169eda5"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Types/TrackSource.swift",
+    "destination": "Sources/AttentiveRTC/Types/TrackSource.swift",
+    "upstreamSHA256": "2d9bc8ed8638e34527856d1c53d586ef4ba183467c5798c0c37d00bce158708a",
+    "sha256": "2d9bc8ed8638e34527856d1c53d586ef4ba183467c5798c0c37d00bce158708a"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Types/TrackStatistics.swift",
+    "destination": "Sources/AttentiveRTC/Types/TrackStatistics.swift",
+    "upstreamSHA256": "706383020c60d23d6de2a38224cd1bf2ffc85872992a3aa629c70186623ccb04",
+    "sha256": "706383020c60d23d6de2a38224cd1bf2ffc85872992a3aa629c70186623ccb04"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Types/TrackStreamState.swift",
+    "destination": "Sources/AttentiveRTC/Types/TrackStreamState.swift",
+    "upstreamSHA256": "1a95a4dd79b0b22ecf2e5a9d9a33710f75cbe43d4bb187f12c46dbc7f7caf7de",
+    "sha256": "1a95a4dd79b0b22ecf2e5a9d9a33710f75cbe43d4bb187f12c46dbc7f7caf7de"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Types/TrackType.swift",
+    "destination": "Sources/AttentiveRTC/Types/TrackType.swift",
+    "upstreamSHA256": "4675eb6e496ae290f4cff3f504034122dd7b200a3c32e92d46d804ebf9aa1164",
+    "sha256": "4675eb6e496ae290f4cff3f504034122dd7b200a3c32e92d46d804ebf9aa1164"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Types/TranscriptionSegment.swift",
+    "destination": "Sources/AttentiveRTC/Types/TranscriptionSegment.swift",
+    "upstreamSHA256": "a3eea0d1a2f00e1790f60adad1d27830e6f4c5a28b52c6939feb531f1b8da71f",
+    "sha256": "a3eea0d1a2f00e1790f60adad1d27830e6f4c5a28b52c6939feb531f1b8da71f"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Types/VideoEncoding.swift",
+    "destination": "Sources/AttentiveRTC/Types/VideoEncoding.swift",
+    "upstreamSHA256": "e2d1b0b09f324698a4ff12d28fa05d50069a0fa81917d29ef539f91e96218417",
+    "sha256": "e2d1b0b09f324698a4ff12d28fa05d50069a0fa81917d29ef539f91e96218417"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Types/VideoEncoding+Comparable.swift",
+    "destination": "Sources/AttentiveRTC/Types/VideoEncoding+Comparable.swift",
+    "upstreamSHA256": "63d27e6d1cde94ea60c66c59944d85ce3120cbce00dfb5849f4078d021561db9",
+    "sha256": "63d27e6d1cde94ea60c66c59944d85ce3120cbce00dfb5849f4078d021561db9"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Types/VideoFrame.swift",
+    "destination": "Sources/AttentiveRTC/Types/VideoFrame.swift",
+    "upstreamSHA256": "6513e37fb78001dbc2ce7006159c7cdad9416a6b51b5ca887cdc0af39f5b8af3",
+    "sha256": "6513e37fb78001dbc2ce7006159c7cdad9416a6b51b5ca887cdc0af39f5b8af3"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Types/VideoParameters.swift",
+    "destination": "Sources/AttentiveRTC/Types/VideoParameters.swift",
+    "upstreamSHA256": "ea8069e56061f162a8aa19428907239293633cb6ac03069cde79d0a914650565",
+    "sha256": "ea8069e56061f162a8aa19428907239293633cb6ac03069cde79d0a914650565"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Types/VideoParameters+Comparable.swift",
+    "destination": "Sources/AttentiveRTC/Types/VideoParameters+Comparable.swift",
+    "upstreamSHA256": "df53a399b52efb88b3b91f3789e654bf3ea48a30cafbae462e2c4bc9f66bf07d",
+    "sha256": "df53a399b52efb88b3b91f3789e654bf3ea48a30cafbae462e2c4bc9f66bf07d"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Types/VideoQuality.swift",
+    "destination": "Sources/AttentiveRTC/Types/VideoQuality.swift",
+    "upstreamSHA256": "b4497a5e6080503090137112b6145c2a9d14a6cf84dec5f68983cff1127455a0",
+    "sha256": "b4497a5e6080503090137112b6145c2a9d14a6cf84dec5f68983cff1127455a0"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Types/VideoRotation.swift",
+    "destination": "Sources/AttentiveRTC/Types/VideoRotation.swift",
+    "upstreamSHA256": "ce9ac61ad5dc1d6bfa8eba0902c19e5b30242956061985c07a497b5b3840b1e7",
+    "sha256": "ce9ac61ad5dc1d6bfa8eba0902c19e5b30242956061985c07a497b5b3840b1e7"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/VideoProcessors/BackgroundBlurVideoProcessor.swift",
+    "destination": "Sources/AttentiveRTC/VideoProcessors/BackgroundBlurVideoProcessor.swift",
+    "upstreamSHA256": "6c7ac6fcd90afeb1b030ff5b6129f5d70e0241815819fbb4129df83d562031fe",
+    "sha256": "6c7ac6fcd90afeb1b030ff5b6129f5d70e0241815819fbb4129df83d562031fe"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Views/SampleBufferVideoRenderer.swift",
+    "destination": "Sources/AttentiveRTC/Views/SampleBufferVideoRenderer.swift",
+    "upstreamSHA256": "6ce195f1eea678c71c141d11614a991fdde0fb4e0067e674bcb781c5f953a2ef",
+    "sha256": "6ce195f1eea678c71c141d11614a991fdde0fb4e0067e674bcb781c5f953a2ef"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Views/VideoView.swift",
+    "destination": "Sources/AttentiveRTC/Views/VideoView.swift",
+    "upstreamSHA256": "5c040a316f4bf3f1dfaaf71b5f5003653898fd532300d8d8308ee7af18defd66",
+    "sha256": "5c040a316f4bf3f1dfaaf71b5f5003653898fd532300d8d8308ee7af18defd66"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Views/VideoView+MulticastDelegate.swift",
+    "destination": "Sources/AttentiveRTC/Views/VideoView+MulticastDelegate.swift",
+    "upstreamSHA256": "61e677712bae5d82b87a458a11d470f9417e9ec8ae994308018ee34c3d3e3820",
+    "sha256": "61e677712bae5d82b87a458a11d470f9417e9ec8ae994308018ee34c3d3e3820"
+  },
+  {
+    "component": "client",
+    "source": "Sources/LiveKit/Views/VideoView+PinchToZoom.swift",
+    "destination": "Sources/AttentiveRTC/Views/VideoView+PinchToZoom.swift",
+    "upstreamSHA256": "721a8d78c76905ae55b4c7f6a0f1f5a8c3b66ef110b9cc8e6925fbad3f13be65",
+    "sha256": "721a8d78c76905ae55b4c7f6a0f1f5a8c3b66ef110b9cc8e6925fbad3f13be65"
+  }
+]

@@ -21,7 +21,9 @@ Use AttentiveVoice for headless integration. When using the provided caller UI,
 also link AttentiveVoiceUI and embed AttentiveCallerView. Keep the call instance
 in the host's main-actor model and pass a binding to CallRequest. The UI product
 requires iOS 17; the core supports iOS 16. Do not copy the sample's caller views
-into this app or import LiveKit in application code.
+into this app or import internal transport modules in application code.
+AttentiveRTC is a vendored implementation, not a supported customer API.
+Do not add an upstream SDK package; preserve the provided pins and notices.
 
 Let me choose my own UI or the optional caller UI before changing the app's
 design. Configure branding, avatar and tool display labels in
@@ -37,7 +39,7 @@ the same normalized email for enrollment and calls. Never replace a real
 voiceprint with test audio. Never retry a banking transaction automatically.
 
 Do not change server models, credentials, authentication policy, VAD, turn
-timing, LiveKit transport or remote infrastructure while integrating the UI.
+timing, realtime transport or remote infrastructure while integrating the UI.
 gRPC, a raw-audio gateway and Android are roadmap items, not existing APIs.
 Do not present the current public POC bootstrap as production-hardened.
 

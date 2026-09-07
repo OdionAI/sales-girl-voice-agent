@@ -1,0 +1,5 @@
+// Modified by Odion AI for Attentive: namespace-only changes; see upstream.json.
+module AttentiveObjCHelpers {
+    header "include/AttentiveObjCHelpers.h"
+    export *
+}

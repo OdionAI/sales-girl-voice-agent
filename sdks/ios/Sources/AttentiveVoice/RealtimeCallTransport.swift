@@ -1,9 +1,9 @@
 import AVFoundation
 import Foundation
-internal import LiveKit
+internal import AttentiveRTC
 
 @MainActor
-final class LiveKitCallTransport: NSObject, CallTransport {
+final class RealtimeCallTransport: NSObject, CallTransport {
     var onEvent: ((CallEvent) -> Void)?
     private let room = Room()
     private var closing = false
@@ -63,7 +63,7 @@ final class LiveKitCallTransport: NSObject, CallTransport {
     }
 }
 
-extension LiveKitCallTransport: RoomDelegate {
+extension RealtimeCallTransport: RoomDelegate {
     nonisolated func room(_ room: Room, didUpdateConnectionState state: ConnectionState, from oldState: ConnectionState) {
         Task { @MainActor [weak self] in
             guard let self, !self.closing else { return }

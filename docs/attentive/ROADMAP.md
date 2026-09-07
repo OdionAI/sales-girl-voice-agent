@@ -15,8 +15,25 @@ known intermittent STT/DNS or TTS issues are fixed.
 | Make sample consume the public UI product | Complete locally | No copied caller panels, theme or avatar in the app target; live chat call UI test passed |
 | Configure branding and retain enrollment/auth/tool UI | Complete locally | Four iOS UI tests passed, covering Wema/generic layout, enrollment cancellation and live call controls; live voice checks still require manual testing |
 | Human and coding-agent integration instructions | Complete locally | `CALLER_UI.md` and `INTEGRATION_AGENT.md`; local-package instructions and explicit release limitations |
+| Attentive-branded Swift transport fork | Implemented locally | Pinned `AttentiveRTC` source, unchanged public products, reproducible namespace-only import and preserved notices; see `IOS_TRANSPORT_FORK.md` |
 
 ## Follow-Up Work
+
+### SDK Side-Conversation Resume
+
+The SDK work resumed independently from checkpoint
+`d7b639c37078bd1620567014ce66611f64be4ee7` on `attentive-ios-sdk`. Pre-fork scope
+and rollback were committed as `dd128c6`. The RVC integration remains in its own
+worktree; this SDK change does not merge it or change backend services.
+
+The approved local fork keeps the existing WebRTC implementation as internal
+`AttentiveRTC`. No new audio engine or gateway hop is introduced. Customer APIs
+remain `AttentiveVoice` and optional `AttentiveVoiceUI`. Native artifact names and
+required credits remain visible. Before customer distribution, build and test a
+compiled XCFramework package if implementation-source hiding is required; audit
+its exported interfaces, embedded dependencies, resources, notices and signing.
+Do not claim all upstream traces can be removed. Publishing and any native media
+rebuild/rebranding remain separate, uncompleted release work.
 
 ### SDK Pause for Speculative Harness Evaluation
 
@@ -49,7 +66,7 @@ current change. Implement and verify them separately, preserving existing calls.
 
 | Order | Deliverable | Scope and release gate | Status |
 | --- | --- | --- | --- |
-| 1 | Distributable iOS package | Select/approve package repository, publish a version, validate remote SwiftPM installation, pin dependencies, preserve notices, test documentation snippets and an external consumer app | Planned |
+| 1 | Distributable iOS package | Select/approve package repository; build/validate compiled distribution; publish a version; validate remote SwiftPM installation, notices, tested snippets and an external consumer app | Source fork/pins/notices implemented locally; binary packaging and publication planned |
 | 2 | Production call API boundary | Versioned session API, tenant/agent/caller identity binding, scoped short-lived credentials, enrollment protection, rate/payload/session limits, sanitized events/errors; retain both voice checks and transaction confirmation | Planned |
 | 3 | Attentive streaming gateway | API-only audio input/output without a customer-side LiveKit dependency; initially bridge to existing internal rooms/workers; preserve auth, tools, transcripts, interruption and recording association | Planned; design and latency benchmark first |
 | 4 | gRPC audio API | Bidirectional native/server audio and events, protobuf contract, generated clients, deadlines, backpressure, cancellation, safe reconnect and examples; share gateway internals | Planned |
@@ -71,8 +88,8 @@ alternative, not an additional committed deliverable.
 - API-only customers implement device capture/playback; SDK customers use our
   implementation. The caller UI remains optional in both product positioning
   and package dependencies.
-- No customer must operate a LiveKit account. A wrapper may contain LiveKit as a
-  disclosed dependency; the proposed gateway keeps its protocol server-side.
+- No customer must operate a LiveKit account. The source fork retains its
+  attribution and protocol; the proposed gateway keeps that protocol server-side.
 - Keep the existing dashboard, model choices, turn-taking parameters, voice-auth
   gates, tools and server startup configurations unchanged during extraction.
 - Gateway latency and audio quality must be measured, not assumed better.

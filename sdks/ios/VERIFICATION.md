@@ -326,3 +326,34 @@ To undo networking, verify PID `75213` still belongs to
 worker or the dashboard. Close the sample and remove `ATTENTIVE_LOCAL_DEVICE`
 from its launch environment. Device reproduction and the foreground forwarder
 command are in `Examples/AttentiveSample/README.md`.
+
+## Attentive Transport Source Fork - September 7, 2026
+
+SDK-side work only, on `attentive-ios-sdk`. Baseline `d7b639c`; pre-change scope
+checkpoint `dd128c6`. The independent RVC worktree and running services were not
+touched. See `docs/attentive/IOS_TRANSPORT_FORK.md` in the repository.
+
+| Check | Result |
+| --- | --- |
+| Baseline `swift test --package-path sdks/ios` | 39 passed |
+| Post-fork Swift tests, including original Swift 6 transport/bindings language modes | 39 passed |
+| `node script/vendor_transport.mjs --check .build/checkouts` from SDK root | 293 files match pinned Git objects/native license after documented substitutions |
+| `node script/verify_transport.mjs` | Passed: source hashes, both lockfiles, exact native URLs/checksums, Attentive-only public products, private import boundary and resources |
+| Call adapter compared against checkpoint | Byte-identical except import/class naming |
+| iOS Simulator sample build, XcodeBuildMCP | Passed for iPhone 17 Pro / iOS 26.5, signing disabled |
+| Built app resource inspection | Apache LICENSE/NOTICE, broadcast attribution, bindings, protobuf and WebRTC licenses present |
+
+Final simulator build log:
+`~/Library/Developer/XcodeBuildMCP/workspaces/Odion-310a8d65ddb3/logs/build_sim_2026-09-07T21-39-55-665Z_pid50373_136fc276.log`.
+Derived products: `sdks/ios/.build/fork-sample`, ignored by Git. The vendored
+sources retain upstream deprecation warnings; they were not changed merely to
+silence diagnostics. The full staged whitespace check reports existing trailing
+whitespace in the generated FFI source and protobuf license. These bytes are
+preserved for source/license integrity; the non-vendored diff passes the check.
+
+No live call, physical-device installation, signing/distribution test or latency
+benchmark was done in this packaging step. Existing auth/tool/microphone tests
+are not a new end-to-end banking acceptance result. This source preview retains
+upstream native binary identifiers and legal provenance. Compiled XCFramework
+distribution, complete release-license/privacy review, native rebuild/rebranding
+and external installation remain separate release gates.

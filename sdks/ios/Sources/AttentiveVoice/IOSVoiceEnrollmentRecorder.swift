@@ -2,7 +2,7 @@
 import AVFoundation
 import Foundation
 
-/// Explicit, eight-second pre-call recording. Never runs as a LiveKit audio tap.
+/// Explicit, eight-second pre-call recording. Never taps the active call's audio.
 @MainActor
 public final class IOSVoiceEnrollmentRecorder: VoiceEnrollmentRecording {
     private var recorder: AVAudioRecorder?
@@ -28,7 +28,7 @@ public final class IOSVoiceEnrollmentRecorder: VoiceEnrollmentRecording {
         let category = session.category
         let mode = session.mode
         let options = session.categoryOptions
-        // Release and restore the pre-call audio session before handing control to LiveKit.
+        // Release and restore the pre-call audio session before handing control to the call transport.
         restoreSession = {
             try? session.setActive(false, options: .notifyOthersOnDeactivation)
             try? session.setCategory(category, mode: mode, options: options)
