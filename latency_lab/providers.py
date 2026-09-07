@@ -683,6 +683,14 @@ class RLLMClient:
                 )
 
 
+def tts_token_budget(text: str) -> int:
+    # Numeric strings can speak as many words: a ten-digit account is not one word.
+    spoken_words = max(1, len(text.split())) + sum(
+        len(digits) - 1 for digits in re.findall(r"[0-9]+", text)
+    )
+    return max(24, min(360, int((spoken_words / 2.5 + 0.5) * 12.5) + 8))
+
+
 class RTTSClient:
     def __init__(self, config: LabConfig, session: aiohttp.ClientSession) -> None:
         self.config = config
@@ -701,7 +709,7 @@ class RTTSClient:
             "stream": True,
             "stream_format": "audio",
             "initial_codec_chunk_frames": self.config.tts_initial_codec_chunk_frames,
-            "max_new_tokens": max(24, min(360, int((max(1, len(text.split())) / 2.5 + 0.5) * 12.5) + 8)),
+            "max_new_tokens": tts_token_budget(text),
         }
         if self.config.tts_voice:
             payload.update(

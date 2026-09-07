@@ -32,7 +32,7 @@ from .action_tools import (
     confirmation_prompt,
     explicit_end_call_intent,
 )
-from .providers import RLLMClient, RSTTClient, RTTSClient
+from .providers import RLLMClient, RSTTClient, RTTSClient, tts_token_budget
 from .trace import TraceRecorder
 from .banking_tools import BankingTools, BANK_TOOLS
 from .memory import ConversationMemory, CONVERSATION_RULES
@@ -1448,6 +1448,7 @@ class ConversationPipeline:
                 model_text=model_phrase if phrase != model_phrase else None,
                 held=not attempt.authorized,
                 initial_codec_chunk_frames=self.config.tts_initial_codec_chunk_frames,
+                max_new_tokens=tts_token_budget(phrase),
                 tts_voice=self.config.tts_voice or None,
                 phase=phase,
             )

@@ -26,9 +26,11 @@ from latency_lab.config import (
 from latency_lab.providers import (
     RLLMClient,
     RSTTClient,
+    RTTSClient,
     clean_transcript,
     frame_pcm16_chunks,
     pcm16_wav,
+    tts_token_budget,
 )
 from latency_lab.report import generate_report
 from latency_lab.trace import TraceRecorder
@@ -176,6 +178,58 @@ class AudioFramingTest(unittest.IsolatedAsyncioTestCase):
         framed = [chunk async for chunk in frame_pcm16_chunks(source())]
 
         self.assertEqual(b"".join(framed), b"\x01\x02\x03\x04")
+
+
+class TTSTokenBudgetTest(unittest.IsolatedAsyncioTestCase):
+    def test_digit_sequences_have_the_budget_of_individually_spoken_digits(self) -> None:
+        self.assertEqual(
+            tts_token_budget("0102030405"), tts_token_budget("0 1 0 2 0 3 0 4 0 5")
+        )
+        self.assertEqual(tts_token_budget("08012345678"), 69)
+        self.assertEqual(
+            tts_token_budget(
+                "Here they are one by one: 0102030405, 1020304050, "
+                "2030405060, 3040506070, and 4050607080."
+            ),
+            299,
+        )
+
+    def test_ordinary_speech_budgets_and_safety_limits_are_unchanged(self) -> None:
+        for text in ("", "Sure.", "Hello! How can I help you today?", "word " * 100):
+            with self.subTest(text=text):
+                old_budget = max(24, min(360, int((max(1, len(text.split())) / 2.5 + 0.5) * 12.5) + 8))
+                self.assertEqual(tts_token_budget(text), old_budget)
+        self.assertEqual(tts_token_budget("0123456789 " * 100), 360)
+
+    async def test_request_preserves_text_and_stream_settings(self) -> None:
+        text = "Account 0102030405 has 3,500.50 naira. Call +2348012345678."
+
+        async def chunks(*_args):
+            for chunk in (b"\x01", b"\x02\x03\x04"):
+                yield chunk
+
+        response = Mock()
+        response.headers = {"x-sample-rate": "24000"}
+        response.content.iter_chunked = chunks
+        session = SimpleNamespace(post=AsyncMock(return_value=response))
+        config = LabConfig(tts_voice="test-voice", tts_ref_audio="", tts_initial_codec_chunk_frames=4)
+        sample_rate, audio = await RTTSClient(config, session).stream(text)
+        self.assertEqual(b"".join([chunk async for chunk in audio]), b"\x01\x02\x03\x04")
+        self.assertEqual(sample_rate, 24000)
+        session.post.assert_awaited_once_with(config.tts_url, json={
+            "input": text,
+            "model": config.tts_model,
+            "language": config.tts_language,
+            "response_format": "pcm",
+            "stream": True,
+            "stream_format": "audio",
+            "initial_codec_chunk_frames": 4,
+            "max_new_tokens": tts_token_budget(text),
+            "task_type": "Base",
+            "voice": "test-voice",
+            "x_vector_only_mode": False,
+        })
+        response.release.assert_called_once()
 
 
 class LLMGatewayRecoveryTest(unittest.IsolatedAsyncioTestCase):
