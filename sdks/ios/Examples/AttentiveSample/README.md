@@ -112,12 +112,68 @@ Use `--generic-ui` to inspect the library's unbranded defaults with no enrollmen
 control or bank profile fields; this only changes presentation, never backend
 authorization. See the [UI integration guide](../../CALLER_UI.md).
 
-Insecure HTTP/WS is enabled only in Debug simulator builds. Physical devices
-require reachable HTTPS/WSS endpoints; a phone cannot use the Mac's `127.0.0.1`.
-Select a signing team and configure the backend's reachable media addresses
+Insecure HTTP/WS is enabled in Debug simulator builds, or explicitly in the
+Debug-only physical-device LAN test mode below. Release builds require reachable
+HTTPS/WSS endpoints; a phone cannot use the Mac's `127.0.0.1`.
+Select a signing team and confirm the backend's reachable media addresses
 before testing a device. The local-network ATS entry follows Apple's
 [NSAllowsLocalNetworking documentation](https://developer.apple.com/documentation/bundleresources/information-property-list/nsapptransportsecurity/nsallowslocalnetworking);
 there is no global arbitrary-load exception.
+
+## Physical iPhone on the Local Network
+
+The same app consumes `AttentiveVoiceUI`; no separate caller implementation or
+backend is needed. Sign in to Xcode, connect/unlock the iPhone, trust the Mac and
+enable Developer Mode. Keep the phone and Mac on the same trusted Wi-Fi network.
+Allow Local Network and Microphone access when the app asks.
+
+Normal device integrations use HTTPS/WSS. For an explicitly approved local Debug
+test, set `ATTENTIVE_LOCAL_DEVICE=1` and use the Mac's RFC1918 IPv4 address at port
+3000 as `ATTENTIVE_CALL_ENDPOINT`. This mode is compiled out of Release. Only
+`ws://127.0.0.1:7880` (or equivalent loopback host) in returned credentials is
+mapped to the API's private host; room, token, URL path/query and all other
+signaling endpoints remain unchanged. The core SDK and dashboard are untouched.
+Local testing is unencrypted; use only a trusted LAN, never a public network.
+
+When local LiveKit binds signaling only to loopback, run this separate temporary
+forwarder from the repository root (replace the example private address):
+
+```sh
+node sdks/ios/Examples/AttentiveSample/script/forward_local_signaling.mjs 192.168.1.10
+```
+
+It binds only that explicitly supplied, locally assigned private IP on port 7880
+and pipes TCP to `127.0.0.1:7880`, without logging traffic. Existing LiveKit and
+web callers keep using loopback. It neither restarts services nor changes DNS,
+firewall, router settings or model parameters. LiveKit must already advertise the
+correct LAN media address and expose its RTC ports; the forwarder covers signaling
+only. If media addresses need changing, request approval separately.
+
+Then build/install/launch (supply your own device/team/caller values):
+
+```sh
+export ATTENTIVE_DEVICE_ID='YOUR_PHYSICAL_DEVICE_UDID'
+export ATTENTIVE_DEVELOPMENT_TEAM='YOUR_APPLE_TEAM_ID'
+export ATTENTIVE_CALL_ENDPOINT='http://192.168.1.10:3000/api/public-agent/connection-details'
+export ATTENTIVE_LOCAL_DEVICE=1
+export ATTENTIVE_CALLER_CONTACT='your-enrolled-email@example.com'
+export ATTENTIVE_CUSTOMER_ID='YOUR_CUSTOMER_ID'
+export ATTENTIVE_PHONE='YOUR_PHONE_NUMBER'
+bash sdks/ios/Examples/AttentiveSample/script/build_and_run_device.sh
+```
+
+The default business/agent remain `wema-bank-poc-local` / `agt_59a007e81e`.
+Customer details and deployment addresses are launch-time inputs, not committed
+defaults. End and close any current call before rerunning; the script does not
+terminate an existing app/call. These inputs are not persisted: after force
+quitting, relaunch with the script or Xcode Run environment. No voiceprint is
+created/replaced automatically, and no call starts on launch.
+
+Rollback: stop only the forwarder with Ctrl-C, or send SIGTERM to its reported
+PID after verifying the command with `ps`. Close the physical app and remove
+`ATTENTIVE_LOCAL_DEVICE` from the launch environment. No existing server state
+was changed. If the Mac changes networks, stop the old forwarder and recheck both
+signaling and RTC addresses before retesting. Do not reuse a stale LAN address.
 
 ## Tests
 

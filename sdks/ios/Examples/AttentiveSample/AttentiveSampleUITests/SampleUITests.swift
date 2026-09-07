@@ -3,6 +3,43 @@ import XCTest
 final class SampleUITests: XCTestCase {
     override func setUpWithError() throws { continueAfterFailure = false }
 
+    func testLocalDeviceModeRequiresExplicitPrivateEndpoint() {
+        let privateURL = URL(string: "http://192.168.1.5:3000/api/public-agent/connection-details")!
+        XCTAssertFalse(LocalDeviceConnectionPolicy(endpoint: privateURL, environment: [:]).enabled)
+        for address in ["http://example.com:3000", "http://8.8.8.8:3000", "http://172.32.0.1:3000",
+                        "http://127.0.0.1:3000", "http://192.168.1.5:80", "https://192.168.1.5:3000",
+                        "http://user:password@192.168.1.5:3000"] {
+            XCTAssertFalse(LocalDeviceConnectionPolicy(endpoint: URL(string: address)!,
+                environment: ["ATTENTIVE_LOCAL_DEVICE": "1"]).enabled)
+        }
+        #if DEBUG
+        for address in ["192.168.1.5", "10.1.2.3", "172.16.0.1", "172.31.255.255"] {
+            XCTAssertTrue(LocalDeviceConnectionPolicy(endpoint: URL(string: "http://\(address):3000")!,
+                environment: ["ATTENTIVE_LOCAL_DEVICE": "1"]).enabled)
+        }
+        #else
+        XCTAssertFalse(LocalDeviceConnectionPolicy(endpoint: privateURL,
+            environment: ["ATTENTIVE_LOCAL_DEVICE": "1"]).enabled)
+        #endif
+    }
+
+    func testLocalDeviceModeOnlyRewritesLoopbackSignaling() {
+        let policy = LocalDeviceConnectionPolicy(endpoint: URL(string: "http://192.168.1.5:3000")!,
+            environment: ["ATTENTIVE_LOCAL_DEVICE": "1"])
+        let original = URL(string: "ws://127.0.0.1:7880/rtc?test=1")!
+        #if DEBUG
+        XCTAssertEqual(policy.signalingURL(original).absoluteString, "ws://192.168.1.5:7880/rtc?test=1")
+        #else
+        XCTAssertEqual(policy.signalingURL(original), original)
+        #endif
+        for address in ["wss://service.example.com/rtc", "ws://10.1.2.3:7880", "ws://127.0.0.1:9999"] {
+            let url = URL(string: address)!
+            XCTAssertEqual(policy.signalingURL(url), url)
+        }
+        XCTAssertEqual(LocalDeviceConnectionPolicy(endpoint: URL(string: "http://192.168.1.5:3000")!,
+            environment: [:]).signalingURL(original), original)
+    }
+
     func testGenericCallerHasNoBankBrandingOrRequiredEnrollmentUI() {
         let app = XCUIApplication()
         app.launchArguments = ["--generic-ui"]
@@ -93,6 +130,48 @@ final class SampleUITests: XCTestCase {
         XCTAssertFalse(app.textFields["Wema customer ID"].isEnabled)
         XCTAssertFalse(app.buttons["LLM generated"].isEnabled)
         attachScreen("In-call bank panel")
+    }
+
+    func testLiveBankLookupShowsBackendActivityWithoutBypassingVoiceAuth() throws {
+        guard ProcessInfo.processInfo.environment["ATTENTIVE_BANK_UI_TEST"] == "1" else {
+            throw XCTSkip("Opt in with TEST_RUNNER_ATTENTIVE_BANK_UI_TEST=1; this starts a real unauthenticated lookup.")
+        }
+        let app = XCUIApplication()
+        app.launchArguments = ["--chat-only"]
+        app.launchEnvironment["ATTENTIVE_CALLER_CONTACT"] = "attentive-bank-ui-test@odion.ai"
+        app.launchEnvironment["ATTENTIVE_CUSTOMER_ID"] = "R008448055"
+        app.launchEnvironment["ATTENTIVE_PHONE"] = "08161540638"
+        app.launch()
+        XCTAssertTrue(app.buttons["startCall"].waitForExistence(timeout: 10))
+        app.buttons["startCall"].tap()
+        addTeardownBlock {
+            if app.buttons["endCall"].exists { app.buttons["endCall"].tap() }
+        }
+        XCTAssertTrue(app.buttons["transcriptToggle"].waitForExistence(timeout: 10))
+        app.buttons["transcriptToggle"].tap()
+        let greeting = app.staticTexts.matching(identifier: "agentTranscript").firstMatch
+        XCTAssertTrue(greeting.waitForExistence(timeout: 45))
+        expectation(for: NSPredicate(format: "label == 'Listening'"),
+                    evaluatedWith: app.staticTexts["transcriptStatus"])
+        waitForExpectations(timeout: 45)
+        XCTAssertFalse(greeting.label.localizedCaseInsensitiveContains("fidelity"))
+        let input = app.textFields["chatInput"].exists ? app.textFields["chatInput"] : app.textViews["chatInput"]
+        input.tap()
+        input.typeText("Please check my account balance.")
+        app.buttons["sendMessage"].tap()
+        // The X closes the transcript first; the hamburger then opens the bank panel.
+        app.buttons["bankMenu"].tap()
+        app.buttons["bankMenu"].tap()
+        XCTAssertTrue(app.textFields["Wema customer ID"].waitForExistence(timeout: 5))
+        let activity = app.staticTexts["Check balance"].firstMatch
+        XCTAssertTrue(activity.waitForExistence(timeout: 45), "The model must invoke the real balance tool.")
+        XCTAssertTrue(app.staticTexts["Failed"].waitForExistence(timeout: 15))
+        XCTAssertFalse(app.staticTexts["No bank activity yet"].exists)
+        activity.tap()
+        XCTAssertTrue(app.staticTexts["RESULT"].waitForExistence(timeout: 5))
+        let result = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "voice_not_recognized")).firstMatch
+        XCTAssertTrue(result.waitForExistence(timeout: 5))
+        attachScreen("Real Wema balance activity blocked by voice authentication")
     }
 
     func testEnrollmentEmailValidationAndCancellation() {

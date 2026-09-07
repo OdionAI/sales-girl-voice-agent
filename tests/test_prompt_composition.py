@@ -1,9 +1,57 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 
 import main
 from prompts.wema import with_wema_tool_requirements
+
+
+class WemaBusinessRoutingTests(unittest.IsolatedAsyncioTestCase):
+    async def test_wema_tools_preserve_saved_identity_and_tool_guidance(self) -> None:
+        saved = (
+            "You are SAW, Wema Bank's voice banking assistant. Check account balance "
+            "and recent transactions. Fidelity Bank is a possible transfer destination."
+        )
+        config = {
+            "name": "SAW", "instructions": saved,
+            "tools": [{"name": "wema_get_balance", "description": "Check the balance."}],
+        }
+        userdata = {"end_user_id": "caller@example.com", "business_id": "wema-business"}
+        with patch.object(main, "FIDELITY_BUSINESS_IDS", set()), \
+                patch.object(main, "EKEDC_BUSINESS_IDS", set()), \
+                patch.object(main, "DEFAULT_BUSINESS_USE_CASE", "fidelity"):
+            use_case = main._detect_business_use_case(active_agent_config=config, userdata=userdata)
+        self.assertEqual(use_case, "generic")
+        userdata["business_use_case"] = use_case
+        main._hydrate_userdata_from_active_agent_config(userdata, config, use_case)
+        base = main._effective_base_prompt(
+            static_prompt="Default", active_agent_config=config,
+            business_use_case=use_case, language="en",
+        )
+        with patch.object(main, "conversation_service_enabled", return_value=False), \
+                patch.object(main, "CONVERSATION_SERVICE_REQUIRED", False), \
+                patch.object(main, "_instructions_with_resume_context", side_effect=lambda text, _: text):
+            instructions = await main._instructions_with_context(base, userdata)
+        self.assertTrue(instructions.startswith(saved))
+        self.assertIn("wema_get_balance is enabled", instructions)
+        self.assertNotIn("You are Fidelity Bank's customer care assistant", instructions)
+        with patch.object(main, "ops_get_account_overview") as overview:
+            self.assertEqual(await main._build_preloaded_ops_context(userdata), "")
+        overview.assert_not_called()
+
+    def test_legacy_fidelity_tool_routing_is_unchanged(self) -> None:
+        self.assertEqual(main._detect_business_use_case(
+            active_agent_config={"tools": [{"name": "account_overview"}]}, userdata={},
+        ), "fidelity")
+
+    def test_explicit_business_routing_still_has_precedence(self) -> None:
+        business_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        with patch.object(main, "FIDELITY_BUSINESS_IDS", {business_id}):
+            self.assertEqual(main._detect_business_use_case(
+                active_agent_config={"tools": [{"name": "wema_get_balance"}]},
+                userdata={"business_id": business_id},
+            ), "fidelity")
 
 
 class SpokenStyleCompositionTests(unittest.TestCase):

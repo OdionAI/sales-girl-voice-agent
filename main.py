@@ -3345,6 +3345,10 @@ def _detect_business_use_case(
         for tool in (tools if isinstance(tools, list) else [])
         if isinstance(tool, dict)
     }
+    # Wema uses dashboard-defined tools, not the legacy Fidelity ops integration.
+    # Its prompt may mention balances or other banks without changing its identity.
+    if any(name.startswith("wema_") for name in tool_names):
+        return "generic"
     fidelity_tool_names = {
         "account_overview",
         "recent_transactions",

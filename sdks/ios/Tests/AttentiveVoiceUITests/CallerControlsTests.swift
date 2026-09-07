@@ -5,6 +5,29 @@ import XCTest
 
 final class CallerControlsTests: XCTestCase {
     @MainActor
+    func testBankActivityReplacesStartedRowWithBackendResult() async throws {
+        let transport = UITransport()
+        let call = makeCall(transport)
+        let controls = CallerControls(call: call, enrollment: nil)
+        await controls.start(request, microphoneEnabled: false)
+        let started = Data(#"{"call_id":"balance-1","tool_name":"wema_get_balance","event":"started","arguments":{}}"#.utf8)
+        transport.onEvent?(try XCTUnwrap(BackendEventDecoder.decode(data: started, topic: "odion.tool.activity")))
+        XCTAssertEqual(call.toolActivity.count, 1)
+        XCTAssertEqual(call.toolActivity.first?.event, "started")
+        let completed = Data(#"{"call_id":"balance-1","tool_name":"wema_get_balance","event":"completed","status":"success","result":{"status":"success","data":{"currency":"NGN","balance":123}}}"#.utf8)
+        transport.onEvent?(try XCTUnwrap(BackendEventDecoder.decode(data: completed, topic: "odion.tool.activity")))
+        XCTAssertEqual(call.toolActivity.count, 1)
+        XCTAssertEqual(call.toolActivity.first?.toolName, "wema_get_balance")
+        XCTAssertEqual(call.toolActivity.first?.status, "success")
+        XCTAssertNotNil(call.toolActivity.first?.payload["result"])
+        // Activity observations must not grant authentication or trigger a second request.
+        XCTAssertEqual(call.sessionAuthentication, .pending)
+        XCTAssertEqual(call.actionAuthentication, .pending)
+        XCTAssertTrue(transport.messages.isEmpty)
+        await controls.end()
+    }
+
+    @MainActor
     func testUIObservesWithoutReplacingHostEventsOrAuthorizingTools() async throws {
         let transport = UITransport()
         let call = makeCall(transport)

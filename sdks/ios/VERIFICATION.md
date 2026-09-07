@@ -275,3 +275,54 @@ specific extraction commit after reviewing subsequent changes. Do not reset an
 active dirty worktree. There is no server-state rollback for this extraction:
 no service, DNS, port or model configuration was touched. Gateway, gRPC and
 Android work are tracked separately in `docs/attentive/ROADMAP.md`.
+
+## Physical iPhone Setup (2026-09-06)
+
+With explicit user approval, added a sample-only Debug LAN mode and a temporary
+Mac-side signaling forwarder. The physical app still embeds `AttentiveVoiceUI`
+and targets `wema-bank-poc-local` / `agt_59a007e81e`. No core SDK, UI library,
+dashboard, agent, model, voice-auth gate or existing service was changed.
+
+- Signed arm64 Debug build succeeded using the user's Apple development account.
+  `codesign --verify --deep --strict` passed. Installation on the connected
+  iPhone 16 Pro Max / iOS 26.6.1 succeeded.
+- First launch was denied by iOS with a development-profile trust error; the
+  user then explicitly trusted their profile on the phone. A rebuild, reinstall
+  and configured launch succeeded at 22:17 WAT.
+- Six simulator UI/policy tests ran: five passed, the opt-in live-call test was
+  skipped, and none failed. New tests cover explicit private-endpoint opt-in and
+  loopback-only signaling remapping, with no production URL changes.
+- Direct LAN checks returned HTTP 405 for GET on the POST-only call API, and
+  HTTP 200 for the forwarded LiveKit root.
+- The caller started a physical-device call at 22:17:47, job `AJ_5AbixzUoLJ67`.
+  The backend received a spoken balance request and generated a spoken reply.
+  A device screenshot at 22:18:33 shows the active caller UI, enabled microphone,
+  supplied profile details and a passed Session authentication badge. Action
+  authentication remained pending and no banking activity was displayed at that
+  observation. Do not treat this as proof of completed privileged-tool execution
+  or of long-call audio quality. The user's call was not restarted or ended.
+- The first pre-call screenshot showed an enrollment-status network error,
+  although the LAN API returned `enrolled: true` and the subsequent live Session
+  check passed. The timing relative to iOS's first Local Network permission was
+  not captured; this transient pre-call error needs a separate retest.
+
+Test setup at 22:16 WAT: Mac API `192.168.100.241:3000`; separate Node forwarder
+PID `75213`, binding `192.168.100.241:7880` to `127.0.0.1:7880`. Original LiveKit
+PID `26785` and voice worker PID `26631` were left running. LiveKit already
+advertised the same LAN RTC address. No DNS, firewall, router, server binding or
+model/startup parameter was modified. Local HTTP/WS is unencrypted and is only
+for this approved trusted-LAN test.
+
+Evidence: `/tmp/attentive-physical-signed-build.log`,
+`/tmp/attentive-device-policy-tests.xcresult`, and
+`/tmp/attentive-local-signaling.log`. The forwarder logs only its address/PID,
+not call payloads or credentials. Build products/profiles remain ignored.
+The final build/install/launch log is `/tmp/attentive-iphone-install-launch.log`.
+All 38 core/UI-control Swift tests also passed in
+`/tmp/attentive-device-core-tests.log`.
+
+To undo networking, verify PID `75213` still belongs to
+`forward_local_signaling.mjs`, then send it SIGTERM. Do not kill LiveKit, the
+worker or the dashboard. Close the sample and remove `ATTENTIVE_LOCAL_DEVICE`
+from its launch environment. Device reproduction and the foreground forwarder
+command are in `Examples/AttentiveSample/README.md`.

@@ -1,6 +1,6 @@
 # Attentive Integration Roadmap
 
-Updated: 2026-09-06. Current branch: `attentive-ios-sdk`.
+Updated: 2026-09-07. SDK resume branch: `attentive-ios-sdk`.
 Checkpoint before optional UI extraction: `7db19c6`.
 The checkpoint includes the existing caller/enrollment implementation, tests,
 runtime verification notes and architecture plan. It is not a claim that the
@@ -17,6 +17,32 @@ known intermittent STT/DNS or TTS issues are fixed.
 | Human and coding-agent integration instructions | Complete locally | `CALLER_UI.md` and `INTEGRATION_AGENT.md`; local-package instructions and explicit release limitations |
 
 ## Follow-Up Work
+
+### SDK Pause for Speculative Harness Evaluation
+
+The user paused SDK development to evaluate the engineer's
+`speculative-generation` branch, reference commit `8a29091`, in an isolated
+worktree. The current SDK, optional UI, physical-device setup, Wema routing
+fix and test coverage are checkpointed on `attentive-ios-sdk` before that work.
+Keep the existing SDK checkout and running services separate from the lab.
+
+Resume this roadmap after evaluating whether the lab's coordinator can retain
+its measured latency over LiveKit transport without LiveKit owning application
+turns. Do not replace the SDK transport or remove the roadmap deliverables below.
+The frontend counterpart is `sales-girl-dashboard` branch `voice-lab-preemptive`
+at `c665713`; preserve our existing caller controls while comparing harnesses.
+
+Checkpoint verification on September 7: 183 Python tests passed with dotenv
+disabled for tests; 39 Swift package tests passed. Full mobile banking/auth and
+audio-quality acceptance is still incomplete, not implied by these unit tests.
+See `WEMA_MOBILE_TOOL_RECOVERY.md` for the saved-prompt restoration and
+`VOICE_AUTH_THRESHOLD_EXPERIMENT.md` for the local 0.40 -> 0.20 experiment and
+rollback. Secrets, voiceprints, local databases, recordings and build products
+remain private/ignored; the local threshold is documented, not a new production
+default. The SDK package release, streaming gateway, gRPC, Android SDK and human
+and coding-agent documentation remain planned work, not cancelled.
+
+### Delivery Queue
 
 These are recorded deliverables, not a command to implement them all in the
 current change. Implement and verify them separately, preserving existing calls.

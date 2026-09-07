@@ -51,26 +51,40 @@ struct SampleConfiguration {
     @MainActor
     func makeCall() throws -> AttentiveCall {
         guard let url = URL(string: endpoint) else { throw CallError.invalidRequest }
-        #if DEBUG && targetEnvironment(simulator)
-        let insecureDevelopment = true
-        #else
-        let insecureDevelopment = false
-        #endif
-        return try AttentiveCall(endpoint: url, allowsInsecureDevelopmentConnections: insecureDevelopment)
+        let localDevice = LocalDeviceConnectionPolicy(endpoint: url)
+        let provider = try HTTPCallCredentialProvider(endpoint: url,
+            allowsInsecureDevelopmentConnections: allowsInsecureDevelopment || localDevice.enabled)
+        return AttentiveCall(credentialProvider: SampleCredentialProvider(provider: provider, localDevice: localDevice),
+                            allowsInsecureDevelopmentConnections: allowsInsecureDevelopment || localDevice.enabled)
     }
 
     @MainActor
     func makeEnrollment() throws -> VoiceEnrollment {
         guard let url = URL(string: endpoint) else { throw CallError.invalidRequest }
-        #if DEBUG && targetEnvironment(simulator)
-        let insecureDevelopment = true
-        #else
-        let insecureDevelopment = false
-        #endif
+        let localDevice = LocalDeviceConnectionPolicy(endpoint: url)
         let provider = try HTTPVoiceEnrollmentProvider(
             endpoint: url.deletingLastPathComponent().appendingPathComponent("voice-enroll"),
-            allowsInsecureDevelopmentConnections: insecureDevelopment)
+            allowsInsecureDevelopmentConnections: allowsInsecureDevelopment || localDevice.enabled)
         return VoiceEnrollment(provider: provider, recorder: IOSVoiceEnrollmentRecorder())
+    }
+
+    private var allowsInsecureDevelopment: Bool {
+        #if DEBUG && targetEnvironment(simulator)
+        return true
+        #else
+        return false
+        #endif
+    }
+}
+
+private struct SampleCredentialProvider: CallCredentialProvider {
+    let provider: HTTPCallCredentialProvider
+    let localDevice: LocalDeviceConnectionPolicy
+
+    func fetch(for request: CallRequest) async throws -> CallCredentials {
+        let credentials = try await provider.fetch(for: request)
+        return CallCredentials(serverUrl: localDevice.signalingURL(credentials.serverUrl),
+                               roomName: credentials.roomName, participantToken: credentials.participantToken)
     }
 }
 
