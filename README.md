@@ -114,6 +114,19 @@ python main.py dev
 
 Create `.env` from `.env.example` before running locally.
 
+### Speculative-generation lab (this branch)
+
+`speculative-generation` adds an experimental RVC lab beside the LiveKit worker. It is the ack-then-work Voice Lab path (`python -m latency_lab.server` on port 8010). It does not dispatch production SIP rooms and does not replace `python main.py`.
+
+```bash
+python3 -m venv .venv-latency-lab
+source .venv-latency-lab/bin/activate
+pip install -r latency_lab/requirements.txt
+python -m latency_lab.server
+```
+
+Details: [`latency_lab/README.md`](latency_lab/README.md).
+
 ### Stable low-latency Qwen snapshot
 
 Branch `stable` preserves the complete Voice Lab profile validated on

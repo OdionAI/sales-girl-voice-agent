@@ -1,5 +1,6 @@
 # Python
 .venv/
+.venv-latency-lab/
 __pycache__/
 *.py[cod]
 
