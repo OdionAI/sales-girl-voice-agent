@@ -1,0 +1,301 @@
+diff --git a/.env.example b/.env.example
+index 2dac389..fde9276 100644
+--- a/.env.example
++++ b/.env.example
+@@ -3,6 +3,8 @@ APP_HOST=0.0.0.0
+ APP_PORT=8091
+
+ DATABASE_URL=sqlite+pysqlite:///./sales_girl_conversation.db
++# Optional absolute path to the host directory mounted by local LiveKit Egress.
++LOCAL_RECORDING_DIRECTORY=
+
+ AUTH_JWT_ALGORITHM=HS256
+ AUTH_JWT_SECRET_KEY=local-dev-jwt-secret-key-change-before-prod
+diff --git a/app/api/routes_conversations.py b/app/api/routes_conversations.py
+index 345af17..15c6adc 100644
+--- a/app/api/routes_conversations.py
++++ b/app/api/routes_conversations.py
+@@ -1,8 +1,8 @@
+ import uuid
+-from pathlib import PurePosixPath
+-from urllib.parse import urlparse
++from pathlib import Path, PurePosixPath
++from urllib.parse import unquote, urlparse
+ from fastapi import APIRouter, Depends, HTTPException, Query, status
+-from fastapi.responses import Response
++from fastapi.responses import FileResponse, Response
+ from google.cloud import storage
+ from sqlalchemy import func, select
+ from sqlalchemy.exc import IntegrityError
+@@ -15,7 +15,8 @@ from app.api.deps import (
+ )
+ from app.core.identity import is_likely_email, normalize_external_id
+ from app.core.phone import is_likely_e164, normalize_phone_e164
+-from app.core.time import utcnow
++from app.core.time import as_utc, utcnow
++from app.config.settings import get_settings
+ from app.models.conversation import Conversation
+ from app.models.conversation_session import ConversationSession
+ from app.models.conversation_session_event import ConversationSessionEvent
+@@ -146,6 +147,25 @@ def _download_recording_bytes(recording_url: str) -> tuple[bytes, str]:
+     return blob.download_as_bytes(), _recording_content_type(recording_url)
+
+
++def _local_recording_path(recording_url: str, *, business_id: uuid.UUID) -> Path:
++    root_value = get_settings().local_recording_directory
++    if not root_value:
++        raise HTTPException(status_code=404, detail="Local recording storage is not enabled.")
++    parsed = urlparse(recording_url)
++    relative_path = unquote(parsed.path).lstrip("/")
++    if parsed.scheme != "local-recording" or parsed.netloc or not relative_path or "\x00" in relative_path:
++        raise HTTPException(status_code=404, detail="Recording file was not found.")
++    root = Path(root_value).resolve()
++    path = (root / relative_path).resolve()
++    if (
++        not path.is_relative_to(root)
++        or path.parent.name != str(business_id)
++        or not path.is_file()
++    ):
++        raise HTTPException(status_code=404, detail="Recording file was not found.")
++    return path
++
++
+ @router.get("/sessions", response_model=ConversationSessionsPage)
+ def list_conversation_sessions(
+     external_id: str | None = Query(default=None),
+@@ -670,7 +690,7 @@ def start_conversation_session(
+     if not conversation:
+         raise HTTPException(status_code=404, detail="Conversation not found.")
+
+-    now = payload.started_at or utcnow()
++    now = as_utc(payload.started_at or utcnow())
+     active_rows = db.scalars(
+         select(ConversationSession).where(
+             ConversationSession.business_id == business_id,
+@@ -681,7 +701,7 @@ def start_conversation_session(
+     for stale in active_rows:
+         stale.status = "ended"
+         stale.ended_at = now
+-        stale.duration_seconds = int(max(0, (now - stale.started_at).total_seconds()))
++        stale.duration_seconds = int(max(0, (now - as_utc(stale.started_at)).total_seconds()))
+         db.add(stale)
+
+     active_config = agent_config_client.get_active_config(business_id=business_id, agent_id=conversation.agent_id)
+@@ -731,10 +751,10 @@ def end_conversation_session(
+     if row.status == "ended" and row.ended_at is not None and row.duration_seconds is not None:
+         return _session_out(row)
+
+-    end_time = payload.ended_at or utcnow()
++    end_time = as_utc(payload.ended_at or utcnow())
+     duration = payload.duration_seconds
+     if duration is None:
+-        duration = int(max(0, (end_time - row.started_at).total_seconds()))
++        duration = int(max(0, (end_time - as_utc(row.started_at)).total_seconds()))
+
+     row.ended_at = end_time
+     row.duration_seconds = duration
+@@ -828,6 +848,16 @@ def get_conversation_session_recording(
+     if not recording_url:
+         raise HTTPException(status_code=404, detail="No recording is available for this session.")
+
++    if urlparse(recording_url).scheme == "local-recording":
++        path = _local_recording_path(recording_url, business_id=business_id)
++        return FileResponse(
++            path,
++            media_type=_recording_content_type(recording_url),
++            filename=path.name,
++            content_disposition_type="inline",
++            headers={"Cache-Control": "private, max-age=300"},
++        )
++
+     try:
+         audio_bytes, media_type = _download_recording_bytes(recording_url)
+     except HTTPException:
+diff --git a/app/config/settings.py b/app/config/settings.py
+index 02dd9b0..f2bcc51 100644
+--- a/app/config/settings.py
++++ b/app/config/settings.py
+@@ -12,6 +12,7 @@ class Settings(BaseSettings):
+     app_port: int = 8091
+
+     database_url: str = "sqlite+pysqlite:///./sales_girl_conversation.db"
++    local_recording_directory: str = ""
+
+     auth_jwt_algorithm: str = "HS256"
+     auth_jwt_secret_key: str = Field(default="change-me-in-prod", min_length=16)
+diff --git a/app/core/time.py b/app/core/time.py
+index 2313d48..a924709 100644
+--- a/app/core/time.py
++++ b/app/core/time.py
+@@ -3,3 +3,10 @@ from datetime import datetime, timezone
+
+ def utcnow() -> datetime:
+     return datetime.now(timezone.utc)
++
++
++def as_utc(value: datetime) -> datetime:
++    # SQLite returns stored UTC timestamps without their timezone information.
++    if value.tzinfo is None:
++        return value.replace(tzinfo=timezone.utc)
++    return value.astimezone(timezone.utc)
+diff --git a/tests/test_local_recording.py b/tests/test_local_recording.py
+new file mode 100644
+index 0000000..9af58af
+--- /dev/null
++++ b/tests/test_local_recording.py
+@@ -0,0 +1,84 @@
++import uuid
++
++import pytest
++from fastapi import HTTPException
++from app.api.routes_conversations import _local_recording_path
++from app.config.settings import get_settings
++
++
++@pytest.fixture
++def recording_root(tmp_path, monkeypatch):
++    root = tmp_path / "recordings"
++    root.mkdir()
++    monkeypatch.setattr(get_settings(), "local_recording_directory", str(root))
++    return root
++
++
++@pytest.mark.parametrize("url", [
++    "local-recording:///../secret.mp3",
++    "local-recording:///%2e%2e/secret.mp3",
++    "local-recording://remote/secret.mp3",
++    "local-recording:///%00.mp3",
++    "local-recording:///missing.mp3",
++])
++def test_rejects_invalid_paths(recording_root, url):
++    (recording_root.parent / "secret.mp3").write_bytes(b"private")
++    with pytest.raises(HTTPException) as error:
++        _local_recording_path(url, business_id=uuid.uuid4())
++    assert error.value.status_code == 404
++
++
++def test_rejects_symlink_escape(recording_root):
++    secret = recording_root.parent / "secret.mp3"
++    secret.write_bytes(b"private")
++    (recording_root / "link.mp3").symlink_to(secret)
++    with pytest.raises(HTTPException):
++        _local_recording_path("local-recording:///link.mp3", business_id=uuid.uuid4())
++
++
++def test_local_recording_requires_configuration(monkeypatch):
++    monkeypatch.setattr(get_settings(), "local_recording_directory", "")
++    with pytest.raises(HTTPException):
++        _local_recording_path("local-recording:///test.mp3", business_id=uuid.uuid4())
++
++
++def test_authenticated_playback_and_business_isolation(
++    client, service_headers, fake_agent_config_client, recording_root
++):
++    audio = b"ID3-local-test-audio"
++    business_id = service_headers["X-Business-ID"]
++    business_directory = recording_root / "livekit-recordings" / business_id
++    business_directory.mkdir(parents=True)
++    (business_directory / "test.mp3").write_bytes(audio)
++    agent_id = str(uuid.uuid4())
++    fake_agent_config_client.register(agent_id=agent_id, version_id=str(uuid.uuid4()))
++    resolved = client.post("/v1/conversations/resolve", headers=service_headers, json={
++        "agent_id": agent_id, "external_id": "recording@example.com", "channel": "web",
++    })
++    assert resolved.status_code == 200
++    started = client.post("/v1/conversations/sessions/start", headers=service_headers, json={
++        "conversation_id": resolved.json()["conversation_id"], "channel": "web",
++        "client_session_id": "local-recording-test",
++    })
++    assert started.status_code == 201
++    url = f"/v1/conversations/sessions/{started.json()['id']}/recording"
++    assert client.post(url, headers=service_headers, json={
++        "recording_status": "available",
++        "recording_url": f"local-recording:///livekit-recordings/{business_id}/test.mp3",
++    }).status_code == 200
++    response = client.get(url, headers=service_headers)
++    assert response.status_code == 200
++    assert response.content == audio
++    assert response.headers["content-type"].startswith("audio/mpeg")
++    assert "private" in response.headers["cache-control"]
++    assert client.get(url).status_code == 401
++    other_business = {**service_headers, "X-Business-ID": str(uuid.uuid4())}
++    assert client.get(url, headers=other_business).status_code == 404
++
++    other_directory = recording_root / "livekit-recordings" / other_business["X-Business-ID"]
++    other_directory.mkdir()
++    (other_directory / "private.mp3").write_bytes(b"other business audio")
++    assert client.post(url, headers=service_headers, json={
++        "recording_url": f"local-recording:///livekit-recordings/{other_directory.name}/private.mp3",
++    }).status_code == 200
++    assert client.get(url, headers=service_headers).status_code == 404
+diff --git a/tests/test_session_timing.py b/tests/test_session_timing.py
+new file mode 100644
+index 0000000..e834276
+--- /dev/null
++++ b/tests/test_session_timing.py
+@@ -0,0 +1,65 @@
++from datetime import datetime, timezone
++import uuid
++
++import pytest
++
++
++def _conversation(client, headers, config):
++    agent_id = str(uuid.uuid4())
++    config.register(agent_id=agent_id, version_id=str(uuid.uuid4()))
++    response = client.post("/v1/conversations/resolve", headers=headers, json={
++        "agent_id": agent_id, "external_id": "repeat-caller@example.com", "channel": "web",
++    })
++    assert response.status_code == 200
++    return response.json()["conversation_id"]
++
++
++@pytest.mark.parametrize("timestamp", [None, "2026-09-05T01:01:30+01:00"])
++def test_repeat_call_closes_stale_sqlite_session(
++    client, service_headers, fake_agent_config_client, monkeypatch, timestamp
++):
++    monkeypatch.setattr("app.api.routes_conversations.utcnow", lambda: datetime(
++        2026, 9, 5, 0, 1, 30, tzinfo=timezone.utc
++    ))
++    conversation_id = _conversation(client, service_headers, fake_agent_config_client)
++    payload = {"conversation_id": conversation_id, "channel": "web", "client_session_id": "first"}
++    first = client.post("/v1/conversations/sessions/start", headers=service_headers, json={
++        **payload, "started_at": "2026-09-05T00:00:00Z",
++    })
++    assert first.status_code == 201
++    second_payload = {**payload, "client_session_id": "second"}
++    if timestamp:
++        second_payload["started_at"] = timestamp
++    second = client.post("/v1/conversations/sessions/start", headers=service_headers, json=second_payload)
++    assert second.status_code == 201
++    assert second.json()["id"] != first.json()["id"]
++    previous = client.get(f"/v1/conversations/sessions/{first.json()['id']}", headers=service_headers)
++    assert previous.json()["session"]["status"] == "ended"
++    assert previous.json()["session"]["duration_seconds"] == 90
++    assert second.json()["status"] == "active"
++
++
++@pytest.mark.parametrize("timestamp, duration", [
++    (None, 90), ("2026-09-05T01:01:30+01:00", 90), ("2026-09-04T23:59:00Z", 0),
++])
++def test_end_calculates_duration_for_sqlite_session(
++    client, service_headers, fake_agent_config_client, monkeypatch, timestamp, duration
++):
++    monkeypatch.setattr("app.api.routes_conversations.utcnow", lambda: datetime(
++        2026, 9, 5, 0, 1, 30, tzinfo=timezone.utc
++    ))
++    conversation_id = _conversation(client, service_headers, fake_agent_config_client)
++    started = client.post("/v1/conversations/sessions/start", headers=service_headers, json={
++        "conversation_id": conversation_id, "channel": "web", "client_session_id": "first",
++        "started_at": "2026-09-05T00:00:00Z",
++    })
++    assert started.status_code == 201
++    payload = {"session_id": started.json()["id"]}
++    if timestamp:
++        payload["ended_at"] = timestamp
++    ended = client.post("/v1/conversations/sessions/end", headers=service_headers, json=payload)
++    assert ended.status_code == 200
++    assert ended.json()["duration_seconds"] == duration
++    assert ended.json()["status"] == "ended"
++    retry = client.post("/v1/conversations/sessions/end", headers=service_headers, json=payload)
++    assert retry.json() == ended.json()

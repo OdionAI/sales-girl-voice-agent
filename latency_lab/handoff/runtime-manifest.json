@@ -1,0 +1,96 @@
+{
+  "snapshot_date": "2026-09-08",
+  "status": "Experimental local comparison; not a certified latency baseline.",
+  "source_commits": {
+    "voice_agent": "46bf98bd9c3442eddce381f3e3a942adf4e2f16d",
+    "dashboard": "c14ad11a9578b4aa3d12a8593551eeb4c76ac86e",
+    "auth_service": "14dd1bfd1f43004afdd5f8369f70fbb76ff50824",
+    "agent_config_service": "55a84767eba4a55fb6a1cce840fdb1e248731015",
+    "conversation_service": "2df5f45c4cb016070548aab4dea6aa6651fd7747",
+    "banking_and_voice_auth": "601e465032de148af392abdef801bdcc1c99cf1f"
+  },
+  "patches": {
+    "agent_config_service": ["agent-config-tool-descriptions.patch", "agent-config-schema-parity.patch"],
+    "conversation_service": "conversation-local-parity.patch"
+  },
+  "versions": {
+    "python": "3.12.7",
+    "node": "22.23.1",
+    "livekit_server": "1.13.6",
+    "os": "macOS 26.6.2 arm64"
+  },
+  "worker": {
+    "module": "latency_lab.livekit_worker",
+    "command": "start",
+    "agent_name": "rvc-livekit-comparison",
+    "health_port": 8189,
+    "room_prefix": "rvc-livekit-"
+  },
+  "expected_config": {
+    "stt_model": "whisper-large-v3-turbo",
+    "stt_ws_url": "ws://102.88.137.124:8080/whisper-rt/v1/realtime",
+    "stt_batch_url": "",
+    "llm_model": "qwen3.8_27b",
+    "llm_base_url": "http://102.88.137.124:8080/qwen38-standard/v1",
+    "llm_enable_thinking": false,
+    "tts_model": "Qwen3-TTS",
+    "tts_url": "http://102.88.137.124:8080/tts/v1/audio/speech",
+    "tts_voice": "helen-mavino-0030",
+    "tts_language": "English",
+    "tts_initial_codec_chunk_frames": 4,
+    "speech_rms": 280,
+    "min_speech_ms": 240,
+    "end_silence_ms": 300,
+    "stable_partial_ms": 180,
+    "stable_min_chars": 8,
+    "stt_warmup_ms": 800,
+    "stt_recovery_buffer_seconds": 12,
+    "stt_rotate_after_final": false,
+    "opening_greeting_enabled": true,
+    "memory_compaction_enabled": true,
+    "memory_compaction_interval_seconds": 60,
+    "memory_recent_exchanges": 8,
+    "memory_context_tokens": 6000,
+    "memory_summary_timeout_seconds": 15
+  },
+  "request_constants": {
+    "llm_normal_max_tokens": 180,
+    "llm_normal_temperature": 0.35,
+    "tts_min_new_tokens": 24,
+    "tts_max_new_tokens": 360,
+    "tts_http_read_bytes": 4096,
+    "pcm_input_hz": 16000,
+    "pcm_input_frame_ms": 100,
+    "pcm_output_hz": 24000,
+    "livekit_output_queue_capacity_ms": 240
+  },
+  "agent": {
+    "name": "SAW",
+    "saved_prompt_sha256": "b3591c5a2ae3848915e78d42b5074367719e7e9bd904f881c7a748483b6283fe",
+    "tool_names": [
+      "wema_get_balance",
+      "wema_get_transactions",
+      "wema_list_data_plans",
+      "wema_list_transfer_banks",
+      "wema_prepare_data_purchase",
+      "wema_prepare_transfer",
+      "wema_execute_prepared",
+      "create_ticket"
+    ],
+    "knowledge_base_count": 0,
+    "voice_auth_required": true
+  },
+  "banking": {
+    "mode": "live",
+    "writes_enabled": false
+  },
+  "voice_auth": {
+    "embedder": "ecapa",
+    "cosine_threshold": 0.2,
+    "note": "Observed user-approved local experiment, not 20% accuracy or production recommendation. Requires approved enrollment."
+  },
+  "model_server_inventory": {
+    "status": "Not re-captured for this snapshot; existing remote endpoints are dependencies, not bundled reproducible servers.",
+    "older_snapshot": "deployment/stable in banking_and_voice_auth revision is historical and does not reproduce current Whisper or later TTS experiments."
+  }
+}

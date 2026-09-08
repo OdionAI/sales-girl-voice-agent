@@ -2,6 +2,11 @@
 
 Snapshot: 2026-09-08. Branch in BOTH repositories: `speculative-integration`.
 This is the current experimental comparison build, not a production release.
+For clean redeployment, follow [CLEAN_DEPLOY.md](CLEAN_DEPLOY.md) first. It adds
+ordered verification gates, a full observed worker package snapshot, a read-only
+preflight check, and the local conversation-service patch. Runtime code is unchanged.
+It also includes the missing config-service schema migration for a fresh database;
+follow CLEAN_DEPLOY before running the old service migrations.
 Use this guide over older baseline tables in `MAIN_APP_COMPARISON.md` and the
 Qwen-only defaults in the standalone lab's `.env.example`.
 
@@ -63,8 +68,9 @@ Do not recreate or regenerate the Wema prompt from memory.
 
 Use each platform repository's README/Makefile, migrations and private `.env`.
 Their observed base SHAs are not a complete platform/database release. The local
-conversation service also has uncommitted recording/timing work outside this
-handoff; it was not silently committed here. The hybrid does not yet integrate
+conversation service's recording/timing work is now preserved as
+`handoff/conversation-local-parity.patch`; its shared checkout was not committed
+or changed. The hybrid does not yet integrate
 the original dashboard recording lifecycle.
 
 The current config service includes a small uncommitted change that exposes each
