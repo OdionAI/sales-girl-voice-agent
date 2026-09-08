@@ -1,7 +1,11 @@
+import json
 import logging
 import os
+import re
+import uuid
+from typing import Any
 
-from livekit.agents import Agent, RunContext, function_tool
+from livekit.agents import Agent, RunContext, function_tool, llm
 
 from .tool_schema_compat import (
     CREATE_BOOKING_RAW_SCHEMA,
@@ -46,6 +50,105 @@ logger = logging.getLogger(__name__)
 AGENT_CLIENT_ID = os.getenv("AGENT_CLIENT_ID", "sales-girl-internal")
 AGENT_NAME = os.getenv("AGENT_NAME", "sales-girl-agent-en")
 ALWAYS_ENABLED_RUNTIME_TOOLS = {"search_business_knowledge"}
+_TEXTUAL_FUNCTION_CALL_PATTERN = re.compile(
+    r"^\s*<function>\s*([A-Za-z_][A-Za-z0-9_]*)\s*(\{.*\})\s*</function>\s*$",
+    re.DOTALL | re.IGNORECASE,
+)
+_TEXTUAL_FUNCTION_MARKER = "<function>"
+_MARKDOWN_LINK_PATTERN = re.compile(r"\[([^\]]+)\]\([^\)]+\)")
+_EMOJI_PATTERN = re.compile(
+    "["
+    "\U0001F1E6-\U0001F1FF"
+    "\U0001F300-\U0001FAFF"
+    "\u2600-\u26FF"
+    "\u2700-\u27BF"
+    "\uFE0F"
+    "\u200D"
+    "]+",
+    flags=re.UNICODE,
+)
+
+
+def _runtime_tool_name(tool: Any) -> str:
+    return str(getattr(getattr(tool, "info", None), "name", "") or "").strip()
+
+
+def select_enabled_runtime_tools(
+    tools: list[Any], enabled_tool_names: list[str] | set[str] | tuple[str, ...]
+) -> list[Any]:
+    """Return only tools explicitly enabled for this configured agent."""
+    enabled = {
+        str(name or "").strip()
+        for name in enabled_tool_names
+        if str(name or "").strip()
+    }
+    enabled.update(ALWAYS_ENABLED_RUNTIME_TOOLS)
+    return [tool for tool in tools if _runtime_tool_name(tool) in enabled]
+
+
+def parse_textual_function_call(
+    text: str, *, allowed_tool_names: set[str]
+) -> tuple[str, str] | None:
+    """Recover the exact textual tool-call form occasionally emitted by MaaS."""
+    match = _TEXTUAL_FUNCTION_CALL_PATTERN.fullmatch(str(text or ""))
+    if not match:
+        return None
+    tool_name = match.group(1).strip()
+    if tool_name not in allowed_tool_names:
+        return None
+    try:
+        arguments = json.loads(match.group(2))
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(arguments, dict):
+        return None
+    return tool_name, json.dumps(arguments, ensure_ascii=False, separators=(",", ":"))
+
+
+def _text_from_llm_chunk(chunk: Any) -> str:
+    if isinstance(chunk, str):
+        return chunk
+    if isinstance(chunk, llm.ChatChunk) and chunk.delta is not None:
+        return str(chunk.delta.content or "")
+    return ""
+
+
+def sanitize_voice_output_text(text: str) -> str:
+    """Remove visual-only formatting before text reaches TTS or transcripts."""
+    sanitized = _MARKDOWN_LINK_PATTERN.sub(r"\1", str(text or ""))
+    sanitized = _EMOJI_PATTERN.sub("", sanitized)
+    sanitized = re.sub(
+        r"(?m)^[ \t]*(?:#{1,6}[ \t]*|[-+•][ \t]+|\d+[.)][ \t]+)",
+        "",
+        sanitized,
+    )
+    sanitized = sanitized.translate(str.maketrans("", "", "*`#"))
+    sanitized = sanitized.replace("•", " ").replace("|", " ")
+    sanitized = re.sub(r"[ \t]{2,}", " ", sanitized)
+    sanitized = re.sub(r"[ \t]+([,.;:!?])", r"\1", sanitized)
+    return sanitized
+
+
+def _sanitize_voice_output_chunk(chunk: Any) -> Any:
+    if isinstance(chunk, str):
+        return sanitize_voice_output_text(chunk)
+    if not isinstance(chunk, llm.ChatChunk) or chunk.delta is None:
+        return chunk
+    if chunk.delta.content is None:
+        return chunk
+    sanitized_delta = chunk.delta.model_copy(
+        update={"content": sanitize_voice_output_text(chunk.delta.content)}
+    )
+    return chunk.model_copy(update={"delta": sanitized_delta})
+
+
+def _is_possible_textual_function_prefix(text: str) -> bool:
+    candidate = str(text or "").lstrip().lower()
+    if not candidate:
+        return True
+    return _TEXTUAL_FUNCTION_MARKER.startswith(candidate) or candidate.startswith(
+        _TEXTUAL_FUNCTION_MARKER
+    )
 
 
 def _tool_metadata(ctx: RunContext) -> dict:
@@ -147,16 +250,116 @@ class SalonAgent(Agent):
     Shared English customer support agent for business-specific use cases.
     """
 
+    async def llm_node(self, chat_ctx, tools, model_settings):
+        """Convert MaaS textual function markup into a real LiveKit tool call.
+
+        GLM normally returns OpenAI-compatible structured tool calls. If it emits
+        the fallback ``<function>name{...}</function>`` representation, hold that
+        response out of TTS and recover it only for a tool enabled in this turn.
+        """
+        pending: list[Any] = []
+        buffered_text = ""
+        probing = True
+        last_chunk_id = ""
+
+        async for chunk in Agent.default.llm_node(
+            self, chat_ctx, tools, model_settings
+        ):
+            if isinstance(chunk, llm.ChatChunk):
+                last_chunk_id = chunk.id or last_chunk_id
+                if chunk.delta is not None and chunk.delta.tool_calls:
+                    # While probing, pending content can only be whitespace or
+                    # a textual-function prefix. Never send that prefix to TTS
+                    # when the provider follows it with a structured call.
+                    pending.clear()
+                    probing = False
+                    yield chunk
+                    continue
+
+            if not probing:
+                yield _sanitize_voice_output_chunk(chunk)
+                continue
+
+            pending.append(chunk)
+            buffered_text += _text_from_llm_chunk(chunk)
+            if _is_possible_textual_function_prefix(buffered_text):
+                continue
+
+            for buffered_chunk in pending:
+                yield _sanitize_voice_output_chunk(buffered_chunk)
+            pending.clear()
+            probing = False
+
+        if not probing:
+            return
+
+        allowed_tool_names = {
+            name for tool in tools if (name := _runtime_tool_name(tool))
+        }
+        recovered = parse_textual_function_call(
+            buffered_text, allowed_tool_names=allowed_tool_names
+        )
+        if recovered:
+            tool_name, arguments = recovered
+            logger.warning(
+                "Recovered textual MaaS function call as a structured tool call: tool=%s",
+                tool_name,
+            )
+            yield llm.ChatChunk(
+                id=last_chunk_id or f"textual-tool-{uuid.uuid4().hex}",
+                delta=llm.ChoiceDelta(
+                    role="assistant",
+                    tool_calls=[
+                        llm.FunctionToolCall(
+                            name=tool_name,
+                            arguments=arguments,
+                            call_id=f"call_textual_{uuid.uuid4().hex}",
+                        )
+                    ],
+                ),
+            )
+            for buffered_chunk in pending:
+                if isinstance(buffered_chunk, llm.ChatChunk) and buffered_chunk.usage:
+                    yield llm.ChatChunk(id=buffered_chunk.id, usage=buffered_chunk.usage)
+            return
+
+        if buffered_text.lstrip().lower().startswith(_TEXTUAL_FUNCTION_MARKER):
+            logger.error(
+                "Suppressed malformed or unauthorized textual MaaS function call."
+            )
+            activity = getattr(self, "_activity", None)
+            session = getattr(activity, "session", None)
+            userdata = getattr(session, "userdata", None)
+            language = (
+                str(userdata.get("language") or "")
+                if isinstance(userdata, dict)
+                else ""
+            )
+            if language.lower() == "fr":
+                yield "Je suis désolée, je n’ai pas pu terminer cette action. Pourriez-vous réessayer ?"
+            else:
+                yield "I'm sorry, I couldn't complete that action. Could you try again?"
+            return
+
+        for buffered_chunk in pending:
+            yield _sanitize_voice_output_chunk(buffered_chunk)
+
     @function_tool(raw_schema=SEARCH_BUSINESS_KNOWLEDGE_RAW_SCHEMA)
     async def search_business_knowledge(
         self,
         ctx: RunContext,
-        query: str,
-        top_k: int | str | None = 4,
+        raw_arguments: dict | None = None,
     ) -> dict:
+        args = raw_arguments if isinstance(raw_arguments, dict) else {}
+        query = str(args.get("query") or "").strip()
+        if not query:
+            return {
+                "status": "failed",
+                "message": "Please provide what you want me to look up.",
+            }
         result = await search_business_knowledge_api(
             query=query,
-            top_k=normalize_top_k(top_k),
+            top_k=normalize_top_k(args.get("top_k")),
             metadata=_tool_metadata(ctx),
         )
         if result.get("status") != "failed":
@@ -312,20 +515,34 @@ class SalonAgent(Agent):
     async def create_booking(
         self,
         ctx: RunContext,
-        room_type: str,
-        check_in_date: str,
-        check_out_date: str,
-        guest_count: int = 1,
-        guest_name: str | None = None,
-        special_requests: str | None = None,
-        price_snapshot: dict | None = None,
-        customer_identifier: str | None = None,
+        raw_arguments: dict | None = None,
     ) -> dict:
         if not _is_tool_enabled(ctx, "create_booking"):
             return {
                 "status": "failed",
                 "message": "I can't create a booking from this agent right now.",
             }
+        args = raw_arguments if isinstance(raw_arguments, dict) else {}
+        room_type = str(args.get("room_type") or "").strip()
+        check_in_date = str(args.get("check_in_date") or "").strip()
+        check_out_date = str(args.get("check_out_date") or "").strip()
+        if not room_type or not check_in_date or not check_out_date:
+            return {
+                "status": "failed",
+                "message": (
+                    "I need the room type, check-in date, and check-out date "
+                    "before I can create the booking."
+                ),
+            }
+        try:
+            guest_count = max(1, int(args.get("guest_count") or 1))
+        except (TypeError, ValueError):
+            guest_count = 1
+        guest_name = str(args.get("guest_name") or "").strip() or None
+        special_requests = str(args.get("special_requests") or "").strip() or None
+        customer_identifier = (
+            str(args.get("customer_identifier") or "").strip() or None
+        )
         result = await create_booking_api(
             customer_identifier=customer_identifier,
             guest_name=guest_name,
@@ -334,7 +551,7 @@ class SalonAgent(Agent):
             check_out_date=check_out_date,
             guest_count=guest_count,
             special_requests=special_requests,
-            price_snapshot=normalize_price_snapshot(price_snapshot),
+            price_snapshot=normalize_price_snapshot(args.get("price_snapshot")),
             metadata=_tool_metadata(ctx),
         )
         if result.get("status") != "failed":
@@ -349,27 +566,33 @@ class SalonAgent(Agent):
     async def create_order(
         self,
         ctx: RunContext,
-        item_name: str = "",
-        quantity: int = 1,
-        items: list[dict] | None = None,
-        customer_name: str | None = None,
-        notes: str | None = None,
-        price_snapshot: dict | None = None,
-        customer_identifier: str | None = None,
+        raw_arguments: dict | None = None,
     ) -> dict:
         if not _is_tool_enabled(ctx, "create_order"):
             return {
                 "status": "failed",
                 "message": "I can't create an order from this agent right now.",
             }
+        args = raw_arguments if isinstance(raw_arguments, dict) else {}
+        item_name = str(args.get("item_name") or "").strip()
+        try:
+            quantity = max(1, int(args.get("quantity") or 1))
+        except (TypeError, ValueError):
+            quantity = 1
+        items = normalize_order_items(args.get("items"))
+        customer_name = str(args.get("customer_name") or "").strip() or None
+        notes = str(args.get("notes") or "").strip() or None
+        customer_identifier = (
+            str(args.get("customer_identifier") or "").strip() or None
+        )
         result = await create_order_api(
             customer_identifier=customer_identifier,
             customer_name=customer_name,
             item_name=item_name,
             quantity=quantity,
-            items=normalize_order_items(items),
+            items=items,
             notes=notes,
-            price_snapshot=normalize_price_snapshot(price_snapshot),
+            price_snapshot=normalize_price_snapshot(args.get("price_snapshot")),
             metadata=_tool_metadata(ctx),
         )
         if result.get("status") != "failed":

@@ -1,4 +1,4 @@
-name: Deploy Voice Agent
+name: Deploy Voice Agent to Huawei
 
 on:
   push:
@@ -10,19 +10,28 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: huawei-${{ github.repository }}-${{ github.ref_name }}
+  cancel-in-progress: false
+
 env:
-  IMAGE_NAME: sales-girl-voice-agent
+  REPO_DIR: sales-girl-voice-agent
+  COMPOSE_SERVICES: voice-agent-en,voice-agent-fr
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     env:
       DEPLOY_ENV: ${{ github.ref_name == 'main' && 'prod' || 'staging' }}
-      GCP_PROJECT_ID: ${{ github.ref_name == 'main' && vars.GCP_PROJECT_ID_PROD || vars.GCP_PROJECT_ID_STAGING }}
-      GCP_REGION: ${{ vars.GCP_REGION || 'europe-west1' }}
-      GCP_ZONE: ${{ github.ref_name == 'main' && vars.GCP_ZONE_PROD || vars.GCP_ZONE_STAGING }}
-      ARTIFACT_REGISTRY_REPOSITORY: ${{ vars.ARTIFACT_REGISTRY_REPOSITORY || 'backend' }}
-      VM_USER: ${{ vars.VOICE_AGENT_VM_USER || 'ubuntu' }}
+      HEALTH_PORT: "none"
+      HUAWEI_BASTION_HOST: ${{ vars.HUAWEI_BASTION_HOST || '159.138.169.125' }}
+      HUAWEI_NODE_B_PRIVATE_HOST: ${{ vars.HUAWEI_NODE_B_PRIVATE_HOST || '10.40.20.169' }}
+      HUAWEI_SSH_USER: ${{ vars.HUAWEI_SSH_USER || 'root' }}
+      HUAWEI_SRC_ROOT: ${{ vars.HUAWEI_SRC_ROOT || '/opt/salesgirl/src' }}
+      TARGET_STACK_DIR: ${{ github.ref_name == 'main' && (vars.HUAWEI_NODE_B_STACK_DIR_PROD || '/opt/salesgirl/node-b-prod') || (vars.HUAWEI_NODE_B_STACK_DIR_STAGING || '/opt/salesgirl/node-b-staging') }}
+      COMPOSE_PROJECT_NAME: ${{ github.ref_name == 'main' && (vars.HUAWEI_COMPOSE_PROJECT_PROD || 'node-b-prod') || (vars.HUAWEI_COMPOSE_PROJECT_STAGING || 'node-b-staging') }}
+      REFERENCE_GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
 
     steps:
       - name: Checkout
@@ -39,65 +48,207 @@ jobs:
           pip install -r requirements.txt
 
       - name: Run tests
+        env:
+          GOOGLE_API_KEY: dummy-test-key
+          MAAS_API_KEY: dummy-test-key
         run: python -m unittest discover -s tests -p 'test_*.py'
 
       - name: Build image
-        run: docker build -t "${IMAGE_NAME}:ci" .
+        run: docker build -t sales-girl-voice-agent:ci .
 
-      - name: Authenticate to Google Cloud
-        uses: google-github-actions/auth@v3
-        with:
-          credentials_json: ${{ github.ref_name == 'main' && secrets.GCP_SA_KEY_PROD || secrets.GCP_SA_KEY_STAGING }}
-
-      - name: Setup gcloud
-        uses: google-github-actions/setup-gcloud@v3
-
-      - name: Configure Docker auth
-        run: gcloud auth configure-docker "${GCP_REGION}-docker.pkg.dev" --quiet
-
-      - name: Push release image
-        env:
-          GITHUB_SHA: ${{ github.sha }}
+      - name: Configure pinned Huawei SSH route
         run: |
-          IMAGE_BASE="${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT_ID}/${ARTIFACT_REGISTRY_REPOSITORY}/${IMAGE_NAME}"
-          IMAGE_SHA="${IMAGE_BASE}:${GITHUB_SHA}"
-          IMAGE_LATEST="${IMAGE_BASE}:${DEPLOY_ENV}-latest"
-          docker build -t "${IMAGE_SHA}" -t "${IMAGE_LATEST}" .
-          docker push "${IMAGE_SHA}"
-          docker push "${IMAGE_LATEST}"
+          set -euo pipefail
+          test -n "${{ secrets.HUAWEI_SSH_PRIVATE_KEY }}"
+          test -n "${{ secrets.HUAWEI_SSH_KNOWN_HOSTS }}"
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "${{ secrets.HUAWEI_SSH_PRIVATE_KEY }}" > ~/.ssh/huawei_deploy_key
+          printf '%s\n' "${{ secrets.HUAWEI_SSH_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/huawei_deploy_key ~/.ssh/known_hosts
+          ssh-keygen -y -f ~/.ssh/huawei_deploy_key >/dev/null
+          cat > ~/.ssh/config <<EOF
+          Host huawei-bastion
+            HostName ${HUAWEI_BASTION_HOST}
+            User ${HUAWEI_SSH_USER}
+            IdentityFile ~/.ssh/huawei_deploy_key
+            IdentitiesOnly yes
+            BatchMode yes
+            StrictHostKeyChecking yes
+            UserKnownHostsFile ~/.ssh/known_hosts
+            ServerAliveInterval 15
+            ServerAliveCountMax 4
 
-      - name: Resolve VM Name
-        run: |
-          VM_NAME="sales-girl-voice-agent-${DEPLOY_ENV}"
-          echo "VM_NAME=${VM_NAME}" >> "${GITHUB_ENV}"
+          Host huawei-node-b
+            HostName ${HUAWEI_NODE_B_PRIVATE_HOST}
+            User ${HUAWEI_SSH_USER}
+            IdentityFile ~/.ssh/huawei_deploy_key
+            IdentitiesOnly yes
+            BatchMode yes
+            ProxyJump huawei-bastion
+            StrictHostKeyChecking yes
+            UserKnownHostsFile ~/.ssh/known_hosts
+            ServerAliveInterval 15
+            ServerAliveCountMax 4
+          EOF
+          chmod 600 ~/.ssh/config
+          ssh huawei-node-b true
 
-      - name: Deploy on VM
-        env:
-          REPO_URL: https://github.com/${{ github.repository }}.git
-          REPO_BRANCH: ${{ github.ref_name }}
-          REPO_TOKEN: ${{ github.token }}
+      - name: Upload immutable release and deploy
         run: |
-          gcloud compute ssh "${VM_NAME}" \
-            --project "${GCP_PROJECT_ID}" \
-            --zone "${GCP_ZONE}" \
-            --tunnel-through-iap \
-            --ssh-flag="-o StrictHostKeyChecking=no" \
-            --command "\
-            export ENVIRONMENT='${DEPLOY_ENV}' && \
-            export VM_USER='${VM_USER}' && \
-            export REPO_URL='${REPO_URL}' && \
-            export REPO_BRANCH='${REPO_BRANCH}' && \
-            export GITHUB_TOKEN='${REPO_TOKEN}' && \
-            sudo mkdir -p /opt/sales-girl-voice-agent && \
-            sudo chown -R ${VM_USER}:${VM_USER} /opt/sales-girl-voice-agent && \
-            sudo -u ${VM_USER} git config --global --add safe.directory /opt/sales-girl-voice-agent && \
-            cd /opt/sales-girl-voice-agent && \
-            sudo -u ${VM_USER} git fetch origin && \
-            sudo -u ${VM_USER} git checkout ${REPO_BRANCH} && \
-            sudo -u ${VM_USER} git stash push -m github-actions-predeploy-${{ github.sha }} || true && \
-            sudo -u ${VM_USER} git pull origin ${REPO_BRANCH} && \
-            if [ -x /opt/sales-girl-voice-agent/scripts/deploy.sh ]; then \
-              /opt/sales-girl-voice-agent/scripts/deploy.sh; \
-            else \
-              /opt/sales-girl-voice-agent/sales-girl-voice-agent/scripts/deploy.sh; \
-            fi"
+          set -euo pipefail
+          remote_release="${HUAWEI_SRC_ROOT}/.releases/${DEPLOY_ENV}/${REPO_DIR}/${GITHUB_SHA}"
+          remote_current="${HUAWEI_SRC_ROOT}/${DEPLOY_ENV}/${REPO_DIR}"
+          reference_google_api_key_b64="$(printf '%s' "${REFERENCE_GOOGLE_API_KEY}" | base64 -w 0)"
+
+          ssh huawei-node-b "mkdir -p '${remote_release}' '${HUAWEI_SRC_ROOT}/${DEPLOY_ENV}'"
+          tar \
+            --exclude='.git' \
+            --exclude='.venv' \
+            --exclude='__pycache__' \
+            --exclude='.pytest_cache' \
+            -czf - . | ssh huawei-node-b "tar -xzf - -C '${remote_release}'"
+
+          ssh huawei-node-b bash -s -- \
+            "${remote_release}" \
+            "${remote_current}" \
+            "${TARGET_STACK_DIR}" \
+            "${COMPOSE_PROJECT_NAME}" \
+            "${COMPOSE_SERVICES}" \
+            "${HEALTH_PORT}" \
+            "${reference_google_api_key_b64}" <<'REMOTE'
+          set -Eeuo pipefail
+
+          release_dir="$1"
+          current_link="$2"
+          stack_dir="$3"
+          project_name="$4"
+          service_list="$5"
+          health_port="$6"
+          google_api_key_b64="${7:-}"
+          IFS=',' read -r -a services <<< "${service_list}"
+          export COMPOSE_PROJECT_NAME="${project_name}"
+          compose=(docker compose --env-file .env.node-b)
+
+          exec 9>/var/lock/salesgirl-deploy.lock
+          flock -w 1800 9
+
+          previous_target="$(readlink "${current_link}" 2>/dev/null || true)"
+          rollback() {
+            status=$?
+            trap - EXIT
+            if [[ ${status} -ne 0 && -n "${previous_target}" && -d "${previous_target}" ]]; then
+              echo "Deployment failed; restoring ${previous_target}"
+              ln -sfn "${previous_target}" "${current_link}"
+              cd "${stack_dir}"
+              "${compose[@]}" build "${services[@]}" || true
+              "${compose[@]}" up -d --no-deps --force-recreate "${services[@]}" || true
+            fi
+            exit "${status}"
+          }
+          trap rollback EXIT
+
+          ln -sfn "${release_dir}" "${current_link}"
+          cd "${stack_dir}"
+          cp .env.node-b ".env.node-b.bak.reference-baseline-$(date +%Y%m%d%H%M%S)"
+          python3 - "${google_api_key_b64}" <<'PY'
+          import base64
+          import sys
+          from pathlib import Path
+
+          env_path = Path(".env.node-b")
+          google_api_key = ""
+          if len(sys.argv) > 1 and sys.argv[1]:
+              google_api_key = base64.b64decode(sys.argv[1]).decode().strip()
+
+          desired = {
+              "VOICE_AGENT_LLM_PROVIDER": "google",
+              "LLM_PROVIDER": "google",
+              "GOOGLE_LLM_MODEL_DEFAULT": "gemini-3.5-flash-lite",
+              "GOOGLE_LLM_MODEL_EN": "gemini-3.5-flash-lite",
+              "VOICE_AGENT_STT_PROVIDER": "deepgram",
+              "VOICE_AGENT_STT_MODEL": "nova-3",
+              "VOICE_AGENT_STT_INTERIM_RESULTS": "true",
+              "VOICE_AGENT_STT_ENDPOINTING_MS": "300",
+              "VOICE_AGENT_STT_NO_DELAY": "true",
+              "ENABLE_ODION_TTS_EN": "true",
+              "FORCE_ODION_TTS_EXPERIMENT_VOICE": "true",
+              "ODION_TTS_EXPERIMENT_OWNER_ID": "mavinomichael@gmail.com",
+              "ODION_TTS_EXPERIMENT_VOICE_ID": "d270a5cec6914373b9deed1d1c3cbade",
+              "ODION_TTS_EXPERIMENT_LANGUAGE_HINT": "English",
+              "ODION_TTS_EXPERIMENT_SEED": "0",
+              "NG_TTS_BASE_URL": "https://tts-ng.odion.ai",
+              "ODION_TTS_BASE_URL": "https://tts-ng.odion.ai",
+              "VOICE_AGENT_TURN_DETECTOR": "v1-mini",
+              "TURN_MIN_ENDPOINTING_DELAY": "0.25",
+              "TURN_MAX_ENDPOINTING_DELAY": "0.75",
+              "TURN_MIN_INTERRUPTION_DURATION": "0.7",
+          }
+          if google_api_key:
+              desired["GOOGLE_API_KEY"] = google_api_key
+
+          lines = env_path.read_text().splitlines()
+          seen = set()
+          updated = []
+          for line in lines:
+              if not line or line.lstrip().startswith("#") or "=" not in line:
+                  updated.append(line)
+                  continue
+              key = line.split("=", 1)[0]
+              if key in desired:
+                  updated.append(f"{key}={desired[key]}")
+                  seen.add(key)
+              else:
+                  updated.append(line)
+
+          for key, value in desired.items():
+              if key not in seen:
+                  updated.append(f"{key}={value}")
+
+          env_path.write_text("\n".join(updated) + "\n")
+          public_keys = [key for key in sorted(desired) if key != "GOOGLE_API_KEY"]
+          print("Applied reference baseline voice config keys:", ",".join(public_keys))
+          PY
+          "${compose[@]}" config -q
+          "${compose[@]}" build "${services[@]}"
+          "${compose[@]}" up -d --no-deps --force-recreate "${services[@]}"
+
+          for service in "${services[@]}"; do
+            container_id="$("${compose[@]}" ps -q "${service}")"
+            test -n "${container_id}"
+            test "$(docker inspect -f '{{.State.Running}}' "${container_id}")" = "true"
+          done
+
+          if [[ "${health_port}" != "none" ]]; then
+            healthy=false
+            for _ in {1..30}; do
+              if curl -fsS "http://127.0.0.1:${health_port}/v1/health" >/dev/null; then
+                healthy=true
+                break
+              fi
+              sleep 2
+            done
+            test "${healthy}" = "true"
+          else
+            workers_ready=false
+            for _ in {1..30}; do
+              all_workers_ready=true
+              for service in "${services[@]}"; do
+                container_id="$("${compose[@]}" ps -q "${service}")"
+                if [[ -z "${container_id}" ]] || \
+                  [[ "$(docker inspect -f '{{.State.Running}}' "${container_id}")" != "true" ]] || \
+                  ! docker logs "${container_id}" 2>&1 | grep -q "registered worker"; then
+                  all_workers_ready=false
+                fi
+              done
+              if [[ "${all_workers_ready}" = "true" ]]; then
+                workers_ready=true
+                break
+              fi
+              sleep 2
+            done
+            test "${workers_ready}" = "true"
+          fi
+
+          "${compose[@]}" ps "${services[@]}"
+          trap - EXIT
+          REMOTE

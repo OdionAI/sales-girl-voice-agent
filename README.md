@@ -50,6 +50,16 @@ Current stable contract:
 - dashboard-configured custom `http` tools are promoted into real callable
   runtime tools for the active agent at session start, not just appended to the
   prompt as text
+- each session exposes only the built-in and custom tools enabled by that
+  agent's active runtime config (plus scoped knowledge search); unrelated
+  built-in tools are not sent to the LLM
+- Huawei MaaS textual fallback calls in the exact
+  `<function>name{...}</function>` form are withheld from TTS and recovered as
+  structured calls only when the named tool is enabled; malformed or
+  unauthorized markup is never spoken to the caller
+- built-in tools that publish explicit raw JSON schemas receive the model's
+  top-level JSON object through LiveKit's `raw_arguments` contract before the
+  worker validates and forwards individual fields
 - custom runtime tools use the saved tool description as part of the live
   contract, can expose request-schema fields when provided, and forward
   business/session metadata headers to downstream business endpoints
@@ -62,9 +72,27 @@ Current stable contract:
   fragments so dashboard and session transcripts reflect final replies cleanly
 - ticket follow-up reconciliation should not create a second ticket when a
   recent successful ticket already exists for the same caller turn flow
-- the cascade runtime should prefer Gemini `gemini-3-flash-preview` for English
-  and French sessions and automatically retry on Gemini
-  `gemini-3.1-flash-lite` when the primary model is unavailable
+- the production cascade runtime uses Qwen 3.8 27B
+  (`qwen3.8_27b` at `QWEN_LLM_BASE_URL`) with thinking disabled for English and
+  French sessions; Huawei MaaS `glm-5.2` remains an opt-in alternative via
+  `LLM_PROVIDER=maas`
+- optional post-call summary/intent analysis also uses Huawei MaaS and reads
+  only messages belonging to the completed session, not older calls in the
+  same conversation
+- agents configured with `record_caller_details` treat it as an internal
+  post-call caller-intake marker, not as a live callable tool; the live agent
+  asks for and confirms first name, last name, phone number, and email at the
+  beginning of the call without updating the Sheet itself
+- after those calls end, a separate GLM-5.2 analysis pass extracts the caller
+  details plus the sheet-specific theme, sub-theme, request summary, treatment,
+  status, optional consular/order references, and transfer outcome, then asks
+  conversation service to create and export the complete record
+- conversation-service mutation responses use domain statuses such as
+  `active`, `ended`, and `ready`; the worker treats only explicit failure
+  markers as failed writes
+- configured agent names are pinned into the first-turn instruction, and
+  generic/custom voice responses are kept concise and free of Markdown syntax
+  before they reach TTS
 - NG TTS is the default non-Deepgram TTS path for configured English sessions
 - deployed environments can switch the default direct-call STT/TTS path to
   Odion STT and NG TTS with `VOICE_AGENT_STT_PROVIDER`, `VOICE_AGENT_STT_MODEL`,
@@ -73,7 +101,7 @@ Current stable contract:
 - staging Voice Lab sessions can apply temporary per-call STT/TTS overrides,
   including the Odion STT adapter for `eu-stt.odion.ai`, without changing
   saved agent configuration
-- NG TTS should use `NG_TTS_BASE_URL=https://ng-tts.odion.ai` on Huawei;
+- NG TTS should use `NG_TTS_BASE_URL=https://tts-ng.odion.ai` on Huawei;
   the adapter appends `/api/v1/tts/stream` for base URLs and uses a full stream
   endpoint exactly when one is explicitly supplied
 - `ODION_TTS_BASE_URL` remains a backward-compatible alias for older deploy
@@ -244,8 +272,21 @@ stability requires increasing to `4`.
 - `LIVEKIT_API_KEY`
 - `LIVEKIT_API_SECRET`
 - `DEEPGRAM_API_KEY`
-- `GOOGLE_API_KEY`
-- `LLM_PROVIDER` (`google` default, or `groq`)
+- `LLM_PROVIDER` (`qwen` for the Qwen 3.8 27B production runtime with thinking
+  off; `maas`, `google`, and `groq` remain supported alternatives)
+- `QWEN_LLM_BASE_URL`
+- `QWEN_LLM_MODEL_DEFAULT`
+- `QWEN_LLM_MODEL_EN`
+- `QWEN_LLM_MODEL_FR`
+- `QWEN_LLM_API_KEY`
+- `MAAS_API_KEY`
+- `MAAS_BASE_URL`
+- `MAAS_LLM_MODEL_DEFAULT`
+- `MAAS_LLM_MODEL_EN`
+- `MAAS_LLM_MODEL_FR`
+- `CONVERSATION_ANALYSIS_ENABLED`
+- `CONVERSATION_ANALYSIS_MODEL`
+- `GOOGLE_API_KEY` (only required when the Google provider is selected)
 - `GROQ_API_KEY` (required when `LLM_PROVIDER=groq`)
 - `GROQ_LLM_MODEL_DEFAULT`
 - `GROQ_LLM_MODEL_EN`
@@ -314,15 +355,21 @@ Deployed staging and production VM environments must set
 is not provided, but the base URL itself must still be configured or business
 knowledge retrieval is effectively disabled.
 
+Dynamic HTTP tools whose URL has the exact same origin as
+`CONVERSATION_API_BASE_URL` receive `CONVERSATION_SERVICE_TOKEN` from the voice
+runtime at call time. Do not store that token in an agent tool definition. The
+runtime never forwards this credential to a different scheme, host, or port.
+
 ## CI and deployment
 
 - dependency install/build sanity checks run on `dev`, `staging`, and `main`
-- pushes to `staging` deploy the staging VM runtime through GitHub Actions
-- pushes to `main` deploy the production VM runtime through GitHub Actions
-- GitHub Actions can publish a release image to Artifact Registry for parity,
-  but the active runtime still deploys onto the managed VM
-- the VM deploy flow should pull the target branch and restart the systemd
-  services instead of relying on local manual SSH deploy habits
+- pushes to `staging` and `main` deploy both language workers to the matching
+  Huawei node-B Compose stack through node A as an SSH bastion
+- the workflow runs unit and Docker-build gates, uploads the exact commit,
+  serializes Compose changes, and rolls back the source target if startup fails
+- it does not authenticate to GCP, publish to Artifact Registry, or use IAP
+- the approved personal-GCP dependency is the external NG/Odion TTS endpoint;
+  Huawei MaaS `glm-5.2` remains the live and post-call text model
 
 Branch convention:
 
