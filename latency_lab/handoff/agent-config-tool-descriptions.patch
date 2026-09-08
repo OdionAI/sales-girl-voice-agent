@@ -1,0 +1,42 @@
+diff --git a/app/api/routes_agents.py b/app/api/routes_agents.py
+index d4879f9..dbfd375 100644
+--- a/app/api/routes_agents.py
++++ b/app/api/routes_agents.py
+@@ -128,6 +128,7 @@ def _runtime_config_out(
+         tools=[
+             AgentActiveToolOut(
+                 name=row.name,
++                description=row.description,
+                 kind=row.kind,
+                 method=row.method,
+                 url=row.url,
+diff --git a/app/schemas/agents.py b/app/schemas/agents.py
+index 1e5d170..e4b76d2 100644
+--- a/app/schemas/agents.py
++++ b/app/schemas/agents.py
+@@ -73,5 +73,6 @@ class AgentsPage(BaseModel):
+ class AgentActiveToolOut(BaseModel):
+     name: str
++    description: str | None = None
+     kind: str
+     method: str
+     url: str
+diff --git a/tests/test_conversation_flow.py b/tests/test_conversation_flow.py
+index 6974420..c652262 100644
+--- a/tests/test_conversation_flow.py
++++ b/tests/test_conversation_flow.py
+@@ -35,6 +35,7 @@ def test_agent_config_flow(client, auth_headers, service_headers):
+         headers=auth_headers,
+         json={
+             "name": "check_membership",
++            "description": "Check whether a customer has an active membership.",
+             "kind": "http",
+             "method": "POST",
+             "url": "https://api.example.com/check-membership",
+@@ -79,5 +80,6 @@ def test_agent_config_flow(client, auth_headers, service_headers):
+     assert payload["tts_voice_id"] is None
+     assert len(payload["tools"]) == 1
+     assert payload["tools"][0]["name"] == "check_membership"
++    assert payload["tools"][0]["description"] == "Check whether a customer has an active membership."
+     assert payload["tools"][0]["headers"] == {"X-Test-Header": "demo"}
+     assert payload["tools"][0]["request_schema"]["required"] == ["customer_identifier"]

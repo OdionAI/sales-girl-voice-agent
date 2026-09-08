@@ -135,6 +135,112 @@ class DynamicKnowledgeRefreshTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Use ALAT to open an account.", updated_instructions)
 
 
+class VoiceLabMetricsPublishingTests(unittest.IsolatedAsyncioTestCase):
+    async def test_publishes_stt_llm_and_tts_metrics_to_voice_lab_topic(self) -> None:
+        registered_handlers: dict[str, object] = {}
+        queued_coroutines: list[object] = []
+
+        class FakeSession:
+            current_agent = None
+
+            def on(self, event_name: str):
+                def decorator(fn):
+                    registered_handlers[event_name] = fn
+                    return fn
+
+                return decorator
+
+        publish_data = AsyncMock()
+        room = SimpleNamespace(
+            local_participant=SimpleNamespace(publish_data=publish_data)
+        )
+        transcript = "I would like to check my account balance."
+        userdata = {
+            "runtime_overrides": {
+                "stt_provider": "odion_stt",
+                "tts_transport": "http",
+            },
+            "turn_index": 0,
+            "timeline_event_index": 0,
+            "last_dynamic_knowledge_query": transcript,
+            "last_user_transcript": "",
+            "language": "en",
+            "agent_id": "agent-1",
+            "client_id": "client-1",
+            "conversation_id": "conversation-1",
+            "session_id": "session-1",
+            "end_user_id": "caller@example.com",
+        }
+
+        with (
+            patch.object(main, "trace_conversation_event"),
+            patch.object(
+                main,
+                "_track_background_task",
+                side_effect=lambda _userdata, coro: queued_coroutines.append(coro),
+            ),
+        ):
+            main._wire_session_timeline(FakeSession(), userdata, room=room)
+            registered_handlers["user_input_transcribed"](
+                SimpleNamespace(
+                    transcript=transcript,
+                    is_final=True,
+                    created_at=1234.5,
+                    language="en",
+                    speaker_id="speaker-1",
+                )
+            )
+            registered_handlers["metrics_collected"](
+                SimpleNamespace(
+                    metrics=SimpleNamespace(
+                        type="llm_metrics",
+                        provider="qwen",
+                        model="qwen3.8_27b",
+                        ttft=0.25,
+                        duration=0.75,
+                        completion_tokens=12,
+                        cancelled=False,
+                    )
+                )
+            )
+            registered_handlers["metrics_collected"](
+                SimpleNamespace(
+                    metrics=SimpleNamespace(
+                        type="tts_metrics",
+                        provider="odion",
+                        model="Qwen3-TTS",
+                        ttfb=0.4,
+                        duration=1.2,
+                        audio_duration=2.4,
+                        cancelled=False,
+                    )
+                )
+            )
+
+            for coro in queued_coroutines:
+                await coro
+
+        self.assertEqual(publish_data.await_count, 3)
+        payloads = [
+            json.loads(call.args[0]) for call in publish_data.await_args_list
+        ]
+        self.assertEqual(
+            [payload["event"] for payload in payloads],
+            ["stt_final", "llm_first_token", "tts_done"],
+        )
+        self.assertTrue(
+            all(payload["type"] == "odion.voice_lab.metric" for payload in payloads)
+        )
+        self.assertTrue(all(payload["turn_index"] == 1 for payload in payloads))
+        self.assertEqual(payloads[0]["transcript_preview"], transcript)
+        self.assertEqual(payloads[1]["llm_ttft_ms"], 250.0)
+        self.assertEqual(payloads[2]["ttfa_ms"], 400.0)
+        self.assertEqual(payloads[2]["rtf"], 0.5)
+        for call in publish_data.await_args_list:
+            self.assertEqual(call.kwargs["topic"], main.VOICE_LAB_METRICS_TOPIC)
+            self.assertTrue(call.kwargs["reliable"])
+
+
 class TranscriptAndTicketGuardTests(unittest.IsolatedAsyncioTestCase):
     def test_skips_partial_assistant_fragment_when_full_reply_already_saved(self) -> None:
         userdata = {

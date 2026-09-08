@@ -5,6 +5,7 @@ import re
 import asyncio
 import base64
 import hashlib
+import time
 from typing import Any
 import uuid
 from urllib.parse import urlparse
@@ -15,13 +16,14 @@ load_dotenv()
 
 from livekit.agents import (
     APIConnectOptions,
+    EndpointingOptions,
+    InterruptionOptions,
     NOT_GIVEN,
     AgentServer,
     AgentSession,
     JobContext,
     TurnHandlingOptions,
     cli,
-    inference,
     room_io,
 )
 from livekit.agents import llm, stt
@@ -37,7 +39,6 @@ from agent.conversation_memory import (
 )
 from agent.conversation_service_api import (
     append_message as append_message_remote,
-    create_caller_record as create_caller_record_remote,
     create_session_event as create_session_event_remote,
     end_session as end_session_remote,
     fetch_context as fetch_context_remote,
@@ -45,13 +46,7 @@ from agent.conversation_service_api import (
     resolve_conversation as resolve_conversation_remote,
     start_session as start_session_remote,
     update_session_recording as update_session_recording_remote,
-    update_session_analysis as update_session_analysis_remote,
     utcnow as conv_api_utcnow,
-)
-from agent.conversation_analysis import (
-    analyze_caller_record,
-    analyze_messages,
-    is_enabled as conversation_analysis_enabled,
 )
 from agent.billing_hooks import (
     FAIL_CLOSED as BILLING_FAIL_CLOSED,
@@ -75,14 +70,20 @@ from agent.ops_api import (
     search_business_knowledge as ops_search_business_knowledge,
 )
 from agent.odion_tts import OdionTTS
-from agent.odion_stt import DEFAULT_ODION_STT_BASE_URL, OdionSTT
+from agent.odion_stt import (
+    DEFAULT_ODION_STT_BASE_URL,
+    ODION_STT_REALTIME_ENDPOINTING_SILENCE_SECONDS,
+    ODION_STT_REALTIME_MIN_SPEECH_SECONDS,
+    ODION_STT_REALTIME_VAD_ACTIVATION_THRESHOLD,
+    OdionSTT,
+)
 from agent.observability import flush_traces, trace_conversation_event
 from agent.livekit_recording import (
     finalize_room_recording,
     is_recording_enabled,
     start_room_recording,
 )
-from agent.salon_agent import SalonAgent, select_enabled_runtime_tools
+from agent.salon_agent import SalonAgent
 from prompts.en import SYSTEM_PROMPT_EN
 from prompts.fr import SYSTEM_PROMPT_FR
 
@@ -92,6 +93,8 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
+
+VOICE_LAB_METRICS_TOPIC = "odion.voice_lab.metrics"
 
 
 # AgentServer allows only one rtc_session per process. To support both English and
@@ -187,7 +190,6 @@ BUILTIN_RUNTIME_TOOL_NAMES = frozenset(
     for tool in find_function_tools(SalonAgent)
     if getattr(getattr(tool, "info", None), "name", None)
 )
-POST_CALL_ONLY_TOOL_NAMES = frozenset({"record_caller_details"})
 
 
 class UsageMeter:
@@ -787,18 +789,6 @@ async def _report_billing_final_usage(
         userdata["last_billing_report"] = result
 
 
-def _conversation_write_failed(payload: dict[str, Any] | None) -> bool:
-    """Treat conversation-service domain statuses as successful writes.
-
-    Session mutation endpoints return states such as ``ended``, ``ready``, or
-    ``available`` in their ``status`` field. Only transport/service failure
-    markers (or a missing status) indicate that the write failed.
-    """
-
-    status = str((payload or {}).get("status") or "").strip().lower()
-    return not status or status in {"failed", "disabled", "error"}
-
-
 async def _finalize_session_cleanup(
     *,
     userdata: dict[str, Any],
@@ -886,7 +876,7 @@ async def _finalize_session_cleanup(
                     recording_duration_seconds=recording_duration_seconds,
                     business_id=business_id,
                 )
-                if _conversation_write_failed(persisted):
+                if str(persisted.get("status") or "") != "success":
                     logger.error(
                         "Recording metadata persist failed: session_id=%s detail=%s http_status=%s",
                         session_tracker_id,
@@ -952,7 +942,7 @@ async def _finalize_session_cleanup(
                     duration_seconds=duration,
                     business_id=business_id,
                 )
-                if _conversation_write_failed(ended):
+                if str(ended.get("status") or "") != "success":
                     logger.error(
                         "End session persist failed: session_id=%s detail=%s http_status=%s",
                         session_tracker_id,
@@ -965,118 +955,6 @@ async def _finalize_session_cleanup(
                     session_tracker_id,
                     exc,
                 )
-
-        if (
-            conversation_service_enabled(business_id)
-            and session_tracker_id
-            and conversation_analysis_enabled()
-        ):
-            context_messages: list[dict[str, Any]] | None = None
-            try:
-                await update_session_analysis_remote(
-                    session_id=session_tracker_id,
-                    analysis_status="pending",
-                    business_id=business_id,
-                )
-                context = await fetch_context_remote(
-                    str(userdata.get("conversation_id") or ""),
-                    limit=200,
-                    session_id=session_tracker_id,
-                    business_id=business_id,
-                )
-                context_messages = context.get("messages") or []
-                analysis = await analyze_messages(
-                    context_messages, language=language
-                )
-                persisted_analysis = await update_session_analysis_remote(
-                    session_id=session_tracker_id,
-                    business_id=business_id,
-                    **analysis,
-                )
-                if _conversation_write_failed(persisted_analysis):
-                    logger.error(
-                        "Session analysis persist failed: session_id=%s detail=%s",
-                        session_tracker_id,
-                        persisted_analysis.get("detail"),
-                    )
-            except Exception as exc:  # noqa: BLE001
-                logger.exception(
-                    "Post-session analysis failed: session_id=%s error=%s",
-                    session_tracker_id,
-                    exc,
-                )
-                try:
-                    await update_session_analysis_remote(
-                        session_id=session_tracker_id,
-                        analysis_status="failed",
-                        business_id=business_id,
-                    )
-                except Exception:
-                    logger.exception(
-                        "Failed to persist analysis failure state: session_id=%s",
-                        session_tracker_id,
-                    )
-
-            enabled_tool_names = {
-                str(name or "").strip()
-                for name in (userdata.get("enabled_tool_names") or [])
-                if str(name or "").strip()
-            }
-            client_session_id = str(userdata.get("session_id") or "").strip()
-            if (
-                "record_caller_details" in enabled_tool_names
-                and client_session_id
-            ):
-                try:
-                    if context_messages is None:
-                        context = await fetch_context_remote(
-                            str(userdata.get("conversation_id") or ""),
-                            limit=200,
-                            session_id=session_tracker_id,
-                            business_id=business_id,
-                        )
-                        context_messages = context.get("messages") or []
-                    caller_record_analysis = await analyze_caller_record(
-                        context_messages,
-                        language=language,
-                    )
-                    caller_record_result = await create_caller_record_remote(
-                        session_ref=client_session_id,
-                        agent_id=str(
-                            userdata.get("agent_config_id")
-                            or userdata.get("agent_id")
-                            or ""
-                        ),
-                        conversation_ref=str(userdata.get("conversation_id") or ""),
-                        end_user_ref=str(userdata.get("end_user_id") or ""),
-                        business_id=business_id,
-                        **caller_record_analysis,
-                    )
-                    if _conversation_write_failed(caller_record_result):
-                        log_method = (
-                            logger.info
-                            if caller_record_result.get("http_status") == 404
-                            else logger.error
-                        )
-                        log_method(
-                            "Post-call caller-record export skipped or failed: "
-                            "session_ref=%s detail=%s http_status=%s",
-                            client_session_id,
-                            caller_record_result.get("detail"),
-                            caller_record_result.get("http_status"),
-                        )
-                    else:
-                        logger.info(
-                            "Post-call caller record exported: session_ref=%s duplicate=%s",
-                            client_session_id,
-                            caller_record_result.get("duplicate"),
-                        )
-                except Exception as exc:  # noqa: BLE001
-                    logger.exception(
-                        "Post-call caller-record analysis failed: session_ref=%s error=%s",
-                        client_session_id,
-                        exc,
-                    )
 
 
 async def _start_session_recording_capture(
@@ -1144,9 +1022,6 @@ CONVERSATION_SERVICE_REQUIRED = (
 )
 ENABLE_ODION_TTS_EN = os.getenv("ENABLE_ODION_TTS_EN", "true").lower() == "true"
 ENABLE_ODION_TTS_FR = os.getenv("ENABLE_ODION_TTS_FR", "false").lower() == "true"
-VOICE_AGENT_TTS_PROVIDER = (
-    str(os.getenv("VOICE_AGENT_TTS_PROVIDER") or "").strip().lower()
-)
 ODION_TTS_EXPERIMENT_OWNER_ID = str(
     os.getenv("ODION_TTS_EXPERIMENT_OWNER_ID") or ""
 ).strip()
@@ -1154,7 +1029,7 @@ ODION_TTS_EXPERIMENT_VOICE_ID = str(
     os.getenv("ODION_TTS_EXPERIMENT_VOICE_ID") or ""
 ).strip()
 FORCE_ODION_TTS_EXPERIMENT_VOICE = (
-    os.getenv("FORCE_ODION_TTS_EXPERIMENT_VOICE", "true").lower() == "true"
+    os.getenv("FORCE_ODION_TTS_EXPERIMENT_VOICE", "false").lower() == "true"
 )
 ODION_TTS_EXPERIMENT_LANGUAGE_HINT = (
     str(os.getenv("ODION_TTS_EXPERIMENT_LANGUAGE_HINT") or "English").strip()
@@ -1195,12 +1070,12 @@ def _float_env(name: str, default: float, *, min_value: float) -> float:
 
 TURN_MIN_ENDPOINTING_DELAY = _float_env(
     "TURN_MIN_ENDPOINTING_DELAY",
-    0.25,
+    0.3,
     min_value=0.1,
 )
 TURN_MAX_ENDPOINTING_DELAY = _float_env(
     "TURN_MAX_ENDPOINTING_DELAY",
-    0.75,
+    0.65,
     min_value=0.2,
 )
 if TURN_MAX_ENDPOINTING_DELAY < TURN_MIN_ENDPOINTING_DELAY:
@@ -1211,108 +1086,18 @@ if TURN_MAX_ENDPOINTING_DELAY < TURN_MIN_ENDPOINTING_DELAY:
 
 TURN_MIN_INTERRUPTION_DURATION = _float_env(
     "TURN_MIN_INTERRUPTION_DURATION",
-    0.7,
+    0.1,
     min_value=0.1,
 )
-
-VOICE_AGENT_STT_ENDPOINTING_MS = int(
-    os.getenv("VOICE_AGENT_STT_ENDPOINTING_MS", "300") or "300"
-)
-if VOICE_AGENT_STT_ENDPOINTING_MS < 100:
-    logger.warning(
-        "VOICE_AGENT_STT_ENDPOINTING_MS=%s is below 100ms; using 100ms.",
-        VOICE_AGENT_STT_ENDPOINTING_MS,
-    )
-    VOICE_AGENT_STT_ENDPOINTING_MS = 100
-VOICE_AGENT_STT_INTERIM_RESULTS = (
-    os.getenv("VOICE_AGENT_STT_INTERIM_RESULTS", "true").strip().lower()
-    == "true"
-)
-VOICE_AGENT_STT_NO_DELAY = (
-    os.getenv("VOICE_AGENT_STT_NO_DELAY", "true").strip().lower() == "true"
-)
-
-VOICE_AGENT_TURN_DETECTOR = (
-    str(os.getenv("VOICE_AGENT_TURN_DETECTOR") or "v1-mini").strip().lower()
-    or "v1-mini"
-)
-if VOICE_AGENT_TURN_DETECTOR not in {"v1-mini", "v1", "stt", "vad", "disabled"}:
-    logger.warning(
-        "Unsupported VOICE_AGENT_TURN_DETECTOR=%r; using v1-mini.",
-        VOICE_AGENT_TURN_DETECTOR,
-    )
-    VOICE_AGENT_TURN_DETECTOR = "v1-mini"
-
-
-def _turn_handling_options() -> TurnHandlingOptions:
-    if VOICE_AGENT_TURN_DETECTOR in {"disabled", "vad"}:
-        turn_detection: Any = "vad"
-        interruption_mode = "vad"
-    elif VOICE_AGENT_TURN_DETECTOR == "stt":
-        turn_detection = "stt"
-        interruption_mode = "vad"
-    else:
-        turn_detector_cls = getattr(inference, "TurnDetector", None)
-        if turn_detector_cls is None:
-            logger.warning(
-                "LiveKit inference.TurnDetector is unavailable; falling back to VAD turn handling."
-            )
-            turn_detection = "vad"
-            interruption_mode = "vad"
-        else:
-            turn_detection = turn_detector_cls(version=VOICE_AGENT_TURN_DETECTOR)
-            interruption_mode = "adaptive"
-
-    logger.info(
-        "Using LiveKit turn detector: mode=%s min_endpointing=%.3fs max_endpointing=%.3fs interruption=%s",
-        VOICE_AGENT_TURN_DETECTOR,
-        TURN_MIN_ENDPOINTING_DELAY,
-        TURN_MAX_ENDPOINTING_DELAY,
-        interruption_mode,
-    )
-    return TurnHandlingOptions(
-        turn_detection=turn_detection,
-        endpointing={
-            "min_delay": TURN_MIN_ENDPOINTING_DELAY,
-            "max_delay": TURN_MAX_ENDPOINTING_DELAY,
-        },
-        interruption={
-            "mode": interruption_mode,
-            "min_duration": TURN_MIN_INTERRUPTION_DURATION,
-        },
-    )
-
-VOICE_AGENT_LLM_PROVIDER = str(
-    os.getenv("VOICE_AGENT_LLM_PROVIDER") or os.getenv("LLM_PROVIDER") or "qwen"
-).strip().lower()
-MAAS_API_KEY = str(os.getenv("MAAS_API_KEY") or os.getenv("HUAWEI_MAAS_API_KEY") or "").strip()
-MAAS_BASE_URL = str(
-    os.getenv("MAAS_BASE_URL", "https://api-ap-southeast-1.modelarts-maas.com/openai/v1")
-).strip().rstrip("/")
-MAAS_LLM_MODEL_DEFAULT = str(os.getenv("MAAS_LLM_MODEL_DEFAULT") or "glm-5.2").strip() or "glm-5.2"
-MAAS_LLM_MODEL_EN = str(os.getenv("MAAS_LLM_MODEL_EN") or MAAS_LLM_MODEL_DEFAULT).strip() or MAAS_LLM_MODEL_DEFAULT
-MAAS_LLM_MODEL_FR = str(os.getenv("MAAS_LLM_MODEL_FR") or MAAS_LLM_MODEL_DEFAULT).strip() or MAAS_LLM_MODEL_DEFAULT
-QWEN_LLM_BASE_URL = str(
-    os.getenv("QWEN_LLM_BASE_URL")
-    or "http://102.88.137.124:8080/qwen38-standard/v1"
-).strip()
-QWEN_LLM_API_KEY = str(os.getenv("QWEN_LLM_API_KEY") or "EMPTY").strip() or "EMPTY"
-QWEN_LLM_MODEL_DEFAULT = (
-    str(os.getenv("QWEN_LLM_MODEL_DEFAULT") or os.getenv("QWEN_LLM_MODEL") or "qwen3.8_27b").strip()
-    or "qwen3.8_27b"
-)
-QWEN_LLM_MODEL_EN = (
-    str(os.getenv("QWEN_LLM_MODEL_EN") or QWEN_LLM_MODEL_DEFAULT).strip()
-    or QWEN_LLM_MODEL_DEFAULT
-)
-QWEN_LLM_MODEL_FR = (
-    str(os.getenv("QWEN_LLM_MODEL_FR") or QWEN_LLM_MODEL_DEFAULT).strip()
-    or QWEN_LLM_MODEL_DEFAULT
+TURN_AEC_WARMUP_DURATION = _float_env(
+    "TURN_AEC_WARMUP_DURATION",
+    0.1,
+    min_value=0.0,
 )
 
 GOOGLE_LLM_MODEL_DEFAULT = (
-    str(os.getenv("GOOGLE_LLM_MODEL_DEFAULT") or "gemini-3.5-flash-lite").strip()
-    or "gemini-3.5-flash-lite"
+    str(os.getenv("GOOGLE_LLM_MODEL_DEFAULT") or "gemini-3-flash-preview").strip()
+    or "gemini-3-flash-preview"
 )
 GOOGLE_LLM_MODEL_EN = (
     str(os.getenv("GOOGLE_LLM_MODEL_EN") or GOOGLE_LLM_MODEL_DEFAULT).strip()
@@ -1335,9 +1120,7 @@ GOOGLE_LLM_BACKUP_MODEL_FR = (
     or GOOGLE_LLM_BACKUP_MODEL_DEFAULT
 )
 
-LLM_PROVIDER = str(
-    os.getenv("LLM_PROVIDER") or os.getenv("VOICE_AGENT_LLM_PROVIDER") or "qwen"
-).strip().lower() or "qwen"
+LLM_PROVIDER = str(os.getenv("LLM_PROVIDER") or "google").strip().lower() or "google"
 GROQ_LLM_MODEL_DEFAULT = (
     str(
         os.getenv("GROQ_LLM_MODEL_DEFAULT")
@@ -1364,6 +1147,18 @@ GROQ_LLM_BACKUP_MODEL_EN = (
 GROQ_LLM_BACKUP_MODEL_FR = (
     str(os.getenv("GROQ_LLM_BACKUP_MODEL_FR") or GROQ_LLM_BACKUP_MODEL_DEFAULT).strip()
     or GROQ_LLM_BACKUP_MODEL_DEFAULT
+)
+QWEN_LLM_MODEL_DEFAULT = (
+    str(os.getenv("QWEN_LLM_MODEL_DEFAULT") or "qwen3.8_27b").strip()
+    or "qwen3.8_27b"
+)
+QWEN_LLM_MODEL_EN = (
+    str(os.getenv("QWEN_LLM_MODEL_EN") or QWEN_LLM_MODEL_DEFAULT).strip()
+    or QWEN_LLM_MODEL_DEFAULT
+)
+QWEN_LLM_MODEL_FR = (
+    str(os.getenv("QWEN_LLM_MODEL_FR") or QWEN_LLM_MODEL_DEFAULT).strip()
+    or QWEN_LLM_MODEL_DEFAULT
 )
 
 
@@ -1416,10 +1211,10 @@ class FallbackGoogleLLM(llm.LLM):
     def provider(self) -> str:
         return "google"
 
-    def prewarm(self) -> None:
-        self._primary.prewarm()
+    def prewarm(self, *args: Any, **kwargs: Any) -> None:
+        self._primary.prewarm(*args, **kwargs)
         if self._backup:
-            self._backup.prewarm()
+            self._backup.prewarm(*args, **kwargs)
 
     async def aclose(self) -> None:
         await self._primary.aclose()
@@ -1543,10 +1338,10 @@ class FallbackGroqLLM(llm.LLM):
     def provider(self) -> str:
         return "groq"
 
-    def prewarm(self) -> None:
-        self._primary.prewarm()
+    def prewarm(self, *args: Any, **kwargs: Any) -> None:
+        self._primary.prewarm(*args, **kwargs)
         if self._backup:
-            self._backup.prewarm()
+            self._backup.prewarm(*args, **kwargs)
 
     async def aclose(self) -> None:
         await self._primary.aclose()
@@ -1664,6 +1459,7 @@ def _build_llm_for_language(
     overrides = _normalize_runtime_overrides((userdata or {}).get("runtime_overrides"))
     override_provider = str(overrides.get("llm_provider") or "").strip().lower()
     provider = override_provider or LLM_PROVIDER
+
     if provider in {"qwen", "qwen_openai", "openai", "openai_compatible", "custom"}:
         model = (
             str(overrides.get("llm_model") or "").strip()
@@ -1671,15 +1467,22 @@ def _build_llm_for_language(
         )
         endpoint = (
             str(overrides.get("llm_base_url") or "").strip()
-            or QWEN_LLM_BASE_URL
+            or str(os.getenv("QWEN_LLM_BASE_URL") or "").strip()
         )
         base_url = _openai_compatible_base_url(endpoint)
         if not base_url:
             raise ValueError("QWEN_LLM_BASE_URL is required for the Qwen LLM provider")
-        api_key = str(overrides.get("llm_api_key") or "").strip() or QWEN_LLM_API_KEY
+        api_key = (
+            str(overrides.get("llm_api_key") or "").strip()
+            or str(os.getenv("QWEN_LLM_API_KEY") or "").strip()
+            or "EMPTY"
+        )
         disable_thinking = _runtime_override_truthy(
             overrides.get("llm_disable_thinking"),
-            default=True,
+            default=_runtime_override_truthy(
+                os.getenv("QWEN_LLM_DISABLE_THINKING"),
+                default=True,
+            ),
         )
         logger.info(
             "Using Qwen OpenAI-compatible LLM for %s session: model=%s base_url=%s thinking=%s runtime_override=%s",
@@ -1696,24 +1499,19 @@ def _build_llm_for_language(
             temperature=0,
             extra_body={
                 "chat_template_kwargs": {
-                    "thinking": not disable_thinking,
                     "enable_thinking": not disable_thinking,
                 }
             },
         )
-    if provider == "maas":
-        if not MAAS_API_KEY:
-            raise RuntimeError("MAAS_API_KEY is required when using the Huawei MaaS voice runtime.")
-        return openai.LLM(
-            model=MAAS_LLM_MODEL_FR if lang == "fr" else MAAS_LLM_MODEL_EN,
-            api_key=MAAS_API_KEY,
-            base_url=MAAS_BASE_URL,
-            temperature=0.2,
-            extra_body={"chat_template_kwargs": {"thinking": False}},
-        )
+
     if provider == "groq":
-        primary_model = GROQ_LLM_MODEL_FR if lang == "fr" else GROQ_LLM_MODEL_EN
-        backup_model = GROQ_LLM_BACKUP_MODEL_FR if lang == "fr" else GROQ_LLM_BACKUP_MODEL_EN
+        primary_model = (
+            str(overrides.get("llm_model") or "").strip()
+            or (GROQ_LLM_MODEL_FR if lang == "fr" else GROQ_LLM_MODEL_EN)
+        )
+        backup_model = "" if override_provider else (
+            GROQ_LLM_BACKUP_MODEL_FR if lang == "fr" else GROQ_LLM_BACKUP_MODEL_EN
+        )
         logger.info(
             "Using Groq LLM for %s session: primary=%s backup=%s",
             "French" if lang == "fr" else "English",
@@ -1725,8 +1523,11 @@ def _build_llm_for_language(
             backup_model=backup_model,
         )
 
-    primary_model = GOOGLE_LLM_MODEL_FR if lang == "fr" else GOOGLE_LLM_MODEL_EN
-    backup_model = (
+    primary_model = (
+        str(overrides.get("llm_model") or "").strip()
+        or (GOOGLE_LLM_MODEL_FR if lang == "fr" else GOOGLE_LLM_MODEL_EN)
+    )
+    backup_model = "" if override_provider else (
         GOOGLE_LLM_BACKUP_MODEL_FR if lang == "fr" else GOOGLE_LLM_BACKUP_MODEL_EN
     )
     logger.info(
@@ -2096,24 +1897,6 @@ def _participant_identity_from_ctx(
     if not participants:
         return "", "voice", fallback_business_id, "", "", "", "", {}
 
-    def _normalize_runtime_overrides(payload: Any) -> dict[str, str]:
-        if not isinstance(payload, dict):
-            return {}
-        normalized: dict[str, str] = {}
-        for key in (
-            "stt_provider",
-            "stt_model",
-            "stt_base_url",
-            "tts_provider",
-            "tts_model",
-            "tts_base_url",
-            "tts_api_key",
-        ):
-            value = str(payload.get(key) or "").strip()
-            if value:
-                normalized[key] = value
-        return normalized
-
     values = participants.values() if hasattr(participants, "values") else participants
     for participant in values:
         metadata_business_id = ""
@@ -2218,10 +2001,22 @@ async def _init_session_userdata(ctx: JobContext, language: str) -> dict[str, An
         configured_agent_name,
         end_user_name,
         tts_endpoint,
-        runtime_overrides,
+        identity_runtime_overrides,
     ) = _participant_identity_from_ctx(ctx)
+    job_runtime_overrides = _normalize_runtime_overrides(
+        job_metadata.get("runtime_overrides")
+    )
     participant_overrides = _extract_tts_overrides_from_ctx(ctx)
-    runtime_overrides = participant_overrides.get("runtime_overrides") or {}
+    runtime_overrides = {
+        **job_runtime_overrides,
+        **identity_runtime_overrides,
+        **participant_overrides.get("runtime_overrides", {}),
+    }
+    tts_endpoint = (
+        participant_overrides.get("tts_endpoint")
+        or _normalize_tts_endpoint(job_metadata.get("tts_endpoint") or "")
+        or tts_endpoint
+    )
 
     needs_identity = REQUIRE_VERIFIED_PHONE and not end_user_id
     needs_web_metadata = (
@@ -2242,11 +2037,18 @@ async def _init_session_userdata(ctx: JobContext, language: str) -> dict[str, An
                 configured_agent_name,
                 end_user_name,
                 tts_endpoint,
-                runtime_overrides,
+                identity_runtime_overrides,
             ) = _participant_identity_from_ctx(ctx)
             participant_overrides = _extract_tts_overrides_from_ctx(ctx)
-            runtime_overrides = (
-                participant_overrides.get("runtime_overrides") or runtime_overrides
+            runtime_overrides = {
+                **job_runtime_overrides,
+                **identity_runtime_overrides,
+                **participant_overrides.get("runtime_overrides", {}),
+            }
+            tts_endpoint = (
+                participant_overrides.get("tts_endpoint")
+                or _normalize_tts_endpoint(job_metadata.get("tts_endpoint") or "")
+                or tts_endpoint
             )
             logger.info(
                 "Retried participant identity after join: end_user_id=%s type=%s business_id=%s config_agent_id=%s configured_name=%s end_user_name=%s tts_endpoint=%s runtime_overrides=%s",
@@ -2298,11 +2100,11 @@ async def _init_session_userdata(ctx: JobContext, language: str) -> dict[str, An
         "entry_surface": str(job_metadata.get("entry_surface") or "").strip(),
         "session_owner": str(job_metadata.get("owner") or "").strip(),
         "route_number": str(job_metadata.get("route_number") or "").strip(),
-        "tts_mode": "auto",
-        "tts_owner_id": "",
-        "tts_voice_id": "",
-        "tts_language_hint": "",
-        "tts_seed": "",
+        "tts_mode": runtime_overrides.get("tts_mode") or "auto",
+        "tts_owner_id": runtime_overrides.get("tts_owner_id") or "",
+        "tts_voice_id": runtime_overrides.get("tts_voice_id") or "",
+        "tts_language_hint": runtime_overrides.get("tts_language_hint") or "",
+        "tts_seed": runtime_overrides.get("tts_seed") or "",
         "business_id": business_id,
         "conversation_id": conversation_id,
         "session_id": stable_session_id,
@@ -2320,7 +2122,58 @@ async def _init_session_userdata(ctx: JobContext, language: str) -> dict[str, An
     } | participant_overrides | _extract_session_extras_from_ctx(ctx)
 
 
-def _wire_session_timeline(session: AgentSession, userdata: dict[str, Any]) -> None:
+def _wire_session_timeline(
+    session: AgentSession,
+    userdata: dict[str, Any],
+    *,
+    room: Any | None = None,
+) -> None:
+    voice_lab_metrics_enabled = room is not None and bool(
+        userdata.get("runtime_overrides")
+        or str(userdata.get("entry_surface") or "").strip().lower() == "voice_lab"
+    )
+
+    def _publish_voice_lab_metric(event: str, **values: Any) -> None:
+        if not voice_lab_metrics_enabled:
+            return
+        turn_id = str(
+            values.pop("turn_id", "")
+            or userdata.get("voice_lab_active_turn_id")
+            or ""
+        ).strip()
+        turn_index = int(
+            values.pop("turn_index", 0)
+            or userdata.get("voice_lab_active_turn_index")
+            or 0
+        )
+        if not turn_id or turn_index <= 0:
+            return
+        payload = {
+            "type": "odion.voice_lab.metric",
+            "event": event,
+            "turn_id": turn_id,
+            "turn_index": turn_index,
+            "ts_ms": int(values.pop("ts_ms", 0) or time.time() * 1000),
+            **values,
+        }
+
+        async def _publish() -> None:
+            try:
+                await room.local_participant.publish_data(
+                    json.dumps(payload),
+                    reliable=True,
+                    topic=VOICE_LAB_METRICS_TOPIC,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "Could not publish Voice Lab metric event=%s turn=%s: %s",
+                    event,
+                    turn_index,
+                    exc,
+                )
+
+        _track_background_task(userdata, _publish())
+
     async def _update_live_agent_instructions(instructions: str) -> None:
         current_agent = getattr(session, "current_agent", None)
         if current_agent is None:
@@ -2403,6 +2256,90 @@ def _wire_session_timeline(session: AgentSession, userdata: dict[str, Any]) -> N
         )
         return int(userdata["timeline_event_index"])
 
+    @session.on("metrics_collected")
+    def _on_metrics_collected(ev: Any) -> None:
+        metrics = getattr(ev, "metrics", ev)
+        metric_type = str(getattr(metrics, "type", "") or "").strip().lower()
+        turn_index = int(userdata.get("turn_index", 0) or 0)
+        if metric_type == "stt_metrics":
+            logger.info(
+                "Voice latency: stage=stt turn=%s provider=%s model=%s duration_ms=%.1f audio_duration_s=%.2f streamed=%s",
+                turn_index,
+                str(getattr(metrics, "provider", "") or ""),
+                str(getattr(metrics, "model", "") or ""),
+                float(getattr(metrics, "duration", 0.0) or 0.0) * 1000,
+                float(getattr(metrics, "audio_duration", 0.0) or 0.0),
+                bool(getattr(metrics, "streamed", False)),
+            )
+            return
+        if metric_type == "eou_metrics":
+            logger.info(
+                "Voice latency: stage=turn_detection turn=%s endpointing_ms=%.1f transcription_delay_ms=%.1f turn_callback_ms=%.1f",
+                turn_index,
+                float(getattr(metrics, "end_of_utterance_delay", 0.0) or 0.0) * 1000,
+                float(getattr(metrics, "transcription_delay", 0.0) or 0.0) * 1000,
+                float(getattr(metrics, "on_user_turn_completed_delay", 0.0) or 0.0) * 1000,
+            )
+            return
+        if metric_type == "llm_metrics":
+            llm_ttft_ms = float(getattr(metrics, "ttft", 0.0) or 0.0) * 1000
+            logger.info(
+                "Voice latency: stage=llm turn=%s provider=%s model=%s ttft_ms=%.1f duration_ms=%.1f completion_tokens=%s cancelled=%s",
+                turn_index,
+                str(getattr(metrics, "provider", "") or ""),
+                str(getattr(metrics, "model", "") or ""),
+                float(getattr(metrics, "ttft", 0.0) or 0.0) * 1000,
+                float(getattr(metrics, "duration", 0.0) or 0.0) * 1000,
+                int(getattr(metrics, "completion_tokens", 0) or 0),
+                bool(getattr(metrics, "cancelled", False)),
+            )
+            if llm_ttft_ms > 0 and not bool(getattr(metrics, "cancelled", False)):
+                _publish_voice_lab_metric(
+                    "llm_first_token",
+                    provider=str(getattr(metrics, "provider", "") or ""),
+                    model=str(getattr(metrics, "model", "") or ""),
+                    llm_ttft_ms=llm_ttft_ms,
+                )
+            return
+        if metric_type == "tts_metrics":
+            tts_ttfb_ms = float(getattr(metrics, "ttfb", 0.0) or 0.0) * 1000
+            tts_total_ms = float(getattr(metrics, "duration", 0.0) or 0.0) * 1000
+            tts_audio_seconds = float(
+                getattr(metrics, "audio_duration", 0.0) or 0.0
+            )
+            logger.info(
+                "Voice latency: stage=tts turn=%s provider=%s model=%s ttfb_ms=%.1f duration_ms=%.1f audio_duration_s=%.2f cancelled=%s",
+                turn_index,
+                str(getattr(metrics, "provider", "") or ""),
+                str(getattr(metrics, "model", "") or ""),
+                float(getattr(metrics, "ttfb", 0.0) or 0.0) * 1000,
+                float(getattr(metrics, "duration", 0.0) or 0.0) * 1000,
+                float(getattr(metrics, "audio_duration", 0.0) or 0.0),
+                bool(getattr(metrics, "cancelled", False)),
+            )
+            if tts_ttfb_ms > 0 and not bool(getattr(metrics, "cancelled", False)):
+                duration_seconds = tts_total_ms / 1000
+                _publish_voice_lab_metric(
+                    "tts_done",
+                    transport=str(
+                        (userdata.get("runtime_overrides") or {}).get("tts_transport")
+                        or "http"
+                    ),
+                    ttfa_ms=tts_ttfb_ms,
+                    total_ms=tts_total_ms,
+                    audio_seconds=tts_audio_seconds,
+                    rtf=(
+                        duration_seconds / tts_audio_seconds
+                        if tts_audio_seconds > 0
+                        else None
+                    ),
+                    audio_wall=(
+                        tts_audio_seconds / duration_seconds
+                        if duration_seconds > 0
+                        else None
+                    ),
+                )
+
     @session.on("user_input_transcribed")
     def _on_user_input_transcribed(ev: Any) -> None:
         transcript = str(getattr(ev, "transcript", "") or "").strip()
@@ -2411,6 +2348,19 @@ def _wire_session_timeline(session: AgentSession, userdata: dict[str, Any]) -> N
 
         userdata["turn_index"] = int(userdata.get("turn_index", 0)) + 1
         userdata["last_user_transcript"] = transcript
+        turn_index = int(userdata["turn_index"])
+        created_at = float(getattr(ev, "created_at", 0.0) or time.time())
+        turn_id = f"turn-{turn_index}-{int(created_at * 1000)}"
+        userdata["voice_lab_active_turn_id"] = turn_id
+        userdata["voice_lab_active_turn_index"] = turn_index
+        _publish_voice_lab_metric(
+            "stt_final",
+            turn_id=turn_id,
+            turn_index=turn_index,
+            ts_ms=int(created_at * 1000),
+            transcript_preview=transcript[:160],
+            transcript_chars=len(transcript),
+        )
         _schedule_dynamic_knowledge_refresh(transcript)
         event_idx = _next_event_idx()
         trace_conversation_event(
@@ -2443,6 +2393,11 @@ def _wire_session_timeline(session: AgentSession, userdata: dict[str, Any]) -> N
 
         if role.lower() == "assistant":
             userdata["last_assistant_message"] = content
+            _publish_voice_lab_metric(
+                "llm_first_text",
+                assistant_preview=content[:160],
+                assistant_chars=len(content),
+            )
         elif role.lower() == "user":
             if content != userdata.get("last_user_transcript"):
                 userdata["turn_index"] = int(userdata.get("turn_index", 0)) + 1
@@ -2616,38 +2571,14 @@ def _instructions_with_resume_context(
 
 
 async def _instructions_with_context(base_prompt: str, userdata: dict[str, Any]) -> str:
-    enabled_tool_names = {
-        str(name or "").strip()
-        for name in (userdata.get("enabled_tool_names") or [])
-        if str(name or "").strip()
-    }
-    if "record_caller_details" in enabled_tool_names:
-        base_prompt = (
-            f"{base_prompt}\n\n"
-            "COLLECTE OBLIGATOIRE DES COORDONNÉES AU DÉBUT DE L’APPEL :\n"
-            "- Immédiatement après votre salutation initiale, et avant de traiter la demande, expliquez brièvement que vous devez recueillir les coordonnées de l’appelant pour le suivi.\n"
-            "- Demandez les informations une par une, jamais toutes dans la même question, dans cet ordre : prénom, nom de famille, numéro de téléphone avec indicatif pays, adresse e-mail.\n"
-            "- Pour le prénom puis le nom, demandez à l’appelant de les épeler. Répétez chaque valeur et obtenez une confirmation explicite.\n"
-            "- Pour le téléphone, répétez clairement l’indicatif et les chiffres. Pour l’e-mail, faites épeler les éléments ambigus puis répétez l’adresse complète. Corrigez toute valeur non confirmée.\n"
-            "- Après confirmation des quatre champs, remerciez l’appelant et demandez comment vous pouvez l’aider.\n"
-            "- Ne dites pas que vous avez appelé un outil, mis à jour une feuille, créé un dossier, ou enregistré les informations dans un système pendant l’appel.\n"
-            "- Ne demandez jamais à l’appelant le thème, le sous-thème, le résumé, le traitement, le statut, la durée, le nom de l’agent ou les identifiants de session : ces champs seront produits automatiquement après l’appel.\n"
-            "- Si l’appelant refuse explicitement de donner ses coordonnées, n’insistez pas de manière répétée ; continuez à l’aider sans prétendre avoir enregistré ses informations.\n\n"
-            "COMPORTEMENT DE CLÔTURE :\n"
-            "- Une fois les coordonnées confirmées (ou explicitement refusées) et la demande traitée, terminez naturellement la conversation.\n"
-            "- Ne donnez pas de récapitulatif forcé à la fin de chaque appel réussi.\n"
-            "- Ne résumez que si l’appelant le demande ou si une confirmation brève est réellement utile.\n"
-            "- Si l’appelant remercie, indique qu’il a terminé ou prend congé après ces étapes, répondez naturellement et concluez poliment.\n"
-        )
-    else:
-        base_prompt = (
-            f"{base_prompt}\n\n"
-            "Closing behavior:\n"
-            "- End the conversation naturally once the caller's request is handled.\n"
-            "- Do not give a forced recap of the whole interaction at the end of every successful call.\n"
-            "- Only give a short summary when the caller explicitly asks for one or when a brief confirmation is genuinely useful.\n"
-            "- If the caller says thank you, says they are done, or clearly signals the conversation is over, respond naturally and close politely.\n"
-        )
+    base_prompt = (
+        f"{base_prompt}\n\n"
+        "Closing behavior:\n"
+        "- End the conversation naturally once the caller's request is handled.\n"
+        "- Do not give a forced recap of the whole interaction at the end of every successful call.\n"
+        "- Only give a short summary when the caller explicitly asks for one or when a brief confirmation is genuinely useful.\n"
+        "- If the caller says thank you, says they are done, or clearly signals the conversation is over, respond naturally and close politely.\n"
+    )
     guest_context = str(userdata.get("guest_context") or "").strip()
     if guest_context:
         # Shared platform agents (for example the Help Center guide) are injected
@@ -2668,6 +2599,11 @@ async def _instructions_with_context(base_prompt: str, userdata: dict[str, Any])
     business_use_case = (
         str(userdata.get("business_use_case") or "ekedc").strip().lower()
     )
+    enabled_tool_names = {
+        str(name or "").strip()
+        for name in (userdata.get("enabled_tool_names") or [])
+        if str(name or "").strip()
+    }
     configured_agent_name = str(userdata.get("configured_agent_name") or "").strip()
     if configured_agent_name:
         logger.info(
@@ -2678,30 +2614,6 @@ async def _instructions_with_context(base_prompt: str, userdata: dict[str, Any])
             f"Agent profile detail: your name is '{configured_agent_name}'.\n"
             f"- If a customer asks your name, respond that your name is '{configured_agent_name}'.\n"
             "- Do not say you don't have a name."
-        )
-    banking_tool_names = {
-        "account_overview",
-        "recent_transactions",
-        "transaction_status",
-        "block_card",
-        "unblock_card",
-        "reverse_failed_transaction",
-        "send_transfer_alert",
-        "send_airtime_data_alert",
-    }
-    if (
-        business_use_case == "fidelity"
-        or bool(enabled_tool_names & banking_tool_names)
-        or configured_agent_name.strip().lower() == "saw"
-    ):
-        base_prompt = (
-            f"{base_prompt}\n\n"
-            "Banking support speaking style:\n"
-            "- Handle transfer, airtime, data, and alert flows naturally as a bank support assistant.\n"
-            "- Do not repeatedly call the flow a demo, test, simulation, mock, fake, pretend, or sandbox.\n"
-            "- Do not volunteer phrases like 'demo transaction', 'demo purchase', or 'no real transaction was executed'.\n"
-            "- Keep operational limits as internal guardrails. If a caller asks whether money was actually moved or asks about real account access, answer honestly and direct them to the official app or bank support.\n"
-            "- After a supported alert/action tool succeeds, give a short natural confirmation based on the tool result."
         )
     if business_use_case == "fidelity":
         base_prompt = (
@@ -2877,8 +2789,7 @@ async def _instructions_with_context(base_prompt: str, userdata: dict[str, Any])
             channel=channel,
             business_id=business_id,
         )
-        resolve_failed = str(resolved.get("status") or "") == "failed"
-        if resolve_failed:
+        if str(resolved.get("status") or "") == "failed":
             logger.error(
                 "Conversation resolve failed: business_id=%s agent_id=%s end_user_id=%s detail=%s http_status=%s",
                 business_id,
@@ -2888,30 +2799,11 @@ async def _instructions_with_context(base_prompt: str, userdata: dict[str, Any])
                 resolved.get("http_status"),
             )
         conv_id = str(resolved.get("conversation_id") or "")
-        context_failed = False
         if conv_id:
             userdata["conversation_id"] = conv_id
             context_payload = await fetch_context_remote(
                 conv_id, limit=30, business_id=business_id
             )
-            context_failed = (
-                str(context_payload.get("status") or "") == "failed"
-                if isinstance(context_payload, dict)
-                else True
-            )
-            if context_failed:
-                logger.error(
-                    "Conversation context fetch failed: business_id=%s conversation_id=%s end_user_id=%s detail=%s http_status=%s",
-                    business_id,
-                    conv_id,
-                    end_user_id,
-                    context_payload.get("detail")
-                    if isinstance(context_payload, dict)
-                    else "invalid response",
-                    context_payload.get("http_status")
-                    if isinstance(context_payload, dict)
-                    else None,
-                )
             msgs = (
                 context_payload.get("messages")
                 if isinstance(context_payload, dict)
@@ -2941,13 +2833,7 @@ async def _instructions_with_context(base_prompt: str, userdata: dict[str, Any])
                         "Most recent saved conversation snippets:\n"
                         f"{memory_text}\n"
                     )
-            if not context_failed:
-                # A newly resolved conversation normally has no history yet.
-                # That is a valid remote response, not a strict-mode fallback.
-                return base_prompt
-        if CONVERSATION_SERVICE_REQUIRED and (
-            resolve_failed or not conv_id or context_failed
-        ):
+        if CONVERSATION_SERVICE_REQUIRED:
             logger.error(
                 "Conversation strict mode fallback: proceeding without remote context. business_id=%s agent_id=%s end_user_id=%s",
                 business_id,
@@ -3141,16 +3027,8 @@ def _runtime_tool_guidance(
     active_agent_config: dict[str, Any] | None, business_use_case: str
 ) -> str:
     tools = _active_tool_records(active_agent_config)
-    enabled_names = {
-        str(tool.get("name") or "").strip()
-        for tool in tools
-        if str(tool.get("name") or "").strip() not in POST_CALL_ONLY_TOOL_NAMES
-    }
-    by_name = {
-        str(tool.get("name") or "").strip(): tool
-        for tool in tools
-        if str(tool.get("name") or "").strip() not in POST_CALL_ONLY_TOOL_NAMES
-    }
+    enabled_names = {str(tool.get("name") or "").strip() for tool in tools}
+    by_name = {str(tool.get("name") or "").strip(): tool for tool in tools}
     lines = [
         "Enabled tools for this agent right now:",
         "- Only the tools described here are available in this conversation.",
@@ -3514,13 +3392,6 @@ def _effective_base_prompt(
         return (
             f"{configured_instructions.rstrip()}\n\n"
             f"{runtime_tool_guidance}\n\n"
-            "Voice response rules:\n"
-            "- These runtime voice rules override any conflicting formatting or style examples above.\n"
-            "- Speak in short, natural sentences suitable for a phone call.\n"
-            "- Never output Markdown headings, bullet markers, numbered-list markers, emphasis markers, tables, or emojis.\n"
-            "- Do not read retrieved knowledge snippets verbatim. Summarize the relevant facts conversationally.\n"
-            "- Give the direct answer in two to four concise sentences first, then ask whether the caller wants more detail.\n"
-            "- Keep using the configured agent name throughout the call and never invent or switch to another personal name.\n\n"
             "Built-in tool rule:\n"
             "- search_business_knowledge is a built-in runtime tool for every agent, even when it is not part of the dashboard-configured tool list.\n"
             "- Use business knowledge search before saying you do not have enough information.\n"
@@ -3848,53 +3719,16 @@ def _instructions_with_preloaded_ops_context(
     return f"{base_prompt}\n\n{preloaded_context}\n"
 
 
-def _kickoff_prompt_for_language(
-    language: str,
-    business_use_case: str,
-    configured_agent_name: str = "",
-    enabled_tool_names: list[str] | set[str] | tuple[str, ...] = (),
-) -> str:
+def _kickoff_prompt_for_language(language: str, business_use_case: str) -> str:
     lang = str(language or "").strip().lower()
-    agent_name = str(configured_agent_name or "").strip()
-    contact_first = "record_caller_details" in {
-        str(name or "").strip()
-        for name in enabled_tool_names
-        if str(name or "").strip()
-    }
     if lang == "fr":
-        identity_rule = (
-            f"Votre nom est exactement « {agent_name} ». Utilisez ce prénom et aucun autre."
-            if agent_name
-            else ""
-        )
-        if contact_first:
-            return (
-                "Commencez la conversation maintenant. Saluez l'appelant en français et présentez-vous brièvement par votre nom. "
-                f"{identity_rule} "
-                "Expliquez en une phrase que vous allez d'abord recueillir ses coordonnées pour assurer le suivi, puis demandez uniquement son prénom et demandez-lui de l'épeler. "
-                "Ne demandez pas encore son nom, son téléphone, son e-mail ou le motif de son appel dans cette même réponse."
-            )
         return (
             "Commencez la conversation maintenant. Saluez l'appelant en français. Présentez-vous brièvement par votre nom et proposez votre aide de manière naturelle, en fonction de votre rôle spécifique. "
-            f"{identity_rule} "
             "Ne demandez pas d'abord l'email ou d'autres informations d'identification. "
             "N'énumérez pas immédiatement tout le profil de l'appelant ; saluez d'abord puis attendez sa demande."
         )
-    identity_rule = (
-        f"Your name is exactly \"{agent_name}\". Use that name and no other name."
-        if agent_name
-        else ""
-    )
-    if contact_first:
-        return (
-            "Start the conversation now. Greet the caller in English and introduce yourself briefly by name. "
-            f"{identity_rule} "
-            "Explain in one sentence that you will first collect their contact details for follow-up, then ask only for their first name and ask them to spell it. "
-            "Do not ask for their last name, phone, email, or reason for calling in the same response."
-        )
     return (
         "Start the conversation now. Greet the caller first in English. Introduce yourself briefly by name and offer assistance naturally based on your specific role and instructions. "
-        f"{identity_rule} "
         "Do not ask for email or other identifiers as your first move. Do not dump the caller profile immediately; greet first and wait for the caller's request."
     )
 
@@ -3910,81 +3744,55 @@ def _build_session_for_language(
     if stt_engine is None:
         stt_engine = _build_stt_engine_for_language(language=language, userdata=userdata)
     session_llm = _build_llm_for_language(language=language, userdata=userdata)
-    turn_handling = _turn_handling_options()
+    odion_stt = (
+        stt_engine.wrapped_stt
+        if isinstance(stt_engine, stt.StreamAdapter)
+        else stt_engine
+    )
+    session_vad = (
+        odion_stt.endpointing_vad if isinstance(odion_stt, OdionSTT) else None
+    )
+    turn_handling = TurnHandlingOptions(
+        endpointing=EndpointingOptions(
+            min_delay=TURN_MIN_ENDPOINTING_DELAY,
+            max_delay=TURN_MAX_ENDPOINTING_DELAY,
+        ),
+        interruption=InterruptionOptions(
+            enabled=True,
+            mode="vad",
+            min_duration=TURN_MIN_INTERRUPTION_DURATION,
+            min_words=0,
+            resume_false_interruption=False,
+            false_interruption_timeout=None,
+        ),
+    )
+    session_options: dict[str, Any] = {
+        "stt": stt_engine,
+        "llm": session_llm,
+        "userdata": userdata,
+        "turn_handling": turn_handling,
+        "aec_warmup_duration": TURN_AEC_WARMUP_DURATION,
+    }
+    if session_vad is not None:
+        session_options["vad"] = session_vad
     if language == "fr":
         return AgentSession(
-            stt=stt_engine,
             tts=tts_engine or deepgram.TTS(model="aura-2-agathe-fr"),
-            llm=session_llm,
-            userdata=userdata,
-            turn_handling=turn_handling,
+            **session_options,
         )
 
     return AgentSession(
-        stt=stt_engine,
         tts=tts_engine,
-        llm=session_llm,
-        userdata=userdata,
-        turn_handling=turn_handling,
+        **session_options,
     )
-
-
-async def _build_configured_salon_agent(
-    *, instructions: str, dynamic_tools: list[Any], userdata: dict[str, Any]
-) -> SalonAgent:
-    agent = SalonAgent(instructions=instructions, tools=dynamic_tools)
-    selected_tools = select_enabled_runtime_tools(
-        agent.tools,
-        list(userdata.get("enabled_tool_names") or []),
-    )
-    await agent.update_tools(selected_tools)
-    logger.info(
-        "Exposing configured runtime tools only: %s",
-        [
-            tool_name
-            for tool in agent.tools
-            if (
-                tool_name := str(
-                    getattr(getattr(tool, "info", None), "name", "") or ""
-                ).strip()
-            )
-        ],
-    )
-    return agent
 
 
 def _trigger_first_turn(
-    session: AgentSession,
-    *,
-    language: str,
-    business_use_case: str,
-    configured_agent_name: str = "",
-    enabled_tool_names: list[str] | set[str] | tuple[str, ...] = (),
+    session: AgentSession, *, language: str, business_use_case: str
 ) -> None:
     try:
-        # Huawei MaaS rejects an LLM request whose conversation contains only
-        # the system instructions. Build a one-off context with a synthetic
-        # user turn so GLM can generate the opening greeting. Passing the turn
-        # through ``chat_ctx`` (rather than ``user_input``) keeps it out of the
-        # caller transcript and the persisted conversation history.
-        kickoff_context = llm.ChatContext.empty()
-        kickoff_context.add_message(
-            role="user",
-            content=(
-                "L'appelant vient de se connecter. Commencez l'accueil maintenant."
-                if str(language or "").strip().lower() == "fr"
-                else "The caller has just connected. Begin the welcome now."
-            ),
-            extra={"synthetic_kickoff": True},
-        )
         session.generate_reply(
-            chat_ctx=kickoff_context,
-            instructions=_kickoff_prompt_for_language(
-                language,
-                business_use_case,
-                configured_agent_name,
-                enabled_tool_names,
-            ),
+            user_input=_kickoff_prompt_for_language(language, business_use_case),
             input_modality="text",
         )
     except Exception as exc:  # noqa: BLE001
@@ -4083,6 +3891,10 @@ def _default_odion_stt_base_url() -> str:
     )
 
 
+def _default_odion_stt_transport() -> str:
+    return str(os.getenv("ODION_STT_TRANSPORT") or "").strip().lower()
+
+
 def _build_stt_engine_for_language(*, language: str, userdata: dict[str, Any]) -> Any:
     lang = str(language or "").strip().lower()
     overrides = _runtime_overrides_from_userdata(userdata)
@@ -4091,31 +3903,42 @@ def _build_stt_engine_for_language(*, language: str, userdata: dict[str, Any]) -
     )
     model = str(overrides.get("stt_model") or _default_stt_model()).strip() or _default_stt_model()
     base_url = str(overrides.get("stt_base_url") or "").strip()
+    transport = str(
+        overrides.get("stt_transport")
+        or ("" if base_url else _default_odion_stt_transport())
+    ).strip().lower()
 
     if provider == "odion_stt":
         resolved_base_url = base_url or _default_odion_stt_base_url()
         logger.info(
-            "Using Odion STT runtime selection: base_url=%s model=%s language=%s override=%s",
+            "Using Odion STT runtime selection: base_url=%s model=%s language=%s transport=%s override=%s",
             resolved_base_url,
             model,
             lang,
+            transport or "auto",
             bool(overrides.get("stt_provider") or overrides.get("stt_base_url")),
+        )
+        endpointing_vad = silero.VAD.load(
+            min_speech_duration=ODION_STT_REALTIME_MIN_SPEECH_SECONDS,
+            min_silence_duration=ODION_STT_REALTIME_ENDPOINTING_SILENCE_SECONDS,
+            activation_threshold=ODION_STT_REALTIME_VAD_ACTIVATION_THRESHOLD,
         )
         odion_stt = OdionSTT(
             language=lang,
             model=model,
             base_url=resolved_base_url,
+            transport=transport,
+            endpointing_vad=endpointing_vad,
         )
+        if odion_stt.capabilities.streaming:
+            return odion_stt
         return stt.StreamAdapter(
             stt=odion_stt,
-            vad=silero.VAD.load(),
+            vad=endpointing_vad,
         )
     stt_kwargs: dict[str, Any] = {
         "language": _deepgram_stt_language_for_language(lang),
         "model": model,
-        "interim_results": VOICE_AGENT_STT_INTERIM_RESULTS,
-        "endpointing_ms": VOICE_AGENT_STT_ENDPOINTING_MS,
-        "no_delay": VOICE_AGENT_STT_NO_DELAY,
     }
     if provider == "custom" and base_url:
         stt_kwargs["base_url"] = base_url
@@ -4146,7 +3969,14 @@ def _build_tts_engine_for_language(
     is_fr = lang == "fr"
     saved_provider = str(active_agent_config.get("tts_provider") or "").strip().lower()
     runtime_overrides = _runtime_overrides_from_userdata(userdata)
-    override_provider = str(runtime_overrides.get("tts_provider") or "").strip().lower()
+    default_tts_provider = str(
+        os.getenv("VOICE_AGENT_TTS_PROVIDER")
+        or os.getenv("DEFAULT_TTS_PROVIDER")
+        or ""
+    ).strip().lower()
+    override_provider = str(
+        runtime_overrides.get("tts_provider") or default_tts_provider
+    ).strip().lower()
     override_model = (
         str(runtime_overrides.get("tts_model") or "").strip()
         or _deepgram_tts_model_for_language(lang)
@@ -4163,11 +3993,10 @@ def _build_tts_engine_for_language(
     tts_endpoint_override = _normalize_tts_endpoint(
         userdata.get("tts_endpoint") or ""
     ) or _normalize_tts_endpoint(override_base_url)
-    runtime_odion_tts_requested = (
-        bool(tts_endpoint_override)
-        or override_provider in {"odion_tts", "odion"}
-        or VOICE_AGENT_TTS_PROVIDER in {"odion_tts", "odion"}
-    )
+    runtime_odion_tts_requested = bool(tts_endpoint_override) or override_provider in {
+        "odion_tts",
+        "odion",
+    }
 
     if override_provider == "deepgram" or (
         override_provider == "custom" and not runtime_odion_tts_requested
@@ -4242,7 +4071,9 @@ def _build_tts_engine_for_language(
         ).strip()
         or ("French" if is_fr else "English")
     )
-    tts_mode_override = _normalize_tts_mode(userdata.get("tts_mode") or "")
+    tts_mode_override = _normalize_tts_mode(
+        userdata.get("tts_mode") or os.getenv("VOICE_AGENT_TTS_MODE") or ""
+    )
     tts_owner_id_override = str(userdata.get("tts_owner_id") or "").strip()
     tts_voice_id_override = str(userdata.get("tts_voice_id") or "").strip()
     tts_language_hint_override = str(userdata.get("tts_language_hint") or "").strip()
@@ -4270,7 +4101,10 @@ def _build_tts_engine_for_language(
     use_odion_default = not use_configured_clone
 
     if runtime_odion_tts_requested:
-        use_configured_clone = bool(tts_voice_id) and tts_mode_override == "cloned_voice"
+        use_configured_clone = (
+            tts_mode_override == "cloned_voice"
+            and (bool(tts_voice_id) or bool(os.getenv("ASCEND_TTS_CACHED_VOICE")))
+        )
         use_odion_default = not use_configured_clone
 
     if not odion_enabled and not runtime_odion_tts_requested:
@@ -4322,14 +4156,26 @@ def _build_tts_engine_for_language(
                 base_url=tts_endpoint_override or None,
                 api_key=override_api_key or None,
             )
-            logger.info(
-                "Using Odion default TTS for %s session: agent_config_id=%s owner_id=%s model=%s language_hint=%s",
-                fallback_label,
-                userdata.get("agent_config_id"),
-                tts_owner_id or business_id,
-                tts_model_override,
-                tts_language_hint,
-            )
+            cached_voice = str(os.getenv("ASCEND_TTS_CACHED_VOICE") or "").strip()
+            if cached_voice and str(os.getenv("ODION_TTS_BACKEND") or "").strip().lower() == "ascend":
+                logger.info(
+                    "Using Odion Ascend cached-voice TTS for %s session: agent_config_id=%s owner_id=%s cached_voice=%s model=%s language_hint=%s",
+                    fallback_label,
+                    userdata.get("agent_config_id"),
+                    tts_owner_id or business_id,
+                    cached_voice,
+                    tts_model_override or "Qwen3-TTS",
+                    tts_language_hint,
+                )
+            else:
+                logger.info(
+                    "Using Odion default TTS for %s session: agent_config_id=%s owner_id=%s model=%s language_hint=%s",
+                    fallback_label,
+                    userdata.get("agent_config_id"),
+                    tts_owner_id or business_id,
+                    tts_model_override,
+                    tts_language_hint,
+                )
             return tts_engine
     except Exception as exc:  # noqa: BLE001
         if use_configured_clone and STRICT_ODION_CLONE_CONSISTENCY:
@@ -4466,8 +4312,7 @@ async def entrypoint(ctx: JobContext):
         )
         dynamic_tools = build_dynamic_http_tools(
             active_agent_config,
-            excluded_tool_names=set(BUILTIN_RUNTIME_TOOL_NAMES)
-            | set(POST_CALL_ONLY_TOOL_NAMES),
+            excluded_tool_names=set(BUILTIN_RUNTIME_TOOL_NAMES),
         )
         if dynamic_tools:
             logger.info(
@@ -4477,7 +4322,7 @@ async def entrypoint(ctx: JobContext):
                     for tool in dynamic_tools
                 ],
             )
-        _wire_session_timeline(session, session.userdata)
+        _wire_session_timeline(session, session.userdata, room=ctx.room)
         try:
             if conversation_service_enabled(business_id) and userdata.get(
                 "conversation_id"
@@ -4504,13 +4349,8 @@ async def entrypoint(ctx: JobContext):
                         "configured_agent_name": userdata.get("configured_name"),
                     },
                 )
-            runtime_agent = await _build_configured_salon_agent(
-                instructions=instructions,
-                dynamic_tools=dynamic_tools,
-                userdata=userdata,
-            )
             await session.start(
-                agent=runtime_agent,
+                agent=SalonAgent(instructions=instructions, tools=dynamic_tools),
                 room=ctx.room,
                 room_options=room_io.RoomOptions(delete_room_on_close=True),
             )
@@ -4523,15 +4363,7 @@ async def entrypoint(ctx: JobContext):
                 call_channel=call_channel,
             )
             _trigger_first_turn(
-                session,
-                language="en",
-                business_use_case=business_use_case,
-                configured_agent_name=str(
-                    userdata.get("configured_agent_name") or ""
-                ),
-                enabled_tool_names=list(
-                    userdata.get("enabled_tool_names") or []
-                ),
+                session, language="en", business_use_case=business_use_case
             )
             if is_recording_enabled():
                 async def _start_recording_after_join_en() -> None:
@@ -4661,8 +4493,7 @@ async def entrypoint(ctx: JobContext):
         )
         dynamic_tools = build_dynamic_http_tools(
             active_agent_config,
-            excluded_tool_names=set(BUILTIN_RUNTIME_TOOL_NAMES)
-            | set(POST_CALL_ONLY_TOOL_NAMES),
+            excluded_tool_names=set(BUILTIN_RUNTIME_TOOL_NAMES),
         )
         if dynamic_tools:
             logger.info(
@@ -4672,7 +4503,7 @@ async def entrypoint(ctx: JobContext):
                     for tool in dynamic_tools
                 ],
             )
-        _wire_session_timeline(session, session.userdata)
+        _wire_session_timeline(session, session.userdata, room=ctx.room)
         try:
             if conversation_service_enabled(business_id) and userdata.get(
                 "conversation_id"
@@ -4699,13 +4530,8 @@ async def entrypoint(ctx: JobContext):
                         "configured_agent_name": userdata.get("configured_name"),
                     },
                 )
-            runtime_agent = await _build_configured_salon_agent(
-                instructions=instructions,
-                dynamic_tools=dynamic_tools,
-                userdata=userdata,
-            )
             await session.start(
-                agent=runtime_agent,
+                agent=SalonAgent(instructions=instructions, tools=dynamic_tools),
                 room=ctx.room,
                 room_options=room_io.RoomOptions(delete_room_on_close=True),
             )
@@ -4718,15 +4544,7 @@ async def entrypoint(ctx: JobContext):
                 call_channel=call_channel,
             )
             _trigger_first_turn(
-                session,
-                language="fr",
-                business_use_case=business_use_case,
-                configured_agent_name=str(
-                    userdata.get("configured_agent_name") or ""
-                ),
-                enabled_tool_names=list(
-                    userdata.get("enabled_tool_names") or []
-                ),
+                session, language="fr", business_use_case=business_use_case
             )
             if is_recording_enabled():
                 async def _start_recording_after_join_fr() -> None:

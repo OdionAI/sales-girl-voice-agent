@@ -1,0 +1,197 @@
+diff --git a/vllm/entrypoints/speech_to_text/realtime/connection.py b/vllm/entrypoints/speech_to_text/realtime/connection.py
+index c7d1af9..37c056b 100644
+--- a/vllm/entrypoints/speech_to_text/realtime/connection.py
++++ b/vllm/entrypoints/speech_to_text/realtime/connection.py
+@@ -204,6 +204,21 @@ class RealtimeConnection:
+         """
+         request_id = f"rt-{self.connection_id}-{uuid4()}"
+         full_text = ""
++        segment_text = ""
++        import os
++        import re
++        cumulative = (
++            os.getenv("QWEN3_ASR_REALTIME_SEGMENT_MODE", "cumulative")
++            .strip()
++            .lower()
++            != "chop"
++        )
++        forced_language = os.getenv("QWEN3_ASR_REALTIME_LANGUAGE", "English").strip()
++        hypothesis_prefix = (
++            f"language {forced_language}<asr_text>" if forced_language else ""
++        )
++        new_hypothesis = True
++        _new_hyp = re.compile(r"(?i)^\s*language\b")
+
+         prompt_token_ids_len: int = 0
+         completion_tokens_len: int = 0
+@@ -235,18 +250,46 @@ class RealtimeConnection:
+                         prompt_token_ids_len = len(output.prompt_token_ids)
+
+                     delta = output.outputs[0].text
+-                    full_text += delta
++                    if cumulative and forced_language:
++                        # The forced language prefix is prefilled in the model
++                        # prompt, so re-emit it as a wire-level hypothesis marker.
++                        if new_hypothesis and delta:
++                            segment_text = ""
++                            await self.send(
++                                TranscriptionDelta(delta=hypothesis_prefix)
++                            )
++                            new_hypothesis = False
++                        segment_text += delta
++                    elif cumulative and segment_text and _new_hyp.match(delta or ""):
++                        full_text = segment_text
++                        segment_text = delta
++                    else:
++                        segment_text += delta
++                        if not cumulative:
++                            full_text += delta
+
+                     # append output to input
+                     input_stream.put_nowait(list(output.outputs[0].token_ids))
+                     await self.send(TranscriptionDelta(delta=delta))
+
++                    if cumulative and forced_language and (
++                        output.outputs[0].finish_reason is not None or not delta
++                    ):
++                        if segment_text:
++                            full_text = segment_text
++                        new_hypothesis = True
++
+                     completion_tokens_len += len(output.outputs[0].token_ids)
+
+                 if not self._is_connected:
+                     # finish because websocket connection was killed
+                     break
+
++            if cumulative:
++                full_text = segment_text or full_text
++            if forced_language and full_text:
++                full_text = f"{hypothesis_prefix}{full_text}"
++
+             usage = UsageInfo(
+                 prompt_tokens=prompt_token_ids_len,
+                 completion_tokens=completion_tokens_len,
+@@ -256,9 +299,8 @@ class RealtimeConnection:
+             # Send final completion event
+             await self.send(TranscriptionDone(text=full_text, usage=usage))
+
+-            # Clear queue for next utterance
+-            while not self.audio_queue.empty():
+-                self.audio_queue.get_nowait()
++            # Keep audio queued while this generation finishes. Clients re-arm
++            # with commit final=false; clearing here dropped mid-utterance audio.
+
+         except Exception as e:
+             logger.exception("Error in generation: %s", e)
+diff --git a/vllm/model_executor/models/qwen3_asr_realtime.py b/vllm/model_executor/models/qwen3_asr_realtime.py
+index 6405c10..4b0dfe9 100644
+--- a/vllm/model_executor/models/qwen3_asr_realtime.py
++++ b/vllm/model_executor/models/qwen3_asr_realtime.py
+@@ -79,6 +79,19 @@ class Qwen3ASRRealtimeBuffer:
+         self._buffer[self._filled_len : put_end] = audio
+         self._filled_len = put_end
+
++    def peek_all(self, max_samples: int | None = None) -> np.ndarray | None:
++        """Return all buffered audio without consuming (for cumulative decode)."""
++        if self._filled_len == 0:
++            return None
++        if max_samples is not None and self._filled_len > max_samples:
++            start = self._filled_len - max_samples
++            return self._buffer[start : self._filled_len].copy()
++        return self._buffer[: self._filled_len].copy()
++
++    @property
++    def filled_len(self) -> int:
++        return self._filled_len
++
+     def read_audio(self) -> np.ndarray | None:
+         if self._filled_len < self._segment_size:
+             return None
+@@ -194,31 +207,78 @@ class Qwen3ASRRealtimeGeneration(Qwen3ASRForConditionalGeneration, SupportsRealt
+         sampling_rate = feature_extractor.sampling_rate
+         tokenizer = cached_tokenizer_from_config(model_config)
+
+-        # Use a small segment size for low-latency streaming.
+-        segment_duration_s = 5.0
++        # Cumulative re-decode: every emit_every seconds of *new* audio, re-ASR
++        # the full utterance so far. Non-overlapping 0.8s chops hallucinated
++        # fragments ("simsimsim") and finals collapsed to the last word.
++        import os
++        try:
++            segment_duration_s = float(
++                os.getenv("QWEN3_ASR_REALTIME_SEGMENT_DURATION_S", "1.2")
++            )
++        except ValueError:
++            segment_duration_s = 1.2
++        segment_duration_s = max(0.4, min(segment_duration_s, 5.0))
++        mode = (
++            os.getenv("QWEN3_ASR_REALTIME_SEGMENT_MODE", "cumulative").strip().lower()
++            or "cumulative"
++        )
++        try:
++            max_audio_s = float(os.getenv("QWEN3_ASR_REALTIME_MAX_AUDIO_S", "30"))
++        except ValueError:
++            max_audio_s = 30.0
++        max_audio_s = max(5.0, min(max_audio_s, 60.0))
++        forced_language = os.getenv("QWEN3_ASR_REALTIME_LANGUAGE", "English").strip()
++        logger.info(
++            "Qwen3-ASR realtime mode=%s segment_duration_s=%.3f max_audio_s=%.1f language=%s",
++            mode,
++            segment_duration_s,
++            max_audio_s,
++            forced_language or "auto",
++        )
+         buffer = Qwen3ASRRealtimeBuffer(
+             sampling_rate=sampling_rate,
+             segment_duration_s=segment_duration_s,
+         )
+
+         audio_placeholder = cls.get_placeholder_str("audio", 0)
++        assistant_prefix = (
++            f"language {forced_language}<asr_text>" if forced_language else ""
++        )
+         prompt_template = (
+-            f"<|im_start|>user\n{audio_placeholder}<|im_end|>\n<|im_start|>assistant\n"
++            f"<|im_start|>user\n{audio_placeholder}<|im_end|>\n"
++            f"<|im_start|>assistant\n{assistant_prefix}"
+         )
+
+         prompt_token_ids = tokenizer.encode(prompt_template)
++        emit_every = max(1, int(segment_duration_s * sampling_rate))
++        max_samples = int(max_audio_s * sampling_rate)
++        last_emit_filled = 0
+
+         async for audio_chunk in audio_stream:
+             buffer.write_audio(audio_chunk)
+
+-            while (segment := buffer.read_audio()) is not None:
+-                yield TokensPrompt(
+-                    prompt_token_ids=prompt_token_ids,
+-                    multi_modal_data={"audio": segment},
+-                )
++            if mode == "chop":
++                while (segment := buffer.read_audio()) is not None:
++                    yield TokensPrompt(
++                        prompt_token_ids=prompt_token_ids,
++                        multi_modal_data={"audio": segment},
++                    )
++                continue
++
++            # cumulative (default): re-decode all audio so far periodically
++            if buffer.filled_len - last_emit_filled >= emit_every:
++                audio = buffer.peek_all(max_samples=max_samples)
++                last_emit_filled = buffer.filled_len
++                if audio is not None and len(audio) > 0:
++                    yield TokensPrompt(
++                        prompt_token_ids=prompt_token_ids,
++                        multi_modal_data={"audio": audio},
++                    )
+
+         remaining = buffer.flush()
+         if remaining is not None and len(remaining) > 0:
++            if max_samples and len(remaining) > max_samples:
++                remaining = remaining[-max_samples:]
+             yield TokensPrompt(
+                 prompt_token_ids=prompt_token_ids,
+                 multi_modal_data={"audio": remaining},
