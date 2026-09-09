@@ -1,0 +1,15 @@
+{
+  "originHash" : "8a20ab13a0839923be1e0c4dc528a73ffb8f4754fcd31a910f54aa2e035dc218",
+  "pins" : [
+    {
+      "identity" : "attentive-ios-sdk",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/OdionAI/attentive-ios-sdk.git",
+      "state" : {
+        "revision" : "893878b929a2ba66410dc24ffc04a4c59ec6d22e",
+        "version" : "0.1.0-staging.2"
+      }
+    }
+  ],
+  "version" : 3
+}
