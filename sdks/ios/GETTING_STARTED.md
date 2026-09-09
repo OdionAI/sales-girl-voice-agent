@@ -1,12 +1,12 @@
 # Integrate Attentive Into Your iOS App
 
-For the **unreleased, simplified key + agent ID integration**, see
+For the **simplified API key + agent ID integration**, see
 [ACCOUNT_KEYS.md](ACCOUNT_KEYS.md). The examples below target the existing
-advanced API in staging.2 and remain supported; their host model is not needed
+advanced API and remain supported; their host model is not needed
 for the new supplied-UI integration.
 
 This guide covers the preview SDK. Use the installation instructions in the
-README accompanying your package for its exact location and release status.
+[public release notes](https://github.com/OdionAI/attentive-ios-sdk/releases/tag/0.1.0-staging.5) for its exact location and release status.
 All deployment addresses below are placeholders.
 
 ## What You Integrate
@@ -37,7 +37,7 @@ API. A gateway and gRPC are separate [roadmap](../../docs/attentive/ROADMAP.md) 
    Add the products from the table to your app target. Do not add the whole
    voice-agent repository as a package: its manifest is nested.
 3. Use the toolchain stated in your release README. Binary staging version
-   `0.1.0-staging.2` requires Xcode 26.6 / Swift 6.3.3; the source package's
+   `0.1.0-staging.5` requires Xcode 26.6 / Swift 6.3.3; the source package's
    Swift 6.1 minimum is not a binary compatibility guarantee. The core requires
    iOS 16; the supplied UI requires
    iOS 17. The examples using that UI below require iOS 17.
@@ -314,10 +314,9 @@ above do not implement an enrollment screen.
 
 ### Insufficient Call Credit
 
-Starting with `0.1.0-staging.2`, a bootstrap HTTP 402 with `code: "no_airtime"`
+A bootstrap HTTP 402 with `code: "no_airtime"`
 throws `CallError.insufficientCredits(balanceKobo:requiredMinimumKobo:)`.
 The same error is available through `lastError` and the `.failure` event.
-The older `0.1.0-staging.1` binary does not contain this change.
 
 ```swift
 do {

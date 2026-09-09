@@ -6,8 +6,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/OdionAI/attentive-ios-sdk.git",
       "state" : {
-        "revision" : "893878b929a2ba66410dc24ffc04a4c59ec6d22e",
-        "version" : "0.1.0-staging.2"
+        "revision" : "d5d8b99c6d96987e9fb62deae28773b2e58bdd1a",
+        "version" : "0.1.0-staging.5"
       }
     }
   ],

@@ -1,7 +1,6 @@
 # Key-based integration
 
-Key-based calling starts with SDK `0.1.0-staging.3`. Install that version or a
-compatible newer release. The dashboard key API must also be deployed and enabled;
+Install public SDK `0.1.0-staging.5`. The dashboard key API must also be deployed and enabled;
 installing the binary alone does not activate a deployment's API routes.
 
 ## Supplied caller UI
@@ -122,7 +121,7 @@ not an additional SDK model. Tokens last five minutes and are bound to the key,
 business and agent. They are signed, not encrypted; never log or persist them.
 Expiry controls call startup, not the duration of an already-connected call.
 
-The `customerID` overload requires SDK `0.1.0-staging.4` or newer. It is a customer
+The `customerID` parameter is included in this release. It is a customer
 selection, not proof of identity: calls with an ID require a signed caller token,
 even for a key that allows general anonymous calls. The backend compares the ID
 with the token's `customer_id` and rejects mismatches before billing or dispatch.

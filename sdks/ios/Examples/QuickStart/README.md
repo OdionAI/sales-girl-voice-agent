@@ -14,7 +14,7 @@ backend client, returning a fresh token per call. Never put a server identity ke
 in Xcode, the app, or a shared scheme. A raw customer ID plus a publishable key
 does not authorize access to a customer's banking records.
 
-This sample requires SDK `0.1.0-staging.4` or newer and the matching backend
+Install public SDK `0.1.0-staging.5` and the matching backend
 update. Add `NSMicrophoneUsageDescription` to
 your target. The account and three-dot menus are hidden; mute, transcript and end
 call remain available.
