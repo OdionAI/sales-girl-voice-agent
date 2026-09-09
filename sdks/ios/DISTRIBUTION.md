@@ -8,7 +8,7 @@ The build output is `.build/binary-release-0.1.0-staging.2/package`.
 It contains `Package.swift`, `.gitattributes`, `ThirdPartyNotices`, and four
 XCFrameworks: AttentiveVoice, AttentiveVoiceUI, AttentiveMedia, AttentiveBindings.
 There are no Markdown files, sample apps or internal agent instructions.
-Build metadata and checksums are separate release assets; all guides remain
+Build metadata and checksums are generated outside the package; all guides remain
 in the internal source repository. Native names are private packaging names,
 not a claim that upstream symbols or required attribution are hidden.
 Only full builds are supported for this release. The details below describe

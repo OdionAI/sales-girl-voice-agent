@@ -1,7 +1,7 @@
 # Attentive iOS Sample
 
 Native SwiftUI caller app consuming the published binary `AttentiveVoice` and
-`AttentiveVoiceUI` products at exact version `0.1.0-staging.1`. Requires Xcode
+`AttentiveVoiceUI` products at exact version `0.1.0-staging.2`. Requires Xcode
 26.6 / Swift 6.3.3, GitHub read access to `OdionAI/attentive-ios-sdk`, an installed
 iOS Simulator runtime for simulator tests, and the reachable public backend. The app
 targets iOS 17+; the underlying wrapper supports iOS 16+.
@@ -23,7 +23,7 @@ Build products go into `sdks/ios/.build/sample-app`, not source control.
 Alternatively open `AttentiveSample.xcodeproj`, select the `AttentiveSample`
 scheme and an iPhone simulator, and Run. Its remote Swift package reference points
 to `https://github.com/OdionAI/attentive-ios-sdk.git`, pinned to
-`0.1.0-staging.1`; it does not consume local implementation source. Sign into
+`0.1.0-staging.2`; it does not consume local implementation source. Sign into
 GitHub in Xcode with repository access. The scripts use system Git credentials
 and a separate `.build/sample-dependencies` cache. The app does not import
 LiveKit directly. Future changes under `sdks/ios/Sources` will not appear in
@@ -31,8 +31,9 @@ this app until a new SDK version is published and the package pin is updated.
 
 The default target is the Lagos Wema agent `agt_73099afb71` at
 `https://attentive.odion.ai/api/public-agent/connection-details`, business
-`wema-bank-poc-local`. This follows `OdionAI/attentive-ios-sdk` documentation
-commit `ab775c2`; the binary package remains `0.1.0-staging.1`.
+`wema-bank-poc-local`. The clean binary package is `0.1.0-staging.2`, commit
+`893878b`. The runtime frameworks have Attentive names; documentation remains
+outside the distributed package.
 The public deployment has no enrollment route yet, so this sample passes `nil`
 enrollment to the caller view for that host. Server voice checks and auth badges
 are unchanged. Never embed the jump API key or point the SDK at jump API ports.
