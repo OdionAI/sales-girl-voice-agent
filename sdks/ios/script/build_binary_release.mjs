@@ -16,6 +16,7 @@ const nativeFrameworks = new Map([
 ]);
 const nativeNames = [...nativeFrameworks.values()];
 const nativeTargetList = nativeNames.map((name) => JSON.stringify(name)).join(", ");
+const xcodeTool = (name, args) => execFileSync("xcrun", [name, ...args], { encoding: "utf8" });
 if (process.argv.includes("--ui-only")) throw new Error("A clean release requires a full build.");
 await rm(distribution, { recursive: true, force: true });
 await mkdir(source, { recursive: true });
@@ -96,13 +97,13 @@ async function archiveLibrary(name, cwd, bundles) {
 async function rebindFramework(framework, name) {
   const binary = join(framework, name);
   // Change only dyld paths. Exported symbols, media code and native ABI stay intact.
-  const links = execFileSync("otool", ["-L", binary], { encoding: "utf8" });
+  const links = xcodeTool("otool", ["-L", binary]);
   const changes = [...nativeFrameworks].flatMap(([upstream, packaged]) => {
     const oldPath = `@rpath/${upstream}.framework/${upstream}`;
     return links.includes(oldPath)
       ? ["-change", oldPath, `@rpath/${packaged}.framework/${packaged}`] : [];
   });
-  execFileSync("install_name_tool", ["-id", `@rpath/${name}.framework/${name}`, ...changes, binary]);
+  xcodeTool("install_name_tool", ["-id", `@rpath/${name}.framework/${name}`, ...changes, binary]);
   await rm(join(framework, "_CodeSignature"), { recursive: true, force: true });
   execFileSync("codesign", ["--force", "--sign", "-", "--timestamp=none", framework]);
 }
@@ -133,7 +134,7 @@ for (const [upstream, name] of nativeFrameworks) {
     await writeFile(join(framework, "Modules/module.modulemap"), `framework module ${name} {}\n`);
     await rebindFramework(framework, name);
     for (const arch of library.SupportedArchitectures) {
-      const symbols = (path) => execFileSync("nm", ["-arch", arch, "-gUj", path], { encoding: "utf8" });
+      const symbols = (path) => xcodeTool("nm", ["-arch", arch, "-gUj", path]);
       if (symbols(join(framework, name)) !== symbols(join(artifact, library.LibraryIdentifier, library.LibraryPath, upstream))) {
         throw new Error(`Native exports changed: ${name}/${arch}`);
       }

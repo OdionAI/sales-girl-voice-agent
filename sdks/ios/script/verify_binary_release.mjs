@@ -28,7 +28,7 @@ for (const name of names) {
     assert.deepEqual([...slice.SupportedArchitectures].sort(), slice.SupportedPlatformVariant ? ["arm64", "x86_64"] : ["arm64"]);
     const framework = join(xc, slice.LibraryIdentifier, slice.LibraryPath);
     assert.equal(plist(join(framework, "Info.plist")).CFBundleExecutable, name);
-    const links = output("otool", ["-L", join(framework, name)]);
+    const links = output("xcrun", ["otool", "-L", join(framework, name)]);
     assert(!/LiveKit/.test(links), `Old dyld dependency: ${name}`);
     assert(!/\/Users\/|\.build\//.test(links.split("\n").slice(1).join("\n")), `Nonportable link: ${name}`);
     if (name === "AttentiveVoice") {

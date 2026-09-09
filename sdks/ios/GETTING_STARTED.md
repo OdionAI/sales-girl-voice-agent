@@ -32,7 +32,7 @@ API. A gateway and gRPC are separate [roadmap](../../docs/attentive/ROADMAP.md) 
    Add the products from the table to your app target. Do not add the whole
    voice-agent repository as a package: its manifest is nested.
 3. Use the toolchain stated in your release README. Binary staging version
-   `0.1.0-staging.1` requires Xcode 26.6 / Swift 6.3.3; the source package's
+   `0.1.0-staging.2` requires Xcode 26.6 / Swift 6.3.3; the source package's
    Swift 6.1 minimum is not a binary compatibility guarantee. The core requires
    iOS 16; the supplied UI requires
    iOS 17. The examples using that UI below require iOS 17.
@@ -309,10 +309,10 @@ above do not implement an enrollment screen.
 
 ### Insufficient Call Credit
 
-In the updated source SDK, a bootstrap HTTP 402 with `code: "no_airtime"`
+Starting with `0.1.0-staging.2`, a bootstrap HTTP 402 with `code: "no_airtime"`
 throws `CallError.insufficientCredits(balanceKobo:requiredMinimumKobo:)`.
 The same error is available through `lastError` and the `.failure` event.
-The published `0.1.0-staging.1` binary does not yet contain this change.
+The older `0.1.0-staging.1` binary does not contain this change.
 
 ```swift
 do {

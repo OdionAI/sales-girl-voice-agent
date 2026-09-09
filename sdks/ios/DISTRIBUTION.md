@@ -1,5 +1,19 @@
 # Distributing the Attentive iOS SDK
 
+## Clean Package Update
+
+Version `0.1.0-staging.2` uses a runtime-only package. See its
+[release notes and verification commands](release/0.1.0-staging.2.md).
+The build output is `.build/binary-release-0.1.0-staging.2/package`.
+It contains `Package.swift`, `.gitattributes`, `ThirdPartyNotices`, and four
+XCFrameworks: AttentiveVoice, AttentiveVoiceUI, AttentiveMedia, AttentiveBindings.
+There are no Markdown files, sample apps or internal agent instructions.
+Build metadata and checksums are separate release assets; all guides remain
+in the internal source repository. Native names are private packaging names,
+not a claim that upstream symbols or required attribution are hidden.
+Only full builds are supported for this release. The details below describe
+the original staging.1 publication and general distribution requirements.
+
 Status: private binary staging prerelease published, 2026-09-08 (WAT).
 [Release `0.1.0-staging.1`](https://github.com/OdionAI/attentive-ios-sdk/releases/tag/0.1.0-staging.1)
 is available in the user-approved `OdionAI/attentive-ios-sdk` repository.

@@ -9,7 +9,7 @@ Do not invent a package URL, release tag, API endpoint, customer identity or cre
 ```text
 Integrate the Attentive voice caller into this iOS app.
 
-First read the SDK's GETTING_STARTED.md, README.md, CALLER_UI.md and INTEGRATION_AGENT.md, inspect
+First read the separately supplied GETTING_STARTED.md, README.md, CALLER_UI.md and INTEGRATION_AGENT.md (not included in the runtime package), inspect
 Package.swift and its public Swift interfaces, and inspect this app's architecture.
 Use the verified package URL/version or local preview directory supplied by
 Attentive. Ask me for the deployment endpoint, business slug, public agent ID
