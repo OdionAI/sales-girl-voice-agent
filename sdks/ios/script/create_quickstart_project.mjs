@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 
 // Generates a source-development project without editing the published binary sample.
 const sdk = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const dependency = process.argv[2] ? resolve(process.argv[2]) : sdk;
 const target = join(sdk, ".build/quickstart");
 const project = join(target, "AttentiveQuickStart.xcodeproj");
 await mkdir(project, { recursive: true });
@@ -23,7 +24,7 @@ objects.A20000000000000000000006.path = "AttentiveQuickStart.app";
 for (const id of ["B10000000000000000000003", "B10000000000000000000004"]) {
   objects[id].buildSettings.PRODUCT_BUNDLE_IDENTIFIER = "ai.odion.attentive.quickstart";
 }
-objects.A90000000000000000000001 = { isa: "XCLocalSwiftPackageReference", relativePath: sdk };
+objects.A90000000000000000000001 = { isa: "XCLocalSwiftPackageReference", relativePath: dependency };
 // Remove unreachable objects, including legacy SampleModel/settings/test file references.
 const reachable = new Set();
 function visit(value) {

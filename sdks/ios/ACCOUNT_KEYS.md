@@ -1,18 +1,18 @@
-# Key-based integration (unreleased)
+# Key-based integration
 
-This integration is on `codex/sdk-account-keys`. It is **not in 0.1.0-staging.2**
-and the production API has not been enabled. Deploy auth/dashboard support first,
-then publish and pin a new binary version. Do not use these APIs with staging.2.
+Key-based calling starts with SDK `0.1.0-staging.3`. Install that version or a
+compatible newer release. The dashboard key API must also be deployed and enabled;
+installing the binary alone does not activate a deployment's API routes.
 
 ## Supplied caller UI
 
-After creating a calling key in Dashboard > Settings > SDK calling keys:
+After creating an API key in Dashboard > Deploy > API & SDK:
 
 ```swift
 import AttentiveVoiceUI
 
 AttentiveAgentView(
-    apiKey: "YOUR_PUBLISHABLE_CALLING_KEY",
+    apiKey: "YOUR_API_KEY",
     agentID: "YOUR_AGENT_ID"
 )
 ```
@@ -43,7 +43,7 @@ Headless calls require iOS 16+. Retain one call instance on the main actor:
 ```swift
 import AttentiveVoice
 
-let call = AttentiveCall(apiKey: "YOUR_PUBLISHABLE_CALLING_KEY", agentID: "YOUR_AGENT_ID")
+let call = AttentiveCall(apiKey: "YOUR_API_KEY", agentID: "YOUR_AGENT_ID")
 try await call.start()
 // Observe call.state, agentState, transcripts, toolActivity and authentication.
 try await call.setMicrophone(enabled: false)
@@ -66,7 +66,8 @@ A publishable calling key identifies the **business integration**, not the human
 using a phone. Never embed one customer's banking identifiers as defaults for
 every app user. An API key alone cannot prove a caller's identity.
 
-For authenticated operations, enable **Require signed-in caller** on the key.
+For authenticated operations, create a key through the authenticated management
+API with `require_caller=true`; this advanced option is not in the simple key form.
 Your backend authenticates its own user, maps that user to the correct bank
 profile, then uses the separate `att_sk_...` identity key to request a caller token.
 Never put the identity key in the app, public repository or mobile build settings.
@@ -100,7 +101,7 @@ const { caller_token } = await response.json();
 Supply a fresh token per call using your app's existing authenticated API client:
 
 ```swift
-AttentiveAgentView(apiKey: "YOUR_PUBLISHABLE_CALLING_KEY", agentID: "YOUR_AGENT_ID") {
+AttentiveAgentView(apiKey: "YOUR_API_KEY", agentID: "YOUR_AGENT_ID") {
     try await yourBackend.fetchAttentiveCallerToken()
 }
 // Headless equivalent: try await call.start(callerToken: token)
@@ -122,7 +123,8 @@ production enrollment availability is a separate deployment dependency.
 - `att_pk_...` is publishable and scoped to selected agents in one business.
 - `att_sk_...` is server-only and can attest caller identity for those agents.
 - Active administrator membership and current agent ownership are checked.
-- Only key hashes are stored. Full values are returned once at creation.
+- Active publishable keys can be copied again by a dashboard administrator.
+  Server identity keys remain hash-only and are returned only at creation.
 - Revocation blocks new token issuance/calls, not already-connected calls.
 - Removing/demoting the issuing administrator also invalidates their keys.
 - Call-start quotas are per key across installations: default 100 per UTC hour,
@@ -155,5 +157,5 @@ Use this only after API deployment and a compatible binary release:
 6. Handle denied microphone access, revoked keys, quota/credit failures, agent
    timeout and cancellation. Never repeatedly retry a failed call start.
 
-These guides remain outside the distributed runtime package. Continue staging.2's
-clean binary packaging policy and retain required license notices.
+These guides remain outside the distributed runtime package. Keep the clean
+binary packaging policy and retain required license notices.

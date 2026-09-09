@@ -6,7 +6,7 @@ struct AttentiveExampleApp: App {
     var body: some Scene {
         WindowGroup {
             AttentiveAgentView(
-                apiKey: "YOUR_PUBLISHABLE_CALLING_KEY",
+                apiKey: "YOUR_API_KEY",
                 agentID: "YOUR_AGENT_ID"
             )
         }

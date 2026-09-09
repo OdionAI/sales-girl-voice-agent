@@ -5,7 +5,10 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const sdk = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const version = "0.1.0-staging.2";
+const version = process.argv[2];
+if (!/^\d+\.\d+\.\d+(?:-[A-Za-z0-9]+(?:[.-][A-Za-z0-9]+)*)?$/.test(version || "")) {
+  throw new Error("Supply the new SDK release version, for example: 0.1.0-staging.3");
+}
 const root = join(sdk, ".build", `binary-release-${version}`);
 const source = join(root, "source");
 const distribution = join(root, "package");

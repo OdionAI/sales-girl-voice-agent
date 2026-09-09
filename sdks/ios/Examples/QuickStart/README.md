@@ -1,9 +1,10 @@
-# Minimal supplied-UI app (unreleased API)
+# Minimal supplied-UI app
 
 `AttentiveExampleApp.swift` is the entire customer app entry point. It deliberately
 has no sample model, server URL, business slug, test profile or developer flags.
-Replace the two placeholders only after the key API is deployed and a compatible
-SDK version is installed. Add `NSMicrophoneUsageDescription` to your app target.
+Create an API key under Dashboard > Deploy > API & SDK and replace `YOUR_API_KEY`
+and `YOUR_AGENT_ID`. Use SDK `0.1.0-staging.3` or a compatible newer version, with
+the key API deployed and enabled. Add `NSMicrophoneUsageDescription` to your target.
 
 Maintainers can build this source version without altering the existing binary
 sample or app installed on a phone:
@@ -11,6 +12,9 @@ sample or app installed on a phone:
 ```sh
 node sdks/ios/script/create_quickstart_project.mjs
 ```
+
+To verify a built binary package instead, pass its directory as the first argument
+to the same script. The generated app and test credentials are never distributed.
 
 Open the generated `sdks/ios/.build/quickstart/AttentiveQuickStart.xcodeproj` and
 run scheme `AttentiveQuickStart` on a simulator. This uses a local source package,
