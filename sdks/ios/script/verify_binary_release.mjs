@@ -30,7 +30,8 @@ for (const name of names) {
     assert.equal(plist(join(framework, "Info.plist")).CFBundleExecutable, name);
     const links = output("xcrun", ["otool", "-L", join(framework, name)]);
     assert(!/LiveKit/.test(links), `Old dyld dependency: ${name}`);
-    assert(!/\/Users\/|\.build\//.test(links.split("\n").slice(1).join("\n")), `Nonportable link: ${name}`);
+    const dependencies = links.split("\n").filter((line) => line.startsWith("\t"));
+    assert(!/\/Users\/|\.build\//.test(dependencies.join("\n")), `Nonportable link: ${name}`);
     if (name === "AttentiveVoice") {
       for (const dependency of names.slice(2)) assert(links.includes(`@rpath/${dependency}.framework/${dependency}`));
     }
