@@ -173,6 +173,36 @@ final class CallerControlsTests: XCTestCase {
     }
 
     @MainActor
+    func testInsufficientCreditNotifiesHostAndUIWithoutConnectingOrRetrying() async {
+        let error = CallError.insufficientCredits(balanceKobo: 0, requiredMinimumKobo: 167)
+        let provider = UIProvider(error: error)
+        let transport = UITransport()
+        let call = makeCall(transport, provider: provider)
+        var events: [CallEvent] = []
+        call.onEvent = { events.append($0) }
+        let controls = CallerControls(call: call, enrollment: nil)
+
+        await controls.start(request, microphoneEnabled: false)
+
+        XCTAssertEqual(call.lastError, error)
+        XCTAssertEqual(call.state, .failed)
+        XCTAssertEqual(controls.errorTitle, "Call credit needed")
+        XCTAssertEqual(controls.errorMessage, error.localizedDescription)
+        XCTAssertFalse(controls.active)
+        XCTAssertEqual(transport.connections, 0)
+        XCTAssertTrue(transport.microphoneSelections.isEmpty)
+        XCTAssertTrue(transport.messages.isEmpty)
+        XCTAssertEqual(call.sessionAuthentication, .pending)
+        XCTAssertEqual(call.actionAuthentication, .pending)
+        XCTAssertTrue(events.contains(.failure(error)))
+        controls.errorMessage = nil
+        await Task.yield()
+        let fetches = await provider.fetches
+        XCTAssertEqual(fetches, 1)
+        XCTAssertNil(controls.errorMessage)
+    }
+
+    @MainActor
     private func makeCall(_ transport: UITransport, provider: UIProvider = .init()) -> AttentiveCall {
         AttentiveCall(provider: provider, makeTransport: { transport }, microphonePermission: { true })
     }
@@ -180,11 +210,15 @@ final class CallerControlsTests: XCTestCase {
 
 private actor UIProvider: CallCredentialProvider {
     private(set) var request: CallRequest?
+    private(set) var fetches = 0
     let delay: Duration
-    init(delay: Duration = .zero) { self.delay = delay }
+    let error: CallError?
+    init(delay: Duration = .zero, error: CallError? = nil) { self.delay = delay; self.error = error }
     func fetch(for request: CallRequest) async throws -> CallCredentials {
         self.request = request
+        fetches += 1
         try await Task.sleep(for: delay)
+        if let error { throw error }
         return .init(serverUrl: URL(string: "wss://example.invalid")!, roomName: "test", participantToken: "test-only")
     }
 }

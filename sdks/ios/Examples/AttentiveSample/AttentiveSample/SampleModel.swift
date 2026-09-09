@@ -16,11 +16,11 @@ struct SampleConfiguration {
     var microphoneOnStart = true
 
     static var initial: Self {
-        let env = ProcessInfo.processInfo.environment
+        let env = SampleLocalLaunchSettings.environment()
         return Self(
-            endpoint: env["ATTENTIVE_CALL_ENDPOINT"] ?? "http://127.0.0.1:3000/api/public-agent/connection-details",
+            endpoint: env["ATTENTIVE_CALL_ENDPOINT"] ?? "https://attentive.odion.ai/api/public-agent/connection-details",
             business: env["ATTENTIVE_BUSINESS_SLUG"] ?? "wema-bank-poc-local",
-            agent: env["ATTENTIVE_AGENT_ID"] ?? "agt_59a007e81e",
+            agent: env["ATTENTIVE_AGENT_ID"] ?? "agt_73099afb71",
             contact: env["ATTENTIVE_CALLER_CONTACT"] ?? "sdk-demo@example.com",
             customerID: env["ATTENTIVE_CUSTOMER_ID"] ?? "",
             phone: env["ATTENTIVE_PHONE"] ?? "",
@@ -70,7 +70,7 @@ struct SampleConfiguration {
 
     private var allowsInsecureDevelopment: Bool {
         #if DEBUG && targetEnvironment(simulator)
-        return true
+        return URL(string: endpoint)?.scheme == "http"
         #else
         return false
         #endif
@@ -115,6 +115,11 @@ final class SampleModel: ObservableObject {
     }
 
     var active: Bool { [.connecting, .connected, .reconnecting, .ending].contains(call.state) }
+
+    var callerEnrollment: VoiceEnrollment? {
+        // The public Lagos deployment does not expose enrollment yet; local testing still does.
+        URL(string: configuration.endpoint)?.host?.lowercased() == "attentive.odion.ai" ? nil : enrollment
+    }
 
     var appearance: CallerUIConfiguration {
         if ProcessInfo.processInfo.arguments.contains("--generic-ui") { return .init() }

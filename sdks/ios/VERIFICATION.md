@@ -1,5 +1,140 @@
 # Wrapper Verification: 2026-09-06
 
+## Public Lagos endpoint: 2026-09-08
+
+- Fast-forwarded the separate `OdionAI/attentive-ios-sdk` checkout on `dev` to
+  `ab775c2f6798f25caa27f08b6000389021459e7f`. This is a documentation-only change;
+  `Package.swift` and binary frameworks are unchanged. The sample still consumes
+  exact binary version `0.1.0-staging.1`.
+- Set the sample default bootstrap to
+  `https://attentive.odion.ai/api/public-agent/connection-details`, business
+  `wema-bank-poc-local`, agent `agt_73099afb71`. The published core SDK does not
+  contain a hardcoded deployment endpoint. Explicit local launch overrides remain.
+  Public HTTPS targets require secure signaling on simulator and device; the
+  simulator's insecure development allowance now applies only to HTTP targets.
+- Following the engineer's public deployment contract, the caller view receives
+  `nil` enrollment for `attentive.odion.ai`; its enrollment route returns 404.
+  Local enrollment, server-side voice checks and authentication badges remain.
+  No jump API key, service credential, or customer details were added to source.
+- Simulator build and `testPublicDefaultsUseWemaWithoutUnavailableEnrollment`
+  passed: one test, zero failures. The test checks public defaults, absence of
+  unavailable enrollment, and the existing bank activity/settings UI.
+- A real chat-only Simulator Start Call attempt returned HTTP 402 before room
+  connection. The UI displayed `The call service returned HTTP 402.` This matches
+  the engineer's empty Lagos wallet report; it is not an audio/transport success.
+  No wallet top-up, billing bypass, enrollment or banking transaction was attempted.
+- Physical-device Debug build succeeded with the existing signing team. Installed
+  and launched `ai.odion.attentive.sample` on the paired iPhone 16 Pro Max with
+  the public endpoint and Debug LAN permission cleared. No backend, DNS or model
+  configuration was changed. The on-device configuration test could not launch
+  because the iPhone was locked; the waiting test was cancelled without changing
+  device security. This is not a passed physical-device UI or call test.
+- Full microphone/audio, protected tools and latency verification remain blocked
+  until the deployment owner supplies call credit and the required auth services.
+
+## Published SDK with RVC + LiveKit: 2026-09-08
+
+- Compared the already-running integration checkouts with the supplied handoff:
+  voice agent `46bf98bd9c3442eddce381f3e3a942adf4e2f16d`, dashboard
+  `c14ad11a9578b4aa3d12a8593551eeb4c76ac86e`. Neither checkout was modified.
+- Selected Wema public ID `agt_73099afb71` through the existing port-3004
+  `/api/public-agent/rvc-session` bootstrap. It returns the same credential
+  shape understood by published SDK `0.1.0-staging.1`; the SDK pin/runtime and
+  original port-3000 agent remain unchanged.
+- Sample-only change: explicit Debug LAN mode now accepts port 3004 as well as
+  3000. The existing temporary forwarding helper optionally forwards port 3004
+  from the Mac's private address to loopback. Its default remains signaling port
+  7880; all other ports and nonlocal/public bind addresses are rejected.
+  No existing listener, backend configuration or authentication gate was changed.
+- Live Simulator test through the LAN endpoint passed at 01:42 WAT, together
+  with three targeted connection-policy tests: **4 tests, 0 failures**. Verified
+  greeting, non-silent agent audio, typed reply, listening state and teardown.
+  Evidence: `.build/hybrid-published-sdk-call.log` and
+  `.build/hybrid-published-sdk-call.xcresult`.
+- Backend trace `f2abcd30464f` confirms room
+  `rvc-livekit-3217a05a-0481-42b5-ba9a-c9c497838c0b`, worker
+  `rvc-livekit-comparison`, and config agent
+  `f90e2db3-6e12-4b4f-94fa-905b83a2adfd`. It reports completed playback, normal
+  session close and no `livekit_transport_error`. This was the hybrid, not the
+  original worker or standalone RVC WebSocket lab.
+- Device Debug build and strict signature verification passed. Installed and
+  launched `ai.odion.attentive.sample` on the user's iPhone 16 Pro Max at 01:43
+  WAT with the comparison endpoint/ID and existing caller profile supplied only
+  as launch environment. Process inspection confirmed the app remained running;
+  the comparison dashboard received its enrollment-status request with HTTP 200.
+  Evidence: `.build/hybrid-published-sdk-device-build.log` and
+  `.build/hybrid-device-launch.json` (local only; contains device information).
+- Physical-phone speech, interruption, banking execution and voice checks are
+  left for the user's test. No banking tools were executed by the chat-only
+  smoke test and no enrollment was created or replaced.
+- See the sample README's comparison section for launch and rollback. Close/end
+  the call before relaunching; these launch settings are not persisted after a
+  force quit. The comparison backend currently uses server-side caller prefills
+  rather than applying the sample's editable profile/wait-mode fields.
+
+## Published Package on Physical iPhone: 2026-09-08
+
+- The sample Xcode project now consumes the remote `attentive-ios-sdk` package
+  at exact version `0.1.0-staging.1`, revision
+  `6c9d1131a7754293666ea986f1f8cf180846ec49`. Its resolved dependency file is
+  updated; the project no longer uses the local SDK source package.
+- A separate device build in `.build/published-physical-app` passed using the
+  published package from `.build/sample-dependencies`. Downloaded `SHA256SUMS`
+  passed, and `codesign --verify --deep --strict` accepted the signed app.
+- Installed and launched `ai.odion.attentive.sample` on the user's iPhone 16 Pro
+  Max / iOS 26.6.1. Device process inspection confirmed it remained running.
+  Existing Wema/LAN launch configuration was retained; no SDK runtime or backend
+  settings were changed.
+- The user's first call attempt returned HTTP 500. The earlier diagnosis of a
+  cloud auth-service failure was incorrect: it used inactive `.env.local` values
+  instead of the running processes' local startup overrides. The actual failure
+  and recovery are recorded below. Physical-phone live-call acceptance after
+  recovery still requires a new test.
+
+## Local Call Recovery and Published Simulator Test: 2026-09-08
+
+- The active dashboard on port 3000 calls the local auth service on port 8090,
+  which resolves agents through the local configuration service on port 8092.
+  Local logs are available at `/private/tmp/sg-dashboard-local.log`,
+  `/private/tmp/sg-auth-local.log` and `/private/tmp/sg-agent-config-local.log`.
+- The auth traceback identifies `httpx` SSL context creation failing with
+  `FileNotFoundError` while loading its certificate bundle. The existing shared
+  environment `/tmp/odion-local-services-venv` was missing
+  `lib/python3.12/site-packages/certifi/cacert.pem`. Package metadata still
+  identified the installed version as `certifi==2026.7.22`. The cause of the
+  missing files has not been established; GitHub publication is not established
+  as their cause.
+- Restored that exact package with no dependencies changed:
+
+  ```sh
+  /opt/anaconda3/bin/python -m pip install --no-deps \
+    --target /tmp/odion-local-services-venv/lib/python3.12/site-packages \
+    --upgrade 'certifi==2026.7.22'
+  ```
+
+- The Wema public-agent lookup immediately returned HTTP 200. During the live
+  Simulator call, `/api/public-agent/connection-details` also returned HTTP 200.
+  No services were restarted and no endpoint, prompt, model, authentication
+  policy, tool or SDK runtime configuration was changed to achieve recovery.
+- Rebuilt the sample against the published exact `0.1.0-staging.1` package on
+  iPhone 17 Pro / iOS 26.5 Simulator. `testLiveChatCall` passed at 01:29 WAT:
+  1 test, 0 failures. It verifies call connection, greeting, non-silent received
+  agent audio, a typed message and final agent reply, return to listening,
+  locked in-call profile controls, and call teardown.
+- Evidence: `.build/published-simulator-live-call.log` and
+  `.build/published-simulator-live-call.xcresult`, including screenshots of the
+  greeting and reply. The test uses `TEST_RUNNER_ATTENTIVE_LIVE_UI_TEST=1` on
+  the `xcodebuild` process; an earlier run without the forwarded flag was
+  skipped and is not counted as a live-call pass.
+- A second consecutive live run passed at 01:31 WAT: 1 test, 0 failures, with
+  the same audio/chat assertions and automatic call teardown. Evidence:
+  `.build/published-simulator-live-call-repeat.log` and
+  `.build/published-simulator-live-call-repeat.xcresult`.
+- This is a chat-only live-call test, not verification of microphone ASR,
+  voice authentication or banking transactions. The phone has not been
+  redeployed during this recovery. Other missing files in the temporary Python
+  environment have not been exhaustively repaired or verified.
+
 ## Published Binary Staging Release: 2026-09-08
 
 - Private repository: `https://github.com/OdionAI/attentive-ios-sdk.git`.
@@ -432,3 +567,71 @@ sample behavior, backend services or agent configuration.
 Consumer logs: `sdks/ios/.build/documentation-consumer/DocsCore.log` and
 `DocsCallerUI.log`; generated source/build products remain ignored. Remote
 SwiftPM installation and compiled binary packaging have not been verified.
+
+## Debug Local Launch Recovery - September 8, 2026
+
+The sample previously lost its launch-only endpoint and `ATTENTIVE_LOCAL_DEVICE`
+permission when reopened from the Home Screen. The simulator reproduced the
+fallback to loopback/original-agent routing. The sample now retains only an
+explicitly approved private-LAN Debug route, business slug, agent ID and opt-in.
+It does not persist caller details or credentials. Explicit replacement/revocation
+and Release builds do not inherit the saved HTTP permission. SDK source,
+published package selection, backend services and agent prompts are unchanged.
+
+- Six focused simulator tests passed: existing local endpoint/signaling guards,
+  routing persistence, permission revocation, and a real call after relaunch
+  without developer routing environment variables.
+- The relaunched sample retained the port-3004 hybrid agent, loaded the enrolled
+  caller status and received non-silent greeting audio and its transcript.
+- The signed physical build passed `codesign --verify --deep --strict`, was
+  installed and launched on Mavino's iPhone with the integrated Wema endpoint.
+  A full physical-device conversation remains for the user to confirm.
+
+Simulator result bundle: `test_sim_2026-09-08T13-03-01-104Z_pid1214_e1a5f906.xcresult`
+under the local XcodeBuildMCP workspace's `result-bundles` directory. Screenshot:
+`/tmp/attentive-local-launch-verification/20FFA90B-32C2-4BDD-8D83-377D5DF6DA8C.png`.
+Builds used the existing published-package derived directories; reusing the old
+source-SDK `sample-app` cache produced a stale `LKObjCHelpers` dependency error.
+
+## Call Credit Errors - September 8, 2026
+
+The updated source SDK maps a bootstrap HTTP 402 / `no_airtime` response to
+`CallError.insufficientCredits(balanceKobo:requiredMinimumKobo:)`. Both `start()`
+and the existing error state/event expose it. Optional amounts are NGN kobo.
+The supplied UI displays "Call credit needed" and a dashboard top-up explanation.
+Unknown HTTP 402 responses retain `.httpStatus(402)` with safe payment wording.
+No backend `detail` string is displayed; rejection cannot connect or auto-retry.
+
+- `swift test -j 4`: 44 passed, including malformed/oversized billing responses,
+  typed error propagation, no transport connection/retry and unchanged auth state.
+- Simulator: public Wema defaults test passed. The new credit-alert UI test
+  passed after correcting an XCTest long-string lookup to an NSPredicate.
+  The rendered alert was inspected for readable wrapping and dismissal.
+- Local-source sample builds succeeded for Simulator and physical iPhone.
+  The updated app was installed on Mavino's iPhone; launch was blocked because
+  the phone was locked. This is a development build;
+  published binary `0.1.0-staging.1` and its remote package pin remain unchanged.
+- A generated project under `.build/credit-verification-sample` links the local
+  `sdks/ios` package. The tracked sample project still consumes the published
+  package, so a normal rebuild from that project does not yet include this fix.
+
+At the user's request, the Lagos Wema platform wallet received an administrative
+test grant of NGN 1,000 (100,000 kobo), using the existing `credit_wallet` domain
+function and a committed ledger entry, not a fabricated Paystack payment or a
+raw balance replacement. Reference: `admin-test-credit:wema-ios:20260908:1000`.
+The existing wallet was verified against the Wema business slug before crediting.
+The grant reference is idempotent. The public test-grant endpoint remains disabled;
+billing authorization, voice authentication and transport configuration were not
+changed. No card was charged and no password was reset.
+
+The live simulator chat test then passed the billing/room-join stage but failed
+waiting for the agent. Worker logs at `2026-09-08T19:34:04Z` show a job received
+by `rvc-livekit-comparison`, followed by a `session_token` parsing failure in
+`latency_lab/session_identity.py` before the worker joins the room. This is a
+separate deployed bootstrap-contract issue; no authentication check was relaxed.
+End-to-end public voice calling is therefore NOT yet verified working.
+
+Alert screenshot (ignored): `.build/credit-alert-screenshots/0090A459-6F65-4D31-A4C8-ED697A949502.png`.
+Passing alert result: `test_sim_2026-09-08T19-35-09-371Z_pid1214_124a9ea0.xcresult`.
+Mixed live/defaults run: `test_sim_2026-09-08T19-33-26-475Z_pid1214_76d482d3.xcresult`.
+Result bundles are in the local XcodeBuildMCP workspace.

@@ -3,10 +3,129 @@ import XCTest
 final class SampleUITests: XCTestCase {
     override func setUpWithError() throws { continueAfterFailure = false }
 
+    func testInsufficientCreditAlert() throws {
+        guard let endpoint = ProcessInfo.processInfo.environment["ATTENTIVE_CREDIT_TEST_ENDPOINT"] else {
+            throw XCTSkip("Requires a local fixture returning HTTP 402 with code no_airtime.")
+        }
+        let app = XCUIApplication()
+        app.launchArguments = ["--chat-only", "--generic-ui"]
+        app.launchEnvironment["ATTENTIVE_CALL_ENDPOINT"] = endpoint
+        app.launchEnvironment["ATTENTIVE_LOCAL_DEVICE"] = "0"
+        app.launchEnvironment["ATTENTIVE_CALLER_CONTACT"] = "credit-ui-test@example.com"
+        app.launch()
+        XCTAssertTrue(app.buttons["startCall"].waitForExistence(timeout: 10))
+        app.buttons["startCall"].tap()
+        let alert = app.alerts["Call credit needed"]
+        XCTAssertTrue(alert.waitForExistence(timeout: 15))
+        XCTAssertTrue(alert.staticTexts.matching(NSPredicate(format: "label == %@",
+            "This agent's account does not have enough call credit. Please ask the account owner to top up in the Attentive dashboard, then try again.")).firstMatch.exists)
+        XCTAssertFalse(alert.staticTexts.containing(NSPredicate(format: "label CONTAINS '402'")).firstMatch.exists)
+        attachScreen("Insufficient call credit notification")
+        alert.buttons["OK"].tap()
+        XCTAssertFalse(alert.exists)
+        XCTAssertTrue(app.buttons["startCall"].isEnabled)
+    }
+
+    func testPublicDefaultsUseWemaWithoutUnavailableEnrollment() {
+        let app = XCUIApplication()
+        app.launchEnvironment["ATTENTIVE_LOCAL_DEVICE"] = "0"
+        app.launch()
+        XCTAssertTrue(app.buttons["startCall"].waitForExistence(timeout: 10))
+        XCTAssertFalse(app.buttons["recordVoice"].exists)
+        XCTAssertFalse(app.alerts["Invalid configuration"].exists)
+        app.buttons["bankMenu"].tap()
+        XCTAssertTrue(app.staticTexts["Bank activity"].exists)
+        app.buttons["callerDetails"].tap()
+        XCTAssertEqual(app.textFields["Call endpoint"].value as? String,
+                       "https://attentive.odion.ai/api/public-agent/connection-details")
+        XCTAssertEqual(app.textFields["Business slug"].value as? String, "wema-bank-poc-local")
+        XCTAssertEqual(app.textFields["Agent ID"].value as? String, "agt_73099afb71")
+        attachScreen("Public Lagos Wema configuration")
+    }
+
+    func testLocalLaunchRoutingSurvivesRelaunchWithoutSavingCallerData() {
+        let suite = "attentive.local-launch-test.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let routing = ["ATTENTIVE_CALL_ENDPOINT": "http://192.168.1.5:3004/api/public-agent/rvc-session",
+                       "ATTENTIVE_BUSINESS_SLUG": "wema-bank-poc-local",
+                       "ATTENTIVE_AGENT_ID": "comparison-agent", "ATTENTIVE_LOCAL_DEVICE": "1"]
+        let launch = routing.merging(["ATTENTIVE_CALLER_CONTACT": "private@example.com",
+                                     "ATTENTIVE_CUSTOMER_ID": "private", "SERVICE_TOKEN": "secret"]) { _, new in new }
+        XCTAssertEqual(SampleLocalLaunchSettings.environment(launch, defaults: defaults), launch)
+        let restored = SampleLocalLaunchSettings.environment([:], defaults: defaults)
+        #if DEBUG
+        XCTAssertEqual(restored, routing)
+        XCTAssertTrue(LocalDeviceConnectionPolicy(endpoint: URL(string: routing["ATTENTIVE_CALL_ENDPOINT"]!)!,
+                                                 environment: restored).enabled)
+        #else
+        XCTAssertTrue(restored.isEmpty)
+        #endif
+        XCTAssertNil(restored["ATTENTIVE_CALLER_CONTACT"])
+        XCTAssertNil(restored["ATTENTIVE_CUSTOMER_ID"])
+        XCTAssertNil(restored["SERVICE_TOKEN"])
+    }
+
+    func testLocalLaunchOverrideClearsSavedPermission() {
+        let suite = "attentive.local-launch-test.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let approved = ["ATTENTIVE_CALL_ENDPOINT": "http://192.168.1.5:3004/api/public-agent/rvc-session",
+                        "ATTENTIVE_LOCAL_DEVICE": "1"]
+        for override in [
+            ["ATTENTIVE_LOCAL_DEVICE": "0"],
+            ["ATTENTIVE_CALL_ENDPOINT": "https://example.com/api/call"],
+            ["ATTENTIVE_CALL_ENDPOINT": "http://192.168.1.5:3004/api/call"],
+            ["ATTENTIVE_CALL_ENDPOINT": "http://8.8.8.8:3004", "ATTENTIVE_LOCAL_DEVICE": "1"],
+            ["ATTENTIVE_CALL_ENDPOINT": "http://192.168.1.5:3005", "ATTENTIVE_LOCAL_DEVICE": "1"],
+        ] {
+            _ = SampleLocalLaunchSettings.environment(approved, defaults: defaults)
+            XCTAssertEqual(SampleLocalLaunchSettings.environment(override, defaults: defaults), override)
+            XCTAssertTrue(SampleLocalLaunchSettings.environment([:], defaults: defaults).isEmpty)
+        }
+    }
+
+    func testLiveLocalCallAfterRelaunch() throws {
+        let env = ProcessInfo.processInfo.environment
+        guard env["ATTENTIVE_LIVE_UI_TEST"] == "1", env["ATTENTIVE_LOCAL_DEVICE"] == "1",
+              let endpoint = env["ATTENTIVE_CALL_ENDPOINT"] else {
+            throw XCTSkip("Opt in with the approved local-device live-test configuration.")
+        }
+        let app = XCUIApplication()
+        app.launchArguments = ["--chat-only"]
+        for key in ["ATTENTIVE_CALL_ENDPOINT", "ATTENTIVE_BUSINESS_SLUG", "ATTENTIVE_AGENT_ID", "ATTENTIVE_LOCAL_DEVICE"] {
+            app.launchEnvironment[key] = env[key]
+        }
+        app.launch()
+        XCTAssertTrue(app.buttons["startCall"].waitForExistence(timeout: 10))
+        app.terminate()
+        app.launchEnvironment = ["ATTENTIVE_CALLER_CONTACT": "mavino@odion.ai"]
+        app.launch()
+        XCTAssertTrue(app.buttons["startCall"].waitForExistence(timeout: 10))
+        XCTAssertFalse(app.alerts["Invalid configuration"].exists)
+        app.buttons["bankMenu"].tap()
+        app.buttons["callerDetails"].tap()
+        XCTAssertEqual(app.textFields["Call endpoint"].value as? String, endpoint)
+        app.buttons["Close"].tap()
+        XCTAssertTrue(app.staticTexts["Voice enrolled for this email."].waitForExistence(timeout: 10))
+        app.buttons["startCall"].tap()
+        addTeardownBlock {
+            if app.buttons["endCall"].exists { app.buttons["endCall"].tap() }
+        }
+        XCTAssertTrue(app.buttons["transcriptToggle"].waitForExistence(timeout: 10))
+        app.buttons["transcriptToggle"].tap()
+        XCTAssertTrue(app.images["audioReceived"].waitForExistence(timeout: 40))
+        XCTAssertTrue(app.staticTexts.matching(identifier: "agentTranscript").firstMatch.waitForExistence(timeout: 10))
+        attachScreen("Local configuration restored after normal launch")
+        app.buttons["endCall"].tap()
+    }
+
     func testLocalDeviceModeRequiresExplicitPrivateEndpoint() {
         let privateURL = URL(string: "http://192.168.1.5:3000/api/public-agent/connection-details")!
         XCTAssertFalse(LocalDeviceConnectionPolicy(endpoint: privateURL, environment: [:]).enabled)
         for address in ["http://example.com:3000", "http://8.8.8.8:3000", "http://172.32.0.1:3000",
+                        "http://example.com:3004", "http://8.8.8.8:3004", "http://127.0.0.1:3004",
+                        "http://192.168.1.5:3003", "http://192.168.1.5:3005",
                         "http://127.0.0.1:3000", "http://192.168.1.5:80", "https://192.168.1.5:3000",
                         "http://user:password@192.168.1.5:3000"] {
             XCTAssertFalse(LocalDeviceConnectionPolicy(endpoint: URL(string: address)!,
@@ -14,8 +133,12 @@ final class SampleUITests: XCTestCase {
         }
         #if DEBUG
         for address in ["192.168.1.5", "10.1.2.3", "172.16.0.1", "172.31.255.255"] {
-            XCTAssertTrue(LocalDeviceConnectionPolicy(endpoint: URL(string: "http://\(address):3000")!,
-                environment: ["ATTENTIVE_LOCAL_DEVICE": "1"]).enabled)
+            for port in [3000, 3004] {
+                let url = URL(string: "http://\(address):\(port)")!
+                XCTAssertFalse(LocalDeviceConnectionPolicy(endpoint: url, environment: [:]).enabled)
+                XCTAssertTrue(LocalDeviceConnectionPolicy(endpoint: url,
+                    environment: ["ATTENTIVE_LOCAL_DEVICE": "1"]).enabled)
+            }
         }
         #else
         XCTAssertFalse(LocalDeviceConnectionPolicy(endpoint: privateURL,
@@ -38,6 +161,20 @@ final class SampleUITests: XCTestCase {
         }
         XCTAssertEqual(LocalDeviceConnectionPolicy(endpoint: URL(string: "http://192.168.1.5:3000")!,
             environment: [:]).signalingURL(original), original)
+    }
+
+    func testComparisonLocalDeviceModePreservesSignalingCredentialsURL() {
+        let policy = LocalDeviceConnectionPolicy(endpoint: URL(string: "http://192.168.1.5:3004/api/public-agent/rvc-session")!,
+            environment: ["ATTENTIVE_LOCAL_DEVICE": "1"])
+        let original = URL(string: "ws://127.0.0.1:7880/rtc?test=1")!
+        #if DEBUG
+        XCTAssertEqual(policy.signalingURL(original).absoluteString, "ws://192.168.1.5:7880/rtc?test=1")
+        #else
+        XCTAssertFalse(policy.enabled)
+        XCTAssertEqual(policy.signalingURL(original), original)
+        #endif
+        let remote = URL(string: "wss://service.example.com/rtc")!
+        XCTAssertEqual(policy.signalingURL(remote), remote)
     }
 
     func testGenericCallerHasNoBankBrandingOrRequiredEnrollmentUI() {
@@ -90,6 +227,11 @@ final class SampleUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments = ["--chat-only"]
         app.launchEnvironment["ATTENTIVE_CALLER_CONTACT"] = "attentive-ios-ui-test@odion.ai"
+        for key in ["ATTENTIVE_CALL_ENDPOINT", "ATTENTIVE_BUSINESS_SLUG", "ATTENTIVE_AGENT_ID", "ATTENTIVE_LOCAL_DEVICE"] {
+            if let value = ProcessInfo.processInfo.environment[key] {
+                app.launchEnvironment[key] = value
+            }
+        }
         app.launch()
         XCTAssertTrue(app.buttons["startCall"].waitForExistence(timeout: 10))
         app.buttons["startCall"].tap()
@@ -176,6 +318,7 @@ final class SampleUITests: XCTestCase {
 
     func testEnrollmentEmailValidationAndCancellation() {
         let app = XCUIApplication()
+        app.launchEnvironment["ATTENTIVE_CALL_ENDPOINT"] = "http://127.0.0.1:3000/api/public-agent/connection-details"
         app.launchEnvironment["ATTENTIVE_CALLER_CONTACT"] = "08123456789"
         app.launch()
         let record = app.buttons["recordVoice"]

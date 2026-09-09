@@ -11,7 +11,7 @@ struct CallScreen: View {
     var body: some View {
         AttentiveCallerView(call: call, request: $model.configuration.request,
                             configuration: model.appearance,
-                            enrollment: ProcessInfo.processInfo.arguments.contains("--generic-ui") ? nil : model.enrollment,
+                            enrollment: ProcessInfo.processInfo.arguments.contains("--generic-ui") ? nil : model.callerEnrollment,
                             microphoneOnStart: model.configuration.microphoneOnStart,
                             onSettings: { showSettings = true })
             .sheet(isPresented: $showSettings) { CallerSettings(model: model) }

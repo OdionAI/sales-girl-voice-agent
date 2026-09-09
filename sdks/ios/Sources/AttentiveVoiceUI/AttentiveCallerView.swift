@@ -171,7 +171,7 @@ private struct CallerContent: View {
             if phase == .background { controls.enrollment?.cancel() }
         }
         .onDisappear { Task { await controls.disappear(endsCall: configuration.endsCallOnDisappear) } }
-        .alert("Call unavailable", isPresented: Binding(
+        .alert(controls.errorTitle, isPresented: Binding(
             get: { controls.errorMessage != nil }, set: { if !$0 { controls.errorMessage = nil } }
         )) {
             Button("OK", role: .cancel) { controls.errorMessage = nil }

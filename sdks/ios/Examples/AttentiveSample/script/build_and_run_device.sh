@@ -10,7 +10,7 @@ derived="${sdk_root}/.build/physical-app"
 
 xcodebuild -project "${sample_root}/AttentiveSample.xcodeproj" -scheme AttentiveSample \
   -configuration Debug -destination "id=${ATTENTIVE_DEVICE_ID}" -derivedDataPath "${derived}" \
-  -clonedSourcePackagesDirPath "${sdk_root}/.build" -jobs 4 \
+  -clonedSourcePackagesDirPath "${sdk_root}/.build/sample-dependencies" -scmProvider system -jobs 4 \
   -allowProvisioningUpdates -allowProvisioningDeviceRegistration \
   "DEVELOPMENT_TEAM=${ATTENTIVE_DEVELOPMENT_TEAM}" build
 xcrun devicectl device install app --device "${ATTENTIVE_DEVICE_ID}" \

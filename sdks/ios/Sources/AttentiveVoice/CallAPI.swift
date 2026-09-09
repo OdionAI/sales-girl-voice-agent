@@ -66,6 +66,8 @@ public protocol CallCredentialProvider: Sendable {
 public enum CallError: Error, LocalizedError, Equatable, Sendable {
     case invalidRequest, insecureURL, invalidResponse, alreadyActive, notConnected
     case microphoneDenied, connectionFailed, agentUnavailable, messageFailed
+    /// Platform call credit, not the caller's bank balance. Amounts are optional, in NGN kobo.
+    case insufficientCredits(balanceKobo: Int?, requiredMinimumKobo: Int?)
     case httpStatus(Int)
 
     public var errorDescription: String? {
@@ -79,6 +81,10 @@ public enum CallError: Error, LocalizedError, Equatable, Sendable {
         case .connectionFailed: return "The call connection failed. End this call before trying again."
         case .agentUnavailable: return "The agent did not become available. Please try again."
         case .messageFailed: return "The message could not be sent."
+        case .insufficientCredits:
+            return "This agent's account does not have enough call credit. Please ask the account owner to top up in the Attentive dashboard, then try again."
+        case .httpStatus(402):
+            return "Calling is unavailable because payment is required. Please ask the account owner to check billing in the Attentive dashboard."
         case .httpStatus(let status): return "The call service returned HTTP \(status)."
         }
     }
@@ -119,7 +125,15 @@ public struct HTTPCallCredentialProvider: CallCredentialProvider {
         if let finalURL = response.url {
             try validateURL(finalURL, schemes: ["https", "http"], allowInsecure: allowInsecure)
         }
-        guard response.statusCode == 200 else { throw CallError.httpStatus(response.statusCode) }
+        guard response.statusCode == 200 else {
+            if response.statusCode == 402, data.count <= 65_536,
+               let failure = try? JSONDecoder().decode(CallServiceFailure.self, from: data),
+               failure.code == "no_airtime" {
+                throw CallError.insufficientCredits(balanceKobo: failure.balanceKobo,
+                                                    requiredMinimumKobo: failure.requiredMinimumKobo)
+            }
+            throw CallError.httpStatus(response.statusCode)
+        }
         guard data.count <= 65_536,
               let credentials = try? JSONDecoder().decode(CallCredentials.self, from: data),
               !credentials.participantToken.isEmpty, !credentials.roomName.isEmpty else {
@@ -127,6 +141,26 @@ public struct HTTPCallCredentialProvider: CallCredentialProvider {
         }
         try validateURL(credentials.serverUrl, schemes: ["wss", "ws"], allowInsecure: allowInsecure)
         return credentials
+    }
+}
+
+// Read only known billing fields; never display arbitrary upstream error details.
+private struct CallServiceFailure: Decodable {
+    let code: String
+    let balanceKobo: Int?
+    let requiredMinimumKobo: Int?
+
+    private enum CodingKeys: String, CodingKey {
+        case code, balanceKobo = "balance_kobo", requiredMinimumKobo = "required_min_kobo"
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        code = try values.decode(String.self, forKey: .code)
+        let balance = try? values.decode(Int.self, forKey: .balanceKobo)
+        let minimum = try? values.decode(Int.self, forKey: .requiredMinimumKobo)
+        balanceKobo = balance.flatMap { $0 >= 0 ? $0 : nil }
+        requiredMinimumKobo = minimum.flatMap { $0 >= 0 ? $0 : nil }
     }
 }
 

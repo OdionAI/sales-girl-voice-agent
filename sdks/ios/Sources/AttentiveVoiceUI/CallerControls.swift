@@ -8,6 +8,7 @@ final class CallerControls: ObservableObject {
     let call: AttentiveCall
     let enrollment: VoiceEnrollment?
     @Published var errorMessage: String?
+    @Published private(set) var errorTitle = "Call unavailable"
     @Published private(set) var receivedAudio = false
     @Published private(set) var sending = false
     @Published private(set) var enrollmentBusy = false
@@ -19,7 +20,7 @@ final class CallerControls: ObservableObject {
         self.enrollment = enrollment
         // Observe published state without taking over the host's onEvent callback.
         call.$lastError.sink { [weak self] error in
-            self?.errorMessage = error?.localizedDescription
+            self?.presentError(error)
         }.store(in: &subscriptions)
         call.$state.removeDuplicates().sink { [weak self] state in
             if state == .connecting { self?.receivedAudio = false }
@@ -37,17 +38,17 @@ final class CallerControls: ObservableObject {
 
     func start(_ request: CallRequest, microphoneEnabled: Bool) async {
         guard visible, !active, enrollment?.isBusy != true else { return }
-        errorMessage = nil
+        presentError(nil)
         do { try await call.start(request, microphoneEnabled: microphoneEnabled) }
         catch is CancellationError {}
-        catch { errorMessage = error.localizedDescription }
+        catch { presentError(error) }
     }
 
     func end() async { await call.end() }
 
     func toggleMicrophone() async {
         do { try await call.setMicrophone(enabled: !call.microphoneEnabled) }
-        catch { errorMessage = error.localizedDescription }
+        catch { presentError(error) }
     }
 
     func send(_ text: String) async -> Bool {
@@ -55,7 +56,16 @@ final class CallerControls: ObservableObject {
         sending = true
         defer { sending = false }
         do { try await call.sendText(text); return true }
-        catch { errorMessage = error.localizedDescription; return false }
+        catch { presentError(error); return false }
+    }
+
+    private func presentError(_ error: Error?) {
+        switch error as? CallError {
+        case .insufficientCredits: errorTitle = "Call credit needed"
+        case .httpStatus(402): errorTitle = "Payment required"
+        default: errorTitle = "Call unavailable"
+        }
+        errorMessage = error?.localizedDescription
     }
 
     func appear() { visible = true }

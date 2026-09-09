@@ -1,7 +1,9 @@
 # Attentive iOS Sample
 
-Native SwiftUI caller app consuming `AttentiveVoice` and `AttentiveVoiceUI`. Requires Xcode with Swift
-6.1+, an installed iOS Simulator runtime, and the existing local backend. The app
+Native SwiftUI caller app consuming the published binary `AttentiveVoice` and
+`AttentiveVoiceUI` products at exact version `0.1.0-staging.1`. Requires Xcode
+26.6 / Swift 6.3.3, GitHub read access to `OdionAI/attentive-ios-sdk`, an installed
+iOS Simulator runtime for simulator tests, and the reachable public backend. The app
 targets iOS 17+; the underlying wrapper supports iOS 16+.
 
 ## Run
@@ -19,17 +21,33 @@ It does not start the dashboard, worker or LiveKit; those must already be runnin
 Build products go into `sdks/ios/.build/sample-app`, not source control.
 
 Alternatively open `AttentiveSample.xcodeproj`, select the `AttentiveSample`
-scheme and an iPhone simulator, and Run. Its local Swift package reference points
-to `sdks/ios`; the app does not import LiveKit directly.
+scheme and an iPhone simulator, and Run. Its remote Swift package reference points
+to `https://github.com/OdionAI/attentive-ios-sdk.git`, pinned to
+`0.1.0-staging.1`; it does not consume local implementation source. Sign into
+GitHub in Xcode with repository access. The scripts use system Git credentials
+and a separate `.build/sample-dependencies` cache. The app does not import
+LiveKit directly. Future changes under `sdks/ios/Sources` will not appear in
+this app until a new SDK version is published and the package pin is updated.
 
-The default development target is the existing Wema agent at
-`http://127.0.0.1:3000/api/public-agent/connection-details`. Open the top-right
+The default target is the Lagos Wema agent `agt_73099afb71` at
+`https://attentive.odion.ai/api/public-agent/connection-details`, business
+`wema-bank-poc-local`. This follows `OdionAI/attentive-ios-sdk` documentation
+commit `ab775c2`; the binary package remains `0.1.0-staging.1`.
+The public deployment has no enrollment route yet, so this sample passes `nil`
+enrollment to the caller view for that host. Server voice checks and auth badges
+are unchanged. Never embed the jump API key or point the SDK at jump API ports.
+Opening the app normally uses this public endpoint; caller details remain
+launch-time inputs. To clear a previously saved Debug LAN target, launch once
+with `ATTENTIVE_LOCAL_DEVICE=0` or an explicit public endpoint.
+
+Open the top-right
 My Wema menu before starting to set the customer ID and phone. Call settings
 inside that panel provides the optional account and connection configuration.
 Use the caller identity enrolled in the existing backend for voice verification.
 Profile values provide context; entering them does not authenticate a caller.
 
-The pre-call form now checks voice enrollment for the caller email and offers
+When targeting a local deployment with enrollment, the pre-call form checks
+voice enrollment for the caller email and offers
 **Record my voice** / **Re-record my voice**, matching the web caller. Recording
 lasts eight seconds; a countdown and Cancel control are shown. Start Call and
 identity edits are locked during capture/upload. The same normalized email is
@@ -112,7 +130,7 @@ Use `--generic-ui` to inspect the library's unbranded defaults with no enrollmen
 control or bank profile fields; this only changes presentation, never backend
 authorization. See the [UI integration guide](../../CALLER_UI.md).
 
-Insecure HTTP/WS is enabled in Debug simulator builds, or explicitly in the
+Insecure HTTP/WS is enabled only for HTTP targets in Debug simulator builds, or explicitly in the
 Debug-only physical-device LAN test mode below. Release builds require reachable
 HTTPS/WSS endpoints; a phone cannot use the Mac's `127.0.0.1`.
 Select a signing team and confirm the backend's reachable media addresses
@@ -129,7 +147,8 @@ Allow Local Network and Microphone access when the app asks.
 
 Normal device integrations use HTTPS/WSS. For an explicitly approved local Debug
 test, set `ATTENTIVE_LOCAL_DEVICE=1` and use the Mac's RFC1918 IPv4 address at port
-3000 as `ATTENTIVE_CALL_ENDPOINT`. This mode is compiled out of Release. Only
+3000 (original agent) or 3004 (comparison agent) as `ATTENTIVE_CALL_ENDPOINT`.
+This mode is compiled out of Release. Only
 `ws://127.0.0.1:7880` (or equivalent loopback host) in returned credentials is
 mapped to the API's private host; room, token, URL path/query and all other
 signaling endpoints remain unchanged. The core SDK and dashboard are untouched.
@@ -162,9 +181,10 @@ export ATTENTIVE_PHONE='YOUR_PHONE_NUMBER'
 bash sdks/ios/Examples/AttentiveSample/script/build_and_run_device.sh
 ```
 
-The default business/agent remain `wema-bank-poc-local` / `agt_59a007e81e`.
-Customer details and deployment addresses are launch-time inputs, not committed
-defaults. End and close any current call before rerunning; the script does not
+For the original local agent, explicitly set `ATTENTIVE_AGENT_ID=agt_59a007e81e`;
+the app now defaults to the public Lagos comparison agent. Customer details
+remain launch-time inputs, not committed defaults. End and close any current
+call before rerunning; the script does not
 terminate an existing app/call. These inputs are not persisted: after force
 quitting, relaunch with the script or Xcode Run environment. No voiceprint is
 created/replaced automatically, and no call starts on launch.
@@ -175,6 +195,62 @@ PID after verifying the command with `ps`. Close the physical app and remove
 was changed. If the Mac changes networks, stop the old forwarder and recheck both
 signaling and RTC addresses before retesting. Do not reuse a stale LAN address.
 
+### RVC + LiveKit Comparison Agent
+
+The published SDK also accepts the comparison backend's existing call credentials.
+No SDK release, alternate audio engine, prompt edit or authentication bypass is
+required. These are two explicit launch configurations for the same sample:
+
+| Target | Call endpoint path / port | Wema public ID on this local database |
+| --- | --- | --- |
+| Original | `:3000/api/public-agent/connection-details` | `agt_59a007e81e` |
+| RVC + LiveKit | `:3004/api/public-agent/rvc-session` | `agt_73099afb71` |
+
+The comparison backend must already be running with the comparison public ID in
+its server-side LiveKit allowlist. A standalone RVC WebSocket session is not a
+compatible SDK bootstrap response. Verify that the resulting room starts with
+`rvc-livekit-` and uses worker `rvc-livekit-comparison`.
+
+If the comparison dashboard is loopback-only, expose only its existing HTTP
+listener on this Mac's private LAN address using a second temporary forwarder:
+
+```sh
+node sdks/ios/Examples/AttentiveSample/script/forward_local_signaling.mjs 192.168.1.10 3004
+```
+
+Keep the existing 7880 signaling forwarder running; do not start a duplicate.
+An explicitly approved local-device launch now saves only its endpoint, business
+slug, agent ID and Debug local-device permission in the sample's preferences.
+Opening the installed app from the Home Screen therefore retains the comparison
+route instead of reverting to loopback. Caller details, tokens and voice samples
+are not saved by this mechanism. A new explicit endpoint replaces this setup;
+an endpoint without local-device opt-in or `ATTENTIVE_LOCAL_DEVICE=0` clears it.
+Release builds ignore these preferences and continue requiring secure endpoints.
+The iPhone must still share a reachable local network with the Mac.
+
+The optional port argument permits only 7880 and 3004. This forwards the call
+bootstrap/enrollment API, not audio through another orchestration layer. Both
+servers and the old caller remain unchanged.
+
+With the device/team/caller variables above set, launch the comparison:
+
+```sh
+export ATTENTIVE_CALL_ENDPOINT='http://192.168.1.10:3004/api/public-agent/rvc-session'
+export ATTENTIVE_AGENT_ID='agt_73099afb71'
+bash sdks/ios/Examples/AttentiveSample/script/build_and_run_device.sh
+```
+
+Replace the example LAN address and use the existing enrolled caller email.
+The comparison bootstrap currently supplies bank context from its server-side
+prefill settings; it does not apply the sample's editable `wemaContext` or
+`toolWaitSpeechMode`. Voice checks and banking execution remain backend-owned.
+Do not interpret chat-only testing as successful voice authentication or assume
+all comparison-backend features have native parity.
+
+To restore the old target, close/end the sample call and relaunch with the
+original endpoint and ID from the table. The SDK package pin and original app
+defaults are unchanged. Stop only the optional port-3004 forwarder when finished.
+
 ## Tests
 
 From `sdks/ios` (replace the simulator ID):
@@ -182,7 +258,8 @@ From `sdks/ios` (replace the simulator ID):
 ```sh
 xcodebuild -project Examples/AttentiveSample/AttentiveSample.xcodeproj \
   -scheme AttentiveSample -destination 'id=YOUR_SIMULATOR_ID' \
-  -derivedDataPath .build/sample-app -clonedSourcePackagesDirPath .build \
+  -derivedDataPath .build/sample-app -clonedSourcePackagesDirPath .build/sample-dependencies \
+  -scmProvider system \
   -parallel-testing-enabled NO CODE_SIGNING_ALLOWED=NO test
 ```
 

@@ -3,6 +3,10 @@ import os from 'node:os';
 
 // Bind only an explicitly supplied RFC1918 address already assigned to this Mac.
 const host = process.argv[2];
+const port = Number(process.argv[3] ?? 7880);
+if (![7880, 3004].includes(port)) {
+  throw new Error('Only local signaling (7880) and the comparison app (3004) may be forwarded.');
+}
 const octets = (host ?? '').split('.').map(Number);
 const privateIP = net.isIP(host ?? '') === 4 && (
   octets[0] === 10 || (octets[0] === 172 && octets[1] >= 16 && octets[1] <= 31) ||
@@ -14,7 +18,7 @@ if (!privateIP || !Object.values(os.networkInterfaces()).flat().some(address => 
 
 const sockets = new Set();
 const server = net.createServer(client => {
-  const upstream = net.connect({ host: '127.0.0.1', port: 7880 });
+  const upstream = net.connect({ host: '127.0.0.1', port });
   for (const socket of [client, upstream]) {
     sockets.add(socket);
     socket.setNoDelay(true);
@@ -27,7 +31,7 @@ const server = net.createServer(client => {
   client.pipe(upstream).pipe(client);
 });
 server.on('error', error => { console.error(error.code); process.exitCode = 1; });
-server.listen(7880, host, () => console.log(`Local signaling forwarder: ${host}:7880 -> 127.0.0.1:7880; PID ${process.pid}`));
+server.listen(port, host, () => console.log(`Local test forwarder: ${host}:${port} -> 127.0.0.1:${port}; PID ${process.pid}`));
 for (const signal of ['SIGINT', 'SIGTERM']) {
   process.once(signal, () => {
     server.close();

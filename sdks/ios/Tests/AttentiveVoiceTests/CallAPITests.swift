@@ -13,7 +13,45 @@ final class CallAPITests: XCTestCase {
     func testStatusErrorDoesNotLeakResponse() async throws {
         let provider = try makeProvider(path: "402")
         do { _ = try await provider.fetch(for: request); XCTFail() }
-        catch { XCTAssertEqual(error as? CallError, .httpStatus(402)) }
+        catch {
+            XCTAssertEqual(error as? CallError, .httpStatus(402))
+            XCTAssertFalse(error.localizedDescription.contains("private-provider-detail"))
+            XCTAssertFalse(error.localizedDescription.contains("402"))
+        }
+    }
+
+    func testInsufficientCreditsProvidesTypedAmountsAndSafeMessage() async throws {
+        let provider = try makeProvider(path: "no-airtime")
+        do { _ = try await provider.fetch(for: request); XCTFail() }
+        catch {
+            XCTAssertEqual(error as? CallError, .insufficientCredits(balanceKobo: 0, requiredMinimumKobo: 167))
+            XCTAssertTrue(error.localizedDescription.contains("call credit"))
+            XCTAssertTrue(error.localizedDescription.contains("dashboard"))
+            XCTAssertFalse(error.localizedDescription.contains("private-provider-detail"))
+            XCTAssertFalse(error.localizedDescription.contains("402"))
+        }
+    }
+
+    func testMissingOrMalformedBillingAmountsKeepKnownError() async throws {
+        for path in ["no-airtime-missing", "no-airtime-invalid"] {
+            let provider = try makeProvider(path: path)
+            do { _ = try await provider.fetch(for: request); XCTFail(path) }
+            catch { XCTAssertEqual(error as? CallError, .insufficientCredits(balanceKobo: nil, requiredMinimumKobo: nil)) }
+        }
+    }
+
+    func testUnknownOrUnusablePaymentResponsesAreSafe() async throws {
+        for path in ["payment-unknown", "payment-html", "payment-oversized"] {
+            let provider = try makeProvider(path: path)
+            do { _ = try await provider.fetch(for: request); XCTFail(path) }
+            catch { XCTAssertEqual(error as? CallError, .httpStatus(402)) }
+        }
+    }
+
+    func testBillingCodeDoesNotOverrideOtherHTTPStatuses() async throws {
+        let provider = try makeProvider(path: "billing-code-on-500")
+        do { _ = try await provider.fetch(for: request); XCTFail() }
+        catch { XCTAssertEqual(error as? CallError, .httpStatus(500)) }
     }
 
     func testInvalidAndInsecureCredentialsRejected() async throws {
@@ -49,11 +87,21 @@ private final class MockURLProtocol: URLProtocol {
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() {
         let path = request.url!.lastPathComponent
-        let status = path == "402" ? 402 : 200
+        let status = path == "billing-code-on-500" ? 500 :
+            (path == "402" || path.hasPrefix("no-airtime") || path.hasPrefix("payment-") ? 402 : 200)
         let data: Data
         switch path {
         case "malformed": data = Data("not-json".utf8)
         case "402": data = Data(#"{"detail":"private-provider-detail"}"#.utf8)
+        case "no-airtime", "billing-code-on-500":
+            data = Data(#"{"code":"no_airtime","detail":"private-provider-detail","authorized":false,"balance_kobo":0,"required_min_kobo":167}"#.utf8)
+        case "no-airtime-missing": data = Data(#"{"code":"no_airtime"}"#.utf8)
+        case "no-airtime-invalid":
+            data = Data(#"{"code":"no_airtime","balance_kobo":-1,"required_min_kobo":"invalid"}"#.utf8)
+        case "payment-unknown": data = Data(#"{"code":"other_payment_error","detail":"private-provider-detail"}"#.utf8)
+        case "payment-html": data = Data("<html>private-provider-detail</html>".utf8)
+        case "payment-oversized":
+            data = Data((#"{"code":"no_airtime","detail":""# + String(repeating: "x", count: 65_536) + #""}"#).utf8)
         default:
             let scheme = path == "insecure" ? "ws" : "wss"
             data = try! JSONSerialization.data(withJSONObject: [

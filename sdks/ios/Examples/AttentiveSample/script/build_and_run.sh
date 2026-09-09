@@ -25,7 +25,7 @@ open -a Simulator
 xcrun simctl terminate "${device}" "${bundle}" >/dev/null 2>&1 || true
 xcodebuild -project "${sample_root}/AttentiveSample.xcodeproj" -scheme AttentiveSample \
   -configuration Debug -destination "id=${device}" -derivedDataPath "${derived}" \
-  -clonedSourcePackagesDirPath "${sdk_root}/.build" -jobs 4 CODE_SIGNING_ALLOWED=NO build
+  -clonedSourcePackagesDirPath "${sdk_root}/.build/sample-dependencies" -scmProvider system -jobs 4 CODE_SIGNING_ALLOWED=NO build
 xcrun simctl install "${device}" "${derived}/Build/Products/Debug-iphonesimulator/AttentiveSample.app"
 
 for key in ATTENTIVE_CALL_ENDPOINT ATTENTIVE_BUSINESS_SLUG ATTENTIVE_AGENT_ID \

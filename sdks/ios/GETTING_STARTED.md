@@ -307,6 +307,37 @@ call start during recording/upload, cancel enrollment on dismissal/background,
 and never capture enrollment concurrently with the call. The minimal controls
 above do not implement an enrollment screen.
 
+### Insufficient Call Credit
+
+In the updated source SDK, a bootstrap HTTP 402 with `code: "no_airtime"`
+throws `CallError.insufficientCredits(balanceKobo:requiredMinimumKobo:)`.
+The same error is available through `lastError` and the `.failure` event.
+The published `0.1.0-staging.1` binary does not yet contain this change.
+
+```swift
+do {
+    try await call.start(request)
+} catch let error as CallError {
+    switch error {
+    case .insufficientCredits:
+        // Present this message in your own UI. Do not automatically retry.
+        errorMessage = error.localizedDescription
+    default:
+        errorMessage = error.localizedDescription
+    }
+}
+```
+
+Amounts, when supplied, are in NGN kobo; `nil` means unknown, not zero. This
+is the agent owner's Attentive call-credit wallet, not the caller's bank balance
+or mobile airtime. The owner can top up through dashboard billing. No realtime
+connection is made after this rejection, and the SDK does not bypass billing.
+
+`AttentiveVoiceUI` displays **Call credit needed** with a dashboard top-up
+explanation. An unrecognized or malformed HTTP 402 remains `.httpStatus(402)`
+for programmatic handling, but its message explains that payment is required.
+Arbitrary backend `detail` strings are never shown to the caller.
+
 ## 4. Observe Conversation and Tools
 
 These properties/events are available in either UI option. UI observers must
