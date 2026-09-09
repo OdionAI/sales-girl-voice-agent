@@ -15,6 +15,20 @@ final class SDKClientTests: XCTestCase {
         XCTAssertFalse(client.description.contains(key))
     }
 
+    func testCustomerIDIsSentOnlyForCallsWithoutLoggingIt() async throws {
+        let client = makeClient("customer", customerID: "CUSTOMER_1")
+        _ = try await client.configuration()
+        _ = try await client.credentials(callerToken: "signed-caller-token")
+        XCTAssertFalse(client.description.contains("CUSTOMER_1"))
+    }
+
+    func testMalformedCustomerIDsAreRejectedBeforeNetworking() async {
+        for value in ["", " ", " customer ", "customer@example.test", String(repeating: "a", count: 65), "test\nother"] {
+            do { _ = try await makeClient(customerID: value).configuration(); XCTFail(value) }
+            catch { XCTAssertEqual(error as? CallError, .invalidRequest) }
+        }
+    }
+
     func testServerSecretAndMalformedKeysRejected() async {
         for invalid in ["att_sk_" + String(repeating: "a", count: 43), "", key + "\r\nX-Header: value"] {
             do { _ = try await SDKClient(apiKey: invalid, agentID: "agt_example").configuration(); XCTFail() }
@@ -24,7 +38,8 @@ final class SDKClientTests: XCTestCase {
 
     func testKeyErrorsAreTypedAndDoNotEchoBackendText() async {
         for (path, expected) in [("invalid_api_key", CallError.invalidAPIKey), ("agent_not_allowed", .agentNotAllowed),
-            ("caller_required", .callerRequired), ("invalid_caller_token", .callerSessionExpired), ("call_limit", .callLimitReached),
+            ("caller_required", .callerRequired), ("customer_mismatch", .customerMismatch),
+            ("invalid_caller_token", .callerSessionExpired), ("call_limit", .callLimitReached),
             ("sdk_unavailable", .serviceUnavailable), ("service_unavailable", .serviceUnavailable)] {
             do { _ = try await makeClient(path).credentials(callerToken: nil); XCTFail(path) }
             catch {
@@ -46,10 +61,10 @@ final class SDKClientTests: XCTestCase {
         catch { XCTAssertEqual(error as? CallError, .invalidRequest) }
     }
 
-    private func makeClient(_ path: String = "success") -> SDKClient {
+    private func makeClient(_ path: String = "success", customerID: String? = nil) -> SDKClient {
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [SDKProtocol.self]
-        return SDKClient(apiKey: key, agentID: "agt_example", session: URLSession(configuration: config),
+        return SDKClient(apiKey: key, agentID: "agt_example", customerID: customerID, session: URLSession(configuration: config),
                          baseURL: URL(string: "https://attentive.odion.ai/\(path)/")!)
     }
 }
@@ -76,9 +91,14 @@ private final class SDKProtocol: URLProtocol {
         }
         let body = try! JSONSerialization.jsonObject(with: data) as! [String: String]
         XCTAssertEqual(body["agentId"], "agt_example")
-        XCTAssertTrue(Set(body.keys).isSubset(of: ["agentId", "callerToken"]))
+        XCTAssertTrue(Set(body.keys).isSubset(of: ["agentId", "callerToken", "customerId"]))
         let path = request.url!.pathComponents[1]
+        if path == "customer" && request.url!.lastPathComponent == "calls" {
+            XCTAssertEqual(body["customerId"], "CUSTOMER_1")
+            XCTAssertEqual(body["callerToken"], "signed-caller-token")
+        } else { XCTAssertNil(body["customerId"]) }
         let errorStatuses = ["invalid_api_key": 401, "agent_not_allowed": 403, "caller_required": 403,
+                             "customer_mismatch": 403,
                              "invalid_caller_token": 401, "call_limit": 429, "sdk_unavailable": 503, "service_unavailable": 503]
         var response: [String: Any]
         if errorStatuses[path] != nil { response = ["code": path, "message": "private-backend"] }

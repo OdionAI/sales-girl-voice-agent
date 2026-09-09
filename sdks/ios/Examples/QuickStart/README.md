@@ -1,10 +1,23 @@
 # Minimal supplied-UI app
 
-`AttentiveExampleApp.swift` is the entire customer app entry point. It deliberately
-has no sample model, server URL, business slug, test profile or developer flags.
-Create an API key under Dashboard > Deploy > API & SDK and replace `YOUR_API_KEY`
-and `YOUR_AGENT_ID`. Use SDK `0.1.0-staging.3` or a compatible newer version, with
-the key API deployed and enabled. Add `NSMicrophoneUsageDescription` to your target.
+`AttentiveExampleApp.swift` is the entire sample app entry point. It has no sample
+model, server URL, business slug or built-in customer profile. Configure
+`ATTENTIVE_API_KEY` and `ATTENTIVE_AGENT_ID` in your local Run scheme using a key
+created under Dashboard > Deploy > API & SDK. For a customer-specific call, also
+set `ATTENTIVE_CUSTOMER_ID` and a fresh `ATTENTIVE_CALLER_TOKEN` from your backend.
+The ID is passed directly to `AttentiveAgentView`; there is no profile-entry menu.
+Without an ID/token the sample makes a general call, if allowed by the key.
+
+Caller tokens expire after five minutes; the environment is only a local sample
+convenience. In a real app, replace this callback with your existing authenticated
+backend client, returning a fresh token per call. Never put a server identity key
+in Xcode, the app, or a shared scheme. A raw customer ID plus a publishable key
+does not authorize access to a customer's banking records.
+
+This sample requires SDK `0.1.0-staging.4` or newer and the matching backend
+update. Add `NSMicrophoneUsageDescription` to
+your target. The account and three-dot menus are hidden; mute, transcript and end
+call remain available.
 
 Maintainers can build this source version without altering the existing binary
 sample or app installed on a phone:

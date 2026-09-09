@@ -4,6 +4,14 @@ import XCTest
 @testable import AttentiveVoiceUI
 
 final class CallerControlsTests: XCTestCase {
+    #if os(iOS)
+    func testDefaultCallerHidesAccountAndSettingsMenus() {
+        let configuration = CallerUIConfiguration()
+        XCTAssertFalse(configuration.showsAccountMenu)
+        XCTAssertFalse(configuration.showsCallOptions)
+    }
+    #endif
+
     @MainActor
     func testBankActivityReplacesStartedRowWithBackendResult() async throws {
         let transport = UITransport()

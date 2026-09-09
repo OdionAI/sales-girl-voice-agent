@@ -20,7 +20,10 @@ AttentiveAgentView(
 Add `NSMicrophoneUsageDescription` to the host app's Info.plist. The UI requires
 iOS 17+. Present it in your navigation or sheet. It loads the agent's name/title,
 owns the call lifecycle and reuses our caller controls, audio-reactive avatar,
-transcript, authentication badges and tool activity. Dismissing it ends the call
+and transcript. The account/hamburger and more-options menus are hidden by default.
+Custom `AttentiveCallerView` integrations can opt back in with
+`CallerUIConfiguration.showsAccountMenu` and `showsCallOptions`.
+Dismissing it ends the call
 and cancels startup, including a pending caller-token request.
 
 No `SampleModel`, subscriptions, endpoint, business slug, caller contact, shared
@@ -101,16 +104,32 @@ const { caller_token } = await response.json();
 Supply a fresh token per call using your app's existing authenticated API client:
 
 ```swift
-AttentiveAgentView(apiKey: "YOUR_API_KEY", agentID: "YOUR_AGENT_ID") {
+AttentiveAgentView(
+    apiKey: "YOUR_API_KEY",
+    agentID: "YOUR_AGENT_ID",
+    customerID: signedInCustomer.id
+) {
     try await yourBackend.fetchAttentiveCallerToken()
 }
-// Headless equivalent: try await call.start(callerToken: token)
+// Headless equivalent:
+let call = AttentiveCall(apiKey: "YOUR_API_KEY", agentID: "YOUR_AGENT_ID",
+                         customerID: signedInCustomer.id)
+try await call.start(callerToken: token)
 ```
 
 `yourBackend` above belongs to the customer's existing authentication flow; it is
 not an additional SDK model. Tokens last five minutes and are bound to the key,
 business and agent. They are signed, not encrypted; never log or persist them.
 Expiry controls call startup, not the duration of an already-connected call.
+
+The `customerID` overload requires SDK `0.1.0-staging.4` or newer. It is a customer
+selection, not proof of identity: calls with an ID require a signed caller token,
+even for a key that allows general anonymous calls. The backend compares the ID
+with the token's `customer_id` and rejects mismatches before billing or dispatch.
+Only the verified profile reaches tool context. A missing token produces
+`callerRequired`; a different customer produces `customerMismatch`. Neither the
+ID nor the token is logged by the SDK. Existing calls without this new parameter
+remain supported.
 
 For current Wema voiceprints, `subject` must match the already-enrolled normalized
 email/voice owner. This change does **not** add a public enrollment service, invent
@@ -137,7 +156,7 @@ production enrollment availability is a separate deployment dependency.
   billing safeguards. A publishable key alone is not bot protection.
 - Never put gateway keys, LiveKit admin secrets or dashboard credentials in apps.
 
-Typed errors include `invalidAPIKey`, `agentNotAllowed`, `callerRequired`,
+Typed errors include `invalidAPIKey`, `agentNotAllowed`, `callerRequired`, `customerMismatch`,
 `callerSessionExpired`, `callLimitReached`, `serviceUnavailable` and
 `insufficientCredits`. The supplied UI displays safe descriptions.
 

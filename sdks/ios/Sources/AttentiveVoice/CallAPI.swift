@@ -65,6 +65,7 @@ public protocol CallCredentialProvider: Sendable {
 
 public enum CallError: Error, LocalizedError, Equatable, Sendable {
     case invalidAPIKey, agentNotAllowed, callerRequired, callerSessionExpired, callLimitReached, serviceUnavailable
+    case customerMismatch
     case invalidRequest, insecureURL, invalidResponse, alreadyActive, notConnected
     case microphoneDenied, connectionFailed, agentUnavailable, messageFailed
     /// Platform call credit, not the caller's bank balance. Amounts are optional, in NGN kobo.
@@ -77,6 +78,7 @@ public enum CallError: Error, LocalizedError, Equatable, Sendable {
         case .agentNotAllowed: return "This calling key does not have access to the selected agent."
         case .callerRequired: return "Sign in to your account before starting this call."
         case .callerSessionExpired: return "Your caller session has expired. Please sign in again."
+        case .customerMismatch: return "The customer ID does not match the signed-in customer. Please sign in again."
         case .callLimitReached: return "The calling limit has been reached. Please try again later."
         case .serviceUnavailable: return "Calling is temporarily unavailable. Please try again later."
         case .invalidRequest: return "The call request is incomplete or invalid."
@@ -157,6 +159,7 @@ func callServiceData(_ http: URLRequest, session: URLSession, allowInsecure: Boo
             case (401, "invalid_api_key"): throw CallError.invalidAPIKey
             case (403, "agent_not_allowed"): throw CallError.agentNotAllowed
             case (403, "caller_required"): throw CallError.callerRequired
+            case (403, "customer_mismatch"): throw CallError.customerMismatch
             case (401, "invalid_caller_token"): throw CallError.callerSessionExpired
             case (429, "call_limit"): throw CallError.callLimitReached
             case (503, "sdk_unavailable"), (503, "service_unavailable"): throw CallError.serviceUnavailable

@@ -154,18 +154,21 @@ struct CallerContent: View {
                     .transition(.opacity.combined(with: .offset(y: -8)))
                 }
 
-                Button {
-                    withAnimation(reduceMotion ? nil : .easeOut(duration: 0.18)) { panel = panel == nil ? .bank : nil }
-                } label: {
-                    Image(systemName: panel == nil ? "line.3.horizontal" : "xmark")
-                        .font(.system(size: 18)).contentTransition(.symbolEffect(.replace))
-                        .frame(width: 44, height: 44).background(.white, in: Circle())
-                        .overlay(Circle().stroke(CallerTheme.border, lineWidth: 1))
-                        .shadow(color: CallerTheme.ink.opacity(0.08), radius: 12, x: 0, y: 6)
+                if configuration.showsAccountMenu || panel != nil {
+                    Button {
+                        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.18)) { panel = panel == nil ? .bank : nil }
+                    } label: {
+                        Image(systemName: panel == nil ? "line.3.horizontal" : "xmark")
+                            .font(.system(size: 18)).contentTransition(.symbolEffect(.replace))
+                            .frame(width: 44, height: 44).background(.white, in: Circle())
+                            .overlay(Circle().stroke(CallerTheme.border, lineWidth: 1))
+                            .shadow(color: CallerTheme.ink.opacity(0.08), radius: 12, x: 0, y: 6)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(panel == nil ? "Open \(configuration.profileTitle)" : "Close floating panel")
+                    .accessibilityIdentifier(panel == nil ? "bankMenu" : "closePanel")
+                    .padding(.top, 8).padding(.trailing, 16)
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel(panel == nil ? "Open \(configuration.profileTitle)" : "Close floating panel")
-                .accessibilityIdentifier("bankMenu").padding(.top, 8).padding(.trailing, 16)
             }
         }
         .foregroundStyle(CallerTheme.ink)
@@ -198,15 +201,17 @@ struct CallerContent: View {
             Button { togglePanel(.transcript) } label: { Image(systemName: "ellipsis.message") }
                 .buttonStyle(CallerIconStyle(selected: panel == .transcript))
                 .accessibilityLabel("Live transcript").accessibilityIdentifier("transcriptToggle")
-            Menu {
-                Button(configuration.profileTitle, systemImage: "person.crop.circle") { togglePanel(.bank) }
-                if let onSettings {
-                    Button("Call settings", systemImage: "slider.horizontal.3", action: onSettings)
-                }
-            } label: {
-                Image(systemName: "ellipsis").font(.system(size: 18)).frame(width: 44, height: 44)
-                    .background(CallerTheme.control, in: Circle())
-            }.tint(CallerTheme.ink).accessibilityLabel("More call options")
+            if configuration.showsCallOptions {
+                Menu {
+                    Button(configuration.profileTitle, systemImage: "person.crop.circle") { togglePanel(.bank) }
+                    if let onSettings {
+                        Button("Call settings", systemImage: "slider.horizontal.3", action: onSettings)
+                    }
+                } label: {
+                    Image(systemName: "ellipsis").font(.system(size: 18)).frame(width: 44, height: 44)
+                        .background(CallerTheme.control, in: Circle())
+                }.tint(CallerTheme.ink).accessibilityLabel("More call options")
+            }
             Button { Task { await controls.end() } } label: {
                 Label("END CALL", systemImage: "phone.down").font(.system(size: 12, weight: .medium))
                     .padding(.horizontal, 16).frame(minHeight: 44)

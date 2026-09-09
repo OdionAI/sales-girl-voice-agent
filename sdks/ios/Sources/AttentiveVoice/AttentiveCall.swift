@@ -42,8 +42,13 @@ public final class AttentiveCall: ObservableObject {
 
     /// Uses your dashboard calling key and agent. No endpoint or transport setup is required.
     public convenience init(apiKey: String, agentID: String) {
+        self.init(apiKey: apiKey, agentID: agentID, customerID: nil)
+    }
+
+    /// Customer selection must match the identity in a backend-issued caller token.
+    public convenience init(apiKey: String, agentID: String, customerID: String?) {
         self.init(credentialProvider: nil, allowsInsecureDevelopmentConnections: false)
-        sdkClient = SDKClient(apiKey: apiKey, agentID: agentID)
+        sdkClient = SDKClient(apiKey: apiKey, agentID: agentID, customerID: customerID)
     }
 
     /// Refresh dashboard display settings without requesting microphone access or starting a call.

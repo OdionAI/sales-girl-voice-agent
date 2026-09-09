@@ -11,14 +11,16 @@ public struct AgentConfiguration: Decodable, Equatable, Sendable {
 struct SDKClient: Sendable, CustomStringConvertible, CustomDebugStringConvertible {
     private let apiKey: String
     private let agentID: String
+    private let customerID: String?
     private let session: URLSession
     private let baseURL: URL
 
     // Tests can inject a URLSession, but customer apps do not supply service endpoints.
-    init(apiKey: String, agentID: String, session: URLSession? = nil,
+    init(apiKey: String, agentID: String, customerID: String? = nil, session: URLSession? = nil,
          baseURL: URL = URL(string: "https://attentive.odion.ai/api/sdk/v1/")!) {
         self.apiKey = apiKey
         self.agentID = agentID
+        self.customerID = customerID
         self.baseURL = baseURL
         let config = URLSessionConfiguration.ephemeral
         config.urlCache = nil
@@ -51,6 +53,10 @@ struct SDKClient: Sendable, CustomStringConvertible, CustomDebugStringConvertibl
         guard agentID.range(of: #"^agt_[a-zA-Z0-9_-]{1,80}$"#, options: .regularExpression) != nil else {
             throw CallError.invalidRequest
         }
+        if let customerID,
+           customerID.range(of: #"^[a-zA-Z0-9_-]{1,64}$"#, options: .regularExpression) != customerID.startIndex..<customerID.endIndex {
+            throw CallError.invalidRequest
+        }
     }
 
     private func post<Value: Decodable>(_ path: String, callerToken: String?) async throws -> Value {
@@ -63,6 +69,7 @@ struct SDKClient: Sendable, CustomStringConvertible, CustomDebugStringConvertibl
         http.setValue("application/json", forHTTPHeaderField: "Content-Type")
         http.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         var body = ["agentId": agentID]
+        if path == "calls", let customerID { body["customerId"] = customerID }
         if let callerToken { body["callerToken"] = callerToken }
         http.httpBody = try JSONEncoder().encode(body)
         let data = try await callServiceData(http, session: session)

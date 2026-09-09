@@ -12,6 +12,8 @@ public struct CallerUIConfiguration {
     public var emptyActivityText: String
     public var showsProfile: Bool
     public var showsToolWaitSelection: Bool
+    public var showsAccountMenu: Bool = false
+    public var showsCallOptions: Bool = false
     public var toolDisplayNames: [String: String]
     public var accentColor: Color
     public var avatar: Image?

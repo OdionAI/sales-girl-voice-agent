@@ -14,7 +14,13 @@ public struct AttentiveAgentView: View {
 
     /// For protected calls, obtain a fresh caller token from your signed-in app backend.
     public init(apiKey: String, agentID: String, callerToken: (() async throws -> String)? = nil) {
-        _call = StateObject(wrappedValue: AttentiveCall(apiKey: apiKey, agentID: agentID))
+        self.init(apiKey: apiKey, agentID: agentID, customerID: nil, callerToken: callerToken)
+    }
+
+    /// Pass the signed-in customer's ID. The backend verifies it against callerToken before using it for tools.
+    public init(apiKey: String, agentID: String, customerID: String?,
+                callerToken: (() async throws -> String)? = nil) {
+        _call = StateObject(wrappedValue: AttentiveCall(apiKey: apiKey, agentID: agentID, customerID: customerID))
         self.callerToken = callerToken
     }
 
