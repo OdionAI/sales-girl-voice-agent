@@ -5,12 +5,68 @@ import XCTest
 
 final class CallerControlsTests: XCTestCase {
     #if os(iOS)
+    @available(iOS 17, *)
     func testDefaultCallerHidesAccountAndSettingsMenus() {
         let configuration = CallerUIConfiguration()
         XCTAssertFalse(configuration.showsAccountMenu)
         XCTAssertFalse(configuration.showsCallOptions)
     }
     #endif
+
+    @MainActor
+    func testAutomaticPresentationStartsOnceAndDoesNotRedialAfterEnd() async {
+        let transport = UITransport()
+        let call = makeCall(transport)
+        let controls = CallerControls(call: call, enrollment: nil)
+        let start = { try await call.start(self.request, microphoneEnabled: false) }
+        await controls.startAutomatically(start)
+        await controls.startAutomatically(start)
+        XCTAssertEqual(transport.connections, 1)
+        await controls.end()
+        await controls.disappear(endsCall: true)
+        controls.appear()
+        await controls.startAutomatically(start)
+        XCTAssertEqual(transport.connections, 1)
+        let nextPresentation = CallerControls(call: call, enrollment: nil)
+        await nextPresentation.startAutomatically(start)
+        XCTAssertEqual(transport.connections, 2)
+        await nextPresentation.end()
+    }
+
+    @MainActor
+    func testEndBeforeAutomaticTaskRunsCannotStartACall() async {
+        let controls = CallerControls(call: makeCall(UITransport()), enrollment: nil)
+        await controls.end()
+        await controls.startAutomatically { XCTFail("A cancelled presentation cannot start") }
+    }
+
+    @MainActor
+    func testAutomaticFailureDoesNotRetryAndEndCancelsHostTokenFetch() async {
+        let transport = UITransport()
+        let call = makeCall(transport)
+        let controls = CallerControls(call: call, enrollment: nil)
+        var attempts = 0
+        let failure: () async throws -> Void = { attempts += 1; throw CallError.callerRequired }
+        await controls.startAutomatically(failure)
+        await controls.startAutomatically(failure)
+        XCTAssertEqual(attempts, 1)
+        XCTAssertNotNil(controls.errorMessage)
+        let next = CallerControls(call: call, enrollment: nil)
+        let startup = Task {
+            await next.startAutomatically {
+                attempts += 1
+                try await Task.sleep(for: .seconds(20))
+                XCTFail("End must cancel token fetching before a room is created")
+            }
+        }
+        while attempts != 2 { await Task.yield() }
+        await next.end()
+        await startup.value
+        XCTAssertFalse(next.starting)
+        XCTAssertEqual(call.state, .ended)
+        XCTAssertEqual(transport.connections, 0)
+        XCTAssertNil(next.errorMessage)
+    }
 
     @MainActor
     func testBankActivityReplacesStartedRowWithBackendResult() async throws {

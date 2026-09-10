@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 const sdk = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const version = process.argv[2];
 if (!/^\d+\.\d+\.\d+(?:-[A-Za-z0-9]+(?:[.-][A-Za-z0-9]+)*)?$/.test(version || "")) {
-  throw new Error("Supply the new SDK release version, for example: 0.1.0-staging.3");
+  throw new Error("Supply the new SDK release version, for example: 0.1.0");
 }
 const root = join(sdk, ".build", `binary-release-${version}`);
 const source = join(root, "source");
@@ -235,4 +235,24 @@ async function inventory(directory, prefix = "") {
 }
 await inventory(distribution);
 await writeFile(join(root, "SHA256SUMS"), hashes.join("\n") + "\n");
+const archiveName = `attentive-ios-sdk-${version}.zip`;
+const archivePath = join(root, archiveName);
+await rm(archivePath, { force: true });
+execFileSync("ditto", ["-c", "-k", "--norsrc", distribution, archivePath]);
+const releaseURL = `https://github.com/OdionAI/attentive-ios-sdk/releases/tag/${version}`;
+const metadata = {
+  schemaVersion: 1, version, status: version.includes("-") ? "prerelease" : "stable",
+  packageURL: "https://github.com/OdionAI/attentive-ios-sdk.git", releaseURL,
+  minimumIOS: "17.0", swiftToolsVersion: "6.1",
+  buildToolchain: {
+    xcode: commandOutput("xcodebuild", ["-version"]),
+    swift: commandOutput("xcrun", ["swift", "--version"]),
+  },
+  archive: {
+    name: archiveName,
+    url: `https://github.com/OdionAI/attentive-ios-sdk/releases/download/${version}/${archiveName}`,
+    sha256: createHash("sha256").update(await readFile(archivePath)).digest("hex"),
+  },
+};
+await writeFile(join(distribution, "release.json"), JSON.stringify(metadata, null, 2) + "\n");
 console.log(`Binary Swift package: ${distribution}`);

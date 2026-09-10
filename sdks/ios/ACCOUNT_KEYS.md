@@ -1,6 +1,8 @@
 # Key-based integration
 
-Install public SDK `0.1.0-staging.5`. The dashboard key API must also be deployed and enabled;
+Install the latest compatible stable release listed at
+https://github.com/OdionAI/attentive-ios-sdk/releases/latest and pin its exact version.
+The dashboard key API must also be deployed and enabled;
 installing the binary alone does not activate a deployment's API routes.
 
 ## Supplied caller UI
@@ -9,21 +11,39 @@ After creating an API key in Dashboard > Deploy > API & SDK:
 
 ```swift
 import AttentiveVoiceUI
+import SwiftUI
 
-AttentiveAgentView(
-    apiKey: "YOUR_API_KEY",
-    agentID: "YOUR_AGENT_ID"
-)
+struct SupportView: View {
+    @State private var showingCall = false
+
+    var body: some View {
+        Button("Start call", systemImage: "phone") { showingCall = true }
+            .fullScreenCover(isPresented: $showingCall) {
+                AttentiveAgentView(apiKey: "YOUR_API_KEY", agentID: "YOUR_AGENT_ID")
+            }
+    }
+}
 ```
 
 Add `NSMicrophoneUsageDescription` to the host app's Info.plist. The UI requires
-iOS 17+. Present it in your navigation or sheet. It loads the agent's name/title,
+iOS 17+. The host owns the entry button; presenting the caller starts one call.
+It loads the agent's name/title,
 owns the call lifecycle and reuses our caller controls, audio-reactive avatar,
 and transcript. The account/hamburger and more-options menus are hidden by default.
 Custom `AttentiveCallerView` integrations can opt back in with
 `CallerUIConfiguration.showsAccountMenu` and `showsCallOptions`.
 Dismissing it ends the call
 and cancels startup, including a pending caller-token request.
+End call dismisses a presented sheet or full-screen cover. For an embedded caller
+that should wait for a tap, pass `startsAutomatically: false` to retain the SDK's
+Start call button. Do not leave an automatically starting caller in a hidden tab.
+Custom multi-field entry forms are not provided by this release.
+
+For active calls in the background, the host must enable the Audio background
+mode (`UIBackgroundModes` containing `audio`) and test interruption/route changes
+on supported devices. Without it, iOS may suspend an unattended call. A new call
+explicitly enables input; foregrounding/reconnecting never overrides a user's
+mute. `microphoneEnabled` and `.microphoneChanged` also reflect iOS input mute.
 
 No `SampleModel`, subscriptions, endpoint, business slug, caller contact, shared
 test customer ID, room creation or transport setup is required for general calls.
@@ -163,7 +183,9 @@ Typed errors include `invalidAPIKey`, `agentNotAllowed`, `callerRequired`, `cust
 
 Use this only after API deployment and a compatible binary release:
 
-1. Install the account owner's specified exact version of `attentive-ios-sdk`.
+1. Resolve the latest stable GitHub release and its `release.json`, check the
+   documented toolchain/OS compatibility, and pin that exact tag. Honor an
+   account owner's explicit version pin; do not silently upgrade an existing app.
 2. For supplied UI, link `AttentiveVoiceUI`, add microphone usage text and present
    `AttentiveAgentView(apiKey:agentID:)`. Do not create a `SampleModel`.
 3. For custom UI, link only `AttentiveVoice`, retain `AttentiveCall(apiKey:agentID:)`,

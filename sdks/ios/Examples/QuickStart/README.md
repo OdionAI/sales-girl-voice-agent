@@ -14,10 +14,15 @@ backend client, returning a fresh token per call. Never put a server identity ke
 in Xcode, the app, or a shared scheme. A raw customer ID plus a publishable key
 does not authorize access to a customer's banking records.
 
-Install public SDK `0.1.0-staging.5` and the matching backend
-update. Add `NSMicrophoneUsageDescription` to
+Resolve the latest compatible stable SDK release, then pin its exact tag. Add `NSMicrophoneUsageDescription` to
 your target. The account and three-dot menus are hidden; mute, transcript and end
 call remain available.
+
+The Start call button belongs to this app. It presents `AttentiveAgentView` in a
+full-screen cover, which starts once and dismisses after End call. Pass
+`startsAutomatically: false` only when you want the SDK's built-in start button.
+The generated demo enables the Audio background mode for an active call; your
+app should enable and test that mode only if it needs background calling.
 
 Maintainers can build this source version without altering the existing binary
 sample or app installed on a phone:
@@ -32,7 +37,7 @@ to the same script. The generated app and test credentials are never distributed
 Open the generated `sdks/ios/.build/quickstart/AttentiveQuickStart.xcodeproj` and
 run scheme `AttentiveQuickStart` on a simulator. This uses a local source package,
 has a distinct bundle ID, and intentionally ships no real calling key. Until
-configured it shows the invalid-key message; that is not a live-call test.
+configured, tapping Start call shows an invalid-key message; that is not a live-call test.
 
 See [the integration guide](../../ACCOUNT_KEYS.md) for headless use and authenticated
 callers. Neither this README nor the example source is part of the binary bundle.

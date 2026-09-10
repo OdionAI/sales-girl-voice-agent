@@ -11,6 +11,7 @@
     <key>UILaunchScreen</key><dict/>
     <key>UIApplicationSceneManifest</key><dict><key>UIApplicationSupportsMultipleScenes</key><false/></dict>
     <key>NSMicrophoneUsageDescription</key><string>Attentive uses your microphone for conversations and the agent's voice verification.</string>
+    <key>UIBackgroundModes</key><array><string>audio</string></array>
     <key>NSLocalNetworkUsageDescription</key><string>Connect to your local Attentive call service during development.</string>
     <key>NSAppTransportSecurity</key><dict><key>NSAllowsLocalNetworking</key><true/></dict>
     <key>UISupportedInterfaceOrientations</key><array><string>UIInterfaceOrientationPortrait</string><string>UIInterfaceOrientationLandscapeLeft</string><string>UIInterfaceOrientationLandscapeRight</string></array>

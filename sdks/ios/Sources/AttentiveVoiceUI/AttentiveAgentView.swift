@@ -10,7 +10,9 @@ public struct AttentiveAgentView: View {
     @State private var request = CallRequest(businessSlug: "", agentPublicId: "", endUserContact: "")
     @State private var error: String?
     @State private var loading = false
+    @Environment(\.dismiss) private var dismiss
     private let callerToken: (() async throws -> String)?
+    private let startsAutomatically: Bool
 
     /// For protected calls, obtain a fresh caller token from your signed-in app backend.
     public init(apiKey: String, agentID: String, callerToken: (() async throws -> String)? = nil) {
@@ -20,8 +22,16 @@ public struct AttentiveAgentView: View {
     /// Pass the signed-in customer's ID. The backend verifies it against callerToken before using it for tools.
     public init(apiKey: String, agentID: String, customerID: String?,
                 callerToken: (() async throws -> String)? = nil) {
+        self.init(apiKey: apiKey, agentID: agentID, customerID: customerID,
+                  startsAutomatically: true, callerToken: callerToken)
+    }
+
+    /// Present from a host-owned button. Set false to retain the built-in Start call button.
+    public init(apiKey: String, agentID: String, customerID: String? = nil,
+                startsAutomatically: Bool, callerToken: (() async throws -> String)? = nil) {
         _call = StateObject(wrappedValue: AttentiveCall(apiKey: apiKey, agentID: agentID, customerID: customerID))
         self.callerToken = callerToken
+        self.startsAutomatically = startsAutomatically
     }
 
     public var body: some View {
@@ -31,6 +41,7 @@ public struct AttentiveAgentView: View {
                     configuration: .init(title: metadata.title, agentName: metadata.agentName,
                                          showsToolWaitSelection: false),
                     enrollment: nil, microphoneOnStart: true, onSettings: nil,
+                    startsAutomatically: startsAutomatically, onCallEnded: { dismiss() },
                     startCall: {
                         if metadata.callerRequired && callerToken == nil { throw CallError.callerRequired }
                         let token = try await callerToken?()
@@ -48,6 +59,11 @@ public struct AttentiveAgentView: View {
                 }
                 .padding(24).frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(CallerTheme.stage).foregroundStyle(CallerTheme.ink)
+                .overlay(alignment: .topTrailing) {
+                    Button("Close", systemImage: "xmark") { dismiss() }
+                        .labelStyle(.iconOnly).frame(width: 44, height: 44).padding(16)
+                        .accessibilityIdentifier("cancelCall")
+                }
             }
         }
         .task { if call.configuration == nil { await load() } }

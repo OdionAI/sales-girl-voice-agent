@@ -10,10 +10,16 @@ final class RealtimeCallTransport: NSObject, CallTransport {
     private var sawAgent = false
     private var audioProbe: AgentAudioProbe?
     private var observedAudioTracks: [RemoteAudioTrack] = []
+    private let microphone = ApplicationMicrophone()
+    var microphoneEnabled: Bool? { microphone.enabled }
 
     override init() {
         super.init()
         room.add(delegate: self)
+        microphone.onChange = { [weak self] enabled in
+            guard let self, !self.closing else { return }
+            self.onEvent?(.microphoneChanged(enabled))
+        }
         audioProbe = AgentAudioProbe(firstAudio: { [weak self] in
             Task { @MainActor in
                 guard let self, !self.closing else { return }
@@ -38,6 +44,7 @@ final class RealtimeCallTransport: NSObject, CallTransport {
 
     func disconnect() async {
         closing = true
+        microphone.stop()
         if let probe = audioProbe {
             for track in observedAudioTracks { track.remove(audioRenderer: probe) }
         }
@@ -47,8 +54,16 @@ final class RealtimeCallTransport: NSObject, CallTransport {
     }
 
     func setMicrophone(enabled: Bool) async throws {
+        try Task.checkCancellation()
+        guard !closing else { throw CancellationError() }
+        if enabled { try microphone.prepareToEnable() }
         try await room.localParticipant.setMicrophone(enabled: enabled,
             captureOptions: AudioCaptureOptions(echoCancellation: true, autoGainControl: true, noiseSuppression: true))
+        try Task.checkCancellation()
+        guard !closing else { throw CancellationError() }
+        // Publishing can reuse an audio engine whose input was muted by the previous room.
+        if enabled { try microphone.prepareToEnable() }
+        microphone.updateTrack(enabled: enabled)
     }
 
     func sendText(_ text: String) async throws -> String {
@@ -87,6 +102,7 @@ extension RealtimeCallTransport: RoomDelegate {
     nonisolated func room(_ room: Room, didCompleteReconnectWithMode mode: ReconnectMode) {
         Task { @MainActor [weak self] in
             guard let self, !self.closing else { return }
+            self.microphone.refresh()
             self.onEvent?(.stateChanged(.connected))
         }
     }
