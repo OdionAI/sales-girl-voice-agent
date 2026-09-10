@@ -6,6 +6,9 @@ final class ApplicationMicrophoneTests: XCTestCase {
     #if os(iOS)
     @MainActor
     func testNativeInputMuteIsClearedOnlyByExplicitEnable() throws {
+        #if targetEnvironment(simulator)
+        throw XCTSkip("AVAudioApplication input mute is not implemented by iOS Simulator; verify on a physical device.")
+        #else
         guard #available(iOS 17, *) else { return }
         let original = AVAudioApplication.shared.isInputMuted
         defer { try? AVAudioApplication.shared.setInputMuted(original) }
@@ -18,6 +21,7 @@ final class ApplicationMicrophoneTests: XCTestCase {
         XCTAssertTrue(microphone.enabled)
         XCTAssertFalse(AVAudioApplication.shared.isInputMuted)
         microphone.stop()
+        #endif
     }
     #endif
 

@@ -25,7 +25,9 @@ final class ApplicationMicrophone {
             return false
         }, unmuteInput: {
             #if os(iOS)
-            if #available(iOS 17, *) { try AVAudioApplication.shared.setInputMuted(false) }
+            if #available(iOS 17, *), AVAudioApplication.shared.isInputMuted {
+                try AVAudioApplication.shared.setInputMuted(false)
+            }
             #endif
         })
         #if os(iOS)
