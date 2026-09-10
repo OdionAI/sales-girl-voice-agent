@@ -21,6 +21,9 @@ metrics port or browser credentials are required.
 
 Missing clocks remain null. Opening greetings are excluded from caller-turn
 averages. Cancelled/incomplete streams do not produce completion/RTF samples.
+Turn closure, interruption and tool-response events explain absent samples in
+the dashboard. LLM TTFT measures the first text delta: a tool-only response does
+not provide this sample, even when a fixed application phrase is synthesized.
 Trace payloads are allowlisted; prompts, tool arguments/results and credentials
 are never forwarded. Queues and correlation state are bounded; slow or failed
 metric delivery cannot block audio. Closing a call removes its trace listener

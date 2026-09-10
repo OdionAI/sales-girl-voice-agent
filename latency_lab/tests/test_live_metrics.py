@@ -4,6 +4,7 @@ import asyncio
 import json
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -18,6 +19,22 @@ def event(name, ms, turn="turn-0001", attempt="a", **data):
 
 
 class MapperTests(unittest.TestCase):
+    def test_missing_measurement_reasons_are_allowlisted(self):
+        mapper = MetricMapper()
+        for name, mapped in [("generation_cancel", "generation_cancelled"),
+                             ("turn_close", "turn_closed"),
+                             ("tool_call_prepared", "llm_tool_response")]:
+            item = event(name, 500, arguments={"secret": "never publish"},
+                         tool_name="private_connector", reason_summary="private")
+            item = replace(item, reason="user_barge_in")
+            payload = mapper.map(item)
+            self.assertEqual(payload["event"], mapped)
+            self.assertNotIn("private", json.dumps(payload))
+            self.assertNotIn("llm_ttft_ms", payload)
+            if name != "tool_call_prepared":
+                self.assertEqual(payload["reason"], "user_barge_in")
+        self.assertIsNone(mapper.map(event("turn_close", 600, turn="opening-0000")))
+
     def test_measured_clocks_and_caller_contract(self):
         mapper = MetricMapper()
         mapper.map(event("user_speech_end", 100))
