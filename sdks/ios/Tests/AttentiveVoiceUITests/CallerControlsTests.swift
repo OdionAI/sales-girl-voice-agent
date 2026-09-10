@@ -5,6 +5,7 @@ import XCTest
 
 final class CallerControlsTests: XCTestCase {
     #if os(iOS)
+    @available(iOS 17, *)
     func testDefaultCallerHidesAccountAndSettingsMenus() {
         let configuration = CallerUIConfiguration()
         XCTAssertFalse(configuration.showsAccountMenu)
