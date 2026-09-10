@@ -61,6 +61,47 @@ final class CallTests: XCTestCase {
     }
 
     @MainActor
+    func testActualMicrophoneStateAndExternalMuteReachHeadlessAndUIObservers() async throws {
+        let transport = MockTransport()
+        transport.microphoneEnabled = false
+        let call = makeCall(transport)
+        var events: [CallEvent] = []
+        call.onEvent = { events.append($0) }
+        try await call.start(request)
+        XCTAssertFalse(call.microphoneEnabled)
+        transport.microphoneEnabled = true
+        try await call.setMicrophone(enabled: true)
+        XCTAssertTrue(call.microphoneEnabled)
+        transport.onEvent?(.microphoneChanged(false))
+        XCTAssertFalse(call.microphoneEnabled)
+        XCTAssertEqual(events.last, .microphoneChanged(false))
+        let stale = transport.onEvent
+        await call.end()
+        stale?(.microphoneChanged(true))
+        XCTAssertFalse(call.microphoneEnabled)
+    }
+
+    @MainActor
+    func testFailedCallDuringMuteDoesNotLockMicrophoneOnNextCall() async throws {
+        let transport = MockTransport()
+        let call = makeCall(transport)
+        try await call.start(request)
+        var resume: CheckedContinuation<Void, Never>?
+        transport.changeMicrophone = { await withCheckedContinuation { resume = $0 } }
+        let pending = Task { try await call.setMicrophone(enabled: false) }
+        while resume == nil { await Task.yield() }
+        transport.onEvent?(.stateChanged(.failed))
+        while call.state != .failed { await Task.yield() }
+        resume?.resume()
+        _ = try? await pending.value
+        transport.changeMicrophone = nil
+        try await call.start(request)
+        try await call.setMicrophone(enabled: false)
+        XCTAssertFalse(call.microphoneEnabled)
+        await call.end()
+    }
+
+    @MainActor
     func testTranscriptRevisionsDoNotDuplicateAndFinalDoesNotRegress() async throws {
         let transport = MockTransport()
         let call = makeCall(transport)
@@ -162,11 +203,13 @@ private struct StubProvider: CallCredentialProvider {
 @MainActor
 private final class MockTransport: CallTransport {
     var onEvent: ((CallEvent) -> Void)?
+    var microphoneEnabled: Bool?
+    var changeMicrophone: (() async -> Void)?
     var disconnected = false
     var connections = 0
     var messages: [String] = []
     func connect(_ credentials: CallCredentials, microphoneEnabled: Bool) async throws { connections += 1 }
     func disconnect() async { disconnected = true }
-    func setMicrophone(enabled: Bool) async throws {}
+    func setMicrophone(enabled: Bool) async throws { await changeMicrophone?() }
     func sendText(_ text: String) async throws -> String { messages.append(text); return UUID().uuidString }
 }

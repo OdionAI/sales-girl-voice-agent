@@ -8,7 +8,16 @@ const names = ["AttentiveVoice", "AttentiveVoiceUI", "AttentiveMedia", "Attentiv
 const output = (command, args) => execFileSync(command, args, { encoding: "utf8" });
 const plist = (path) => JSON.parse(output("plutil", ["-convert", "json", "-o", "-", path]));
 assert.deepEqual((await readdir(root)).filter((name) => name !== ".git").sort(),
-  [".gitattributes", "Frameworks", "Package.swift", "ThirdPartyNotices"]);
+  [".gitattributes", "Frameworks", "Package.swift", "ThirdPartyNotices", "release.json"]);
+const release = JSON.parse(await readFile(join(root, "release.json"), "utf8"));
+assert.equal(release.schemaVersion, 1);
+assert.match(release.version, /^\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?$/);
+assert.equal(release.status, release.version.includes("-") ? "prerelease" : "stable");
+assert.equal(release.packageURL, "https://github.com/OdionAI/attentive-ios-sdk.git");
+assert.equal(release.releaseURL, `https://github.com/OdionAI/attentive-ios-sdk/releases/tag/${release.version}`);
+assert.equal(release.archive.name, `attentive-ios-sdk-${release.version}.zip`);
+assert.equal(release.archive.url, `https://github.com/OdionAI/attentive-ios-sdk/releases/download/${release.version}/${release.archive.name}`);
+assert.match(release.archive.sha256, /^[a-f0-9]{64}$/);
 assert.deepEqual((await readdir(join(root, "Frameworks"))).sort(), names.map((name) => `${name}.xcframework`).sort());
 for (const entry of await readdir(root, { recursive: true })) {
   assert(!/\.md$/i.test(entry), `Documentation shipped: ${entry}`);

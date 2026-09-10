@@ -49,6 +49,8 @@ struct CallerContent: View {
     let microphoneOnStart: Bool
     let onSettings: (() -> Void)?
     let startCall: (() async throws -> Void)?
+    let startsAutomatically: Bool
+    let onCallEnded: (() -> Void)?
     @State private var panel: Panel?
     @State private var draft = ""
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -58,6 +60,7 @@ struct CallerContent: View {
 
     init(call: AttentiveCall, request: Binding<CallRequest>, configuration: CallerUIConfiguration,
          enrollment: VoiceEnrollment?, microphoneOnStart: Bool, onSettings: (() -> Void)?,
+         startsAutomatically: Bool = false, onCallEnded: (() -> Void)? = nil,
          startCall: (() async throws -> Void)? = nil) {
         self.call = call
         _request = request
@@ -65,12 +68,14 @@ struct CallerContent: View {
         self.microphoneOnStart = microphoneOnStart
         self.onSettings = onSettings
         self.startCall = startCall
+        self.startsAutomatically = startsAutomatically
+        self.onCallEnded = onCallEnded
         _controls = StateObject(wrappedValue: CallerControls(call: call, enrollment: enrollment))
     }
 
     private var status: String {
         switch call.state {
-        case .idle: return "Ready to call"
+        case .idle: return startsAutomatically || controls.starting ? "Calling..." : "Ready to call"
         case .connecting: return "Calling..."
         case .reconnecting: return "Reconnecting..."
         case .ending: return "Ending call..."
@@ -92,7 +97,7 @@ struct CallerContent: View {
                 CallerTheme.stage.ignoresSafeArea()
                 VStack {
                     Spacer(minLength: 12)
-                    if controls.active {
+                    if controls.active || startsAutomatically {
                         VStack(spacing: 22) {
                             CallerAvatar(speaking: call.agentState == .speaking,
                                          image: configuration.avatar ?? Image("CallerAvatar", bundle: .module),
@@ -173,11 +178,17 @@ struct CallerContent: View {
         }
         .foregroundStyle(CallerTheme.ink)
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            if controls.active { callDock.padding(.top, 12).padding(.bottom, 20) }
+            if controls.active || startsAutomatically { callDock.padding(.top, 12).padding(.bottom, 20) }
         }
         .background(CallerTheme.stage)
         .tint(configuration.accentColor)
         .onAppear { controls.appear() }
+        .task {
+            if startsAutomatically, let startCall { await controls.startAutomatically(startCall) }
+        }
+        .onChange(of: call.state) { _, state in
+            if startsAutomatically, state == .ended { onCallEnded?() }
+        }
         .onChange(of: scenePhase) { _, phase in
             if phase == .background { controls.enrollment?.cancel() }
         }
@@ -185,7 +196,10 @@ struct CallerContent: View {
         .alert(controls.errorTitle, isPresented: Binding(
             get: { controls.errorMessage != nil }, set: { if !$0 { controls.errorMessage = nil } }
         )) {
-            Button("OK", role: .cancel) { controls.errorMessage = nil }
+            Button("OK", role: .cancel) {
+                controls.errorMessage = nil
+                if startsAutomatically { Task { await controls.end() } }
+            }
         } message: { Text(controls.errorMessage ?? "") }
     }
 

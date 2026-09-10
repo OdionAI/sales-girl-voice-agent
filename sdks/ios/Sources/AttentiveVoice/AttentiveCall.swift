@@ -5,10 +5,15 @@ import Foundation
 @MainActor
 protocol CallTransport: AnyObject {
     var onEvent: ((CallEvent) -> Void)? { get set }
+    var microphoneEnabled: Bool? { get }
     func connect(_ credentials: CallCredentials, microphoneEnabled: Bool) async throws
     func disconnect() async
     func setMicrophone(enabled: Bool) async throws
     func sendText(_ text: String) async throws -> String
+}
+
+extension CallTransport {
+    var microphoneEnabled: Bool? { nil }
 }
 
 /// One active call per instance. Retain it while the call is active, then call end().
@@ -116,6 +121,7 @@ public final class AttentiveCall: ObservableObject {
         transcripts = []
         toolActivity = []
         lastError = nil
+        changingMicrophone = false
         sessionAuthentication = .pending
         actionAuthentication = .pending
         agentState = .waiting
@@ -140,9 +146,9 @@ public final class AttentiveCall: ObservableObject {
                 try await connection.connect(credentials, microphoneEnabled: microphoneEnabled)
                 try Task.checkCancellation()
                 guard attempt == id else { throw CancellationError() }
-                self.microphoneEnabled = microphoneEnabled
+                self.microphoneEnabled = connection.microphoneEnabled ?? microphoneEnabled
                 setState(.connected)
-                onEvent?(.microphoneChanged(microphoneEnabled))
+                onEvent?(.microphoneChanged(self.microphoneEnabled))
                 watchForAgent(id: id)
             } catch {
                 connection.onEvent = nil
@@ -196,8 +202,8 @@ public final class AttentiveCall: ObservableObject {
         do { try await connection.setMicrophone(enabled: enabled) }
         catch { throw CallError.connectionFailed }
         guard attempt == id else { throw CallError.notConnected }
-        microphoneEnabled = enabled
-        onEvent?(.microphoneChanged(enabled))
+        microphoneEnabled = connection.microphoneEnabled ?? enabled
+        onEvent?(.microphoneChanged(microphoneEnabled))
     }
 
     public func sendText(_ text: String) async throws {
@@ -248,12 +254,15 @@ public final class AttentiveCall: ObservableObject {
         sessionAuthentication = .pending
         actionAuthentication = .pending
         lastError = error
+        changingMicrophone = false
         setState(.failed)
         onEvent?(.failure(error))
     }
 
     private func receive(_ event: CallEvent) {
         switch event {
+        case .microphoneChanged(let enabled):
+            microphoneEnabled = enabled
         case .stateChanged(let value):
             if value == .failed {
                 let id = attempt

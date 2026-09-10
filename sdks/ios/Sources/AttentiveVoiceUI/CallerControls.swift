@@ -16,6 +16,7 @@ final class CallerControls: ObservableObject {
     private var subscriptions: Set<AnyCancellable> = []
     private var visible = true
     private var startTask: Task<Void, Error>?
+    private var attemptedAutomaticStart = false
 
     init(call: AttentiveCall, enrollment: VoiceEnrollment?) {
         self.call = call
@@ -38,6 +39,12 @@ final class CallerControls: ObservableObject {
 
     var active: Bool { [.connecting, .connected, .reconnecting, .ending].contains(call.state) }
 
+    func startAutomatically(_ operation: @escaping () async throws -> Void) async {
+        guard !attemptedAutomaticStart, visible else { return }
+        attemptedAutomaticStart = true
+        await start(operation)
+    }
+
     func start(_ request: CallRequest, microphoneEnabled: Bool) async {
         await start { try await self.call.start(request, microphoneEnabled: microphoneEnabled) }
     }
@@ -55,7 +62,10 @@ final class CallerControls: ObservableObject {
         catch { presentError(error) }
     }
 
-    func end() async { await call.end() }
+    func end() async {
+        startTask?.cancel()
+        await call.end()
+    }
 
     func toggleMicrophone() async {
         do { try await call.setMicrophone(enabled: !call.microphoneEnabled) }
