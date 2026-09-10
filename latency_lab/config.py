@@ -86,6 +86,8 @@ class LabConfig:
     conversation_service_token: str = _token(
         "CONVERSATION_SERVICE_TOKEN", "AGENT_CONFIG_SERVICE_TOKEN"
     )
+    billing_service_base_url: str = _url("BILLING_SERVICE_BASE_URL", "BILLING_API_BASE_URL")
+    billing_service_token: str = _token("BILLING_SERVICE_TOKEN", "CONVERSATION_SERVICE_TOKEN")
     action_tool_timeout_seconds: float = _float("RVC_LAB_ACTION_TOOL_TIMEOUT_SECONDS", 12.0)
     stt_ws_url: str = os.getenv(
         "RVC_LAB_STT_WS_URL", "ws://102.88.137.124:8080/asr-rt/v1/realtime"
@@ -283,4 +285,6 @@ def lab_config_from_environ() -> LabConfig:
         conversation_service_token=_token(
             "CONVERSATION_SERVICE_TOKEN", "AGENT_CONFIG_SERVICE_TOKEN"
         ),
+        billing_service_base_url=_url("BILLING_SERVICE_BASE_URL", "BILLING_API_BASE_URL"),
+        billing_service_token=_token("BILLING_SERVICE_TOKEN", "CONVERSATION_SERVICE_TOKEN"),
     )

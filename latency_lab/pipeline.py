@@ -37,6 +37,7 @@ from .trace import TraceRecorder
 from .banking_tools import BankingTools, BANK_TOOLS
 from .memory import ConversationMemory, CONVERSATION_RULES
 from .conversation_persist import ConversationStore, caller_from_identity
+from .usage import UsageCollector, UsageReporter
 
 
 class Outbound(Protocol):
@@ -149,7 +150,11 @@ class ConversationPipeline:
             config, self.http, self.agent_context, self.trace,
             caller=caller_from_identity(session_identity, room_name),
             client_session_id=trace.session_id, room_name=room_name, transport=transport,
+            channel=("web" if room_name.startswith("rvc-livekit-") or transport == "browser" else None),
         )
+        self.usage = UsageCollector()
+        self.llm.usage = self.tts.usage = self.stt.usage = self.usage
+        self.usage_reporter = UsageReporter(config, self.http, self.conversations, self.usage, trace)
         self.pending_action: PendingAction | None = None
         self.transport = transport
         self.state = "idle"
@@ -201,6 +206,7 @@ class ConversationPipeline:
 
     async def start(self) -> None:
         self.conversations.spawn(self.conversations.start())
+        self.usage_reporter.start()
         if self.config.memory_compaction_enabled and not self._memory_loop_task:
             self._memory_loop_task = asyncio.create_task(self._memory_loop())
         self.trace.record(
@@ -1678,5 +1684,6 @@ class ConversationPipeline:
         await self._cancel_attempt("session_disconnect")
         await self.stt.close()
         await self.conversations.close()
+        await self.usage_reporter.close()
         await self.http.close()
         self.trace.record("session_close", reason=f"{self.transport}_transport_disconnected")

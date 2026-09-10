@@ -103,6 +103,7 @@ class RSTTClient:
         self._batch_tasks: set[asyncio.Task[None]] = set()
         self._realtime_skip_reported = False
         self._closing = False
+        self.usage = None
 
     @property
     def ready(self) -> bool:
@@ -237,6 +238,8 @@ class RSTTClient:
                     "audio": base64.b64encode(pcm16).decode("ascii"),
                 }
             )
+            if self.usage is not None:
+                self.usage.stt_submitted(len(pcm16))
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -408,6 +411,8 @@ class RSTTClient:
                 self.config.stt_batch_url, data=form, timeout=timeout
             ) as response:
                 response.raise_for_status()
+                if self.usage is not None:
+                    self.usage.stt_submitted(len(pcm16))
                 payload = await response.json()
             final = clean_transcript(str(payload.get("text") or ""))
             elapsed_ms = (time.monotonic() - started) * 1000
@@ -585,6 +590,7 @@ class RLLMClient:
     def __init__(self, config: LabConfig, session: aiohttp.ClientSession) -> None:
         self.config = config
         self.session = session
+        self.usage = None
 
     async def stream(
         self,
@@ -598,6 +604,7 @@ class RLLMClient:
             "model": self.config.llm_model,
             "messages": messages,
             "stream": True,
+            "stream_options": {"include_usage": True},
             "temperature": temperature,
             "max_tokens": max_tokens,
             "chat_template_kwargs": {
@@ -613,6 +620,7 @@ class RLLMClient:
         emitted_output = False
         for request_index in range(len(self._retry_delays_seconds) + 1):
             pending_calls = {}
+            usage_request = self.usage.llm_started() if self.usage is not None else None
             try:
                 async with self.session.post(
                     f"{self.config.llm_base_url}/chat/completions",
@@ -644,6 +652,10 @@ class RLLMClient:
                                 break
                             try:
                                 item = json.loads(data)
+                                if self.usage is not None and item.get("usage") is not None:
+                                    self.usage.llm_usage(usage_request, item["usage"])
+                                if not item.get("choices"):
+                                    continue
                                 choice_delta = item["choices"][0].get("delta", {})
                                 delta = choice_delta.get("content") or ""
                                 for fragment in choice_delta.get("tool_calls") or []:
@@ -695,6 +707,7 @@ class RTTSClient:
     def __init__(self, config: LabConfig, session: aiohttp.ClientSession) -> None:
         self.config = config
         self.session = session
+        self.usage = None
         self._ref_audio: str | None = None
         if config.tts_ref_audio:
             raw = Path(config.tts_ref_audio).expanduser().read_bytes()
@@ -731,6 +744,8 @@ class RTTSClient:
             )
         response = await self.session.post(self.config.tts_url, json=payload)
         response.raise_for_status()
+        if self.usage is not None:
+            self.usage.tts_accepted(text)
         sample_rate = int(response.headers.get("x-sample-rate") or 24000)
 
         async def chunks() -> AsyncIterator[bytes]:
