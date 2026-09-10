@@ -36,6 +36,7 @@ from .providers import RLLMClient, RSTTClient, RTTSClient, tts_token_budget
 from .trace import TraceRecorder
 from .banking_tools import BankingTools, BANK_TOOLS
 from .memory import ConversationMemory, CONVERSATION_RULES
+from .conversation_persist import ConversationStore, caller_from_identity
 
 
 class Outbound(Protocol):
@@ -143,6 +144,12 @@ class ConversationPipeline:
         self.action_executor = ActionToolExecutor(
             config, self.http, self.agent_context, self.trace
         )
+        room_name = str((session_identity or {}).get("room_name") or "")
+        self.conversations = ConversationStore(
+            config, self.http, self.agent_context, self.trace,
+            caller=caller_from_identity(session_identity, room_name),
+            client_session_id=trace.session_id, room_name=room_name, transport=transport,
+        )
         self.pending_action: PendingAction | None = None
         self.transport = transport
         self.state = "idle"
@@ -193,6 +200,7 @@ class ConversationPipeline:
             self._maybe_compact()
 
     async def start(self) -> None:
+        self.conversations.spawn(self.conversations.start())
         if self.config.memory_compaction_enabled and not self._memory_loop_task:
             self._memory_loop_task = asyncio.create_task(self._memory_loop())
         self.trace.record(
@@ -298,6 +306,7 @@ class ConversationPipeline:
         self._transition("generating", "proactive_opening_greeting")
         try:
             await self._speak_text(attempt, greeting, phase="opening_greeting")
+            self.conversations.spawn(self.conversations.add_assistant(greeting, turn_id=opening_turn_id))
             attempt.audio_complete = True
             await self.send(
                 {"type": "final_assistant_answer", "content": attempt.answer.strip()}
@@ -719,6 +728,7 @@ class ConversationPipeline:
             self.final_timeout_task = None
         self.final_text = text
         self.memory.user(self.turn_id, text)
+        self.conversations.spawn(self.conversations.add_user(text, turn_id=self.turn_id))
         self.trace.record(
             "stt_final",
             turn_id=self.turn_id,
@@ -1517,6 +1527,7 @@ class ConversationPipeline:
         turn_id = attempt.turn_id or self.turn_id
         self.memory.user(turn_id, self.final_text or attempt.hypothesis)
         self.memory.answer(turn_id, attempt.answer.strip())
+        self.conversations.spawn(self.conversations.add_assistant(attempt.answer.strip(), turn_id=turn_id))
         await self.send({"type": "final_assistant_answer", "content": attempt.answer.strip()})
 
     async def _send_audio(self, sample_rate: int, chunk: bytes, attempt: Attempt) -> None:
@@ -1580,6 +1591,10 @@ class ConversationPipeline:
             discarded_bytes=sum(len(chunk) for _, chunk in attempt.held_audio),
             **data,
         )
+        if attempt.audio_sent and attempt.answer and not attempt.response_committed:
+            self.conversations.spawn(self.conversations.add_assistant(
+                attempt.answer.strip(), turn_id=attempt.turn_id or self.turn_id, interrupted=True,
+            ))
         if not attempt.turn_id or not attempt.turn_id.startswith("opening-"):
             turn_id = attempt.turn_id or self.turn_id
             if released and attempt.audio_sent and attempt.answer and not attempt.response_committed:
@@ -1644,6 +1659,7 @@ class ConversationPipeline:
             self.trace.record("history_cleared", reason="browser_request")
 
     async def close(self) -> None:
+        self.conversations.mark_disconnected()
         tasks = [task for task in (self._memory_loop_task, self._compaction_task) if task]
         for task in tasks:
             task.cancel()
@@ -1661,5 +1677,6 @@ class ConversationPipeline:
             self.attempt.authorized = False
         await self._cancel_attempt("session_disconnect")
         await self.stt.close()
+        await self.conversations.close()
         await self.http.close()
         self.trace.record("session_close", reason=f"{self.transport}_transport_disconnected")
