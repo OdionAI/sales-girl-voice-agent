@@ -1351,6 +1351,10 @@ class ConversationPipeline:
         )
         first_token = True
         try:
+            self.trace.record(
+                "llm_request_start", turn_id=attempt.turn_id, attempt_id=attempt.id,
+                phase=phase,
+            )
             async for event in self.llm.stream(messages, tools=tools):
                 if attempt.cancelled:
                     raise asyncio.CancelledError
@@ -1362,7 +1366,7 @@ class ConversationPipeline:
                     first_token = False
                     self.trace.record(
                         "llm_first_token",
-                        turn_id=self.turn_id,
+                        turn_id=attempt.turn_id,
                         attempt_id=attempt.id,
                         reason="first_stream_delta",
                         phase=phase,
@@ -1436,7 +1440,7 @@ class ConversationPipeline:
             phrase_index += 1
             self.trace.record(
                 "tts_request_start",
-                turn_id=self.turn_id,
+                turn_id=attempt.turn_id,
                 attempt_id=attempt.id,
                 reason=(
                     "dynamic_knowledge_acknowledgement_dispatched"
@@ -1454,14 +1458,21 @@ class ConversationPipeline:
             )
             sample_rate, chunks = await self.tts.stream(phrase)
             first = True
+            audio_bytes = 0
+            chunk_count = 0
+            first_audio_ns = None
             async for chunk in chunks:
                 if attempt.cancelled:
                     return
+                if not chunk:
+                    continue
+                audio_bytes += len(chunk)
+                chunk_count += 1
                 if first:
                     first = False
-                    self.trace.record(
+                    first_audio = self.trace.record(
                         "tts_first_audio_chunk",
-                        turn_id=self.turn_id,
+                        turn_id=attempt.turn_id,
                         attempt_id=attempt.id,
                         reason="first_nonempty_provider_chunk",
                         phrase_index=phrase_index,
@@ -1471,10 +1482,17 @@ class ConversationPipeline:
                         held=not attempt.authorized,
                         phase=phase,
                     )
+                    first_audio_ns = first_audio.mono_ns
                 if attempt.authorized:
                     await self._send_audio(sample_rate, chunk, attempt)
                 else:
                     attempt.held_audio.append((sample_rate, chunk))
+            self.trace.record(
+                "tts_request_complete", turn_id=attempt.turn_id, attempt_id=attempt.id,
+                phase=phase, phrase_index=phrase_index, bytes=audio_bytes,
+                chunks=chunk_count, audio_seconds=audio_bytes / (sample_rate * 2),
+                first_audio_ns=first_audio_ns,
+            )
 
     async def _release_held(self, attempt: Attempt) -> None:
         self.trace.record(
