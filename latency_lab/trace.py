@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 import uuid
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from collections.abc import Callable
 
 
 @dataclass(frozen=True)
@@ -32,6 +34,11 @@ class TraceRecorder:
         directory.mkdir(parents=True, exist_ok=True)
         self.path = directory / f"{self.session_id}.jsonl"
         self._seq = 0
+        self._listeners: set[Callable[[TraceEvent], None]] = set()
+
+    def subscribe(self, listener: Callable[[TraceEvent], None]) -> Callable[[], None]:
+        self._listeners.add(listener)
+        return lambda: self._listeners.discard(listener)
 
     def record(
         self,
@@ -60,4 +67,9 @@ class TraceRecorder:
         )
         with self.path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(asdict(item), ensure_ascii=False) + "\n")
+        for listener in tuple(self._listeners):
+            try:
+                listener(item)
+            except Exception:
+                logging.getLogger(__name__).exception("Trace listener failed")
         return item

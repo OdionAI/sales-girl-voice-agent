@@ -21,6 +21,7 @@ from .pipeline import ConversationPipeline
 from .report import generate_report
 from .session_identity import verify_session_token
 from .trace import TraceRecorder
+from .live_metrics import LiveMetricPublisher
 
 
 logger = logging.getLogger("rvc-livekit-transport")
@@ -89,6 +90,11 @@ class LiveKitPCMTransport:
         self._active_playback_started_ns = 0
         self._acknowledged_turns: set[str] = set()
         self._agent_state = ""
+        self.metrics: LiveMetricPublisher | None = None
+
+    def start_metrics(self) -> None:
+        if self.metrics is None and self.local_participant is not None and self.user_identity:
+            self.metrics = LiveMetricPublisher(self.trace, self.local_participant, self.user_identity)
 
     def bind(self, pipeline: ConversationPipeline) -> None:
         self.pipeline = pipeline
@@ -170,6 +176,8 @@ class LiveKitPCMTransport:
             await self.set_state("listening")
 
     async def close(self) -> None:
+        if self.metrics is not None:
+            await self.metrics.close()
         self.source.clear_queue()
 
     async def _send_audio(self, message: dict[str, Any]) -> None:
@@ -401,6 +409,7 @@ async def entrypoint(ctx: JobContext) -> None:
         transport.user_identity = participant.identity
         transport.user_participant = participant
         transport.user_track_sid = _microphone_track_sid(participant)
+        transport.start_metrics()
         await transport.set_state("initializing")
 
         async def receive_text(reader: rtc.TextStreamReader, sender: str) -> None:
