@@ -40,7 +40,7 @@ final class CallerControls: ObservableObject {
     var active: Bool { [.connecting, .connected, .reconnecting, .ending].contains(call.state) }
 
     func startAutomatically(_ operation: @escaping () async throws -> Void) async {
-        guard !attemptedAutomaticStart, visible else { return }
+        guard !attemptedAutomaticStart, visible, !Task.isCancelled else { return }
         attemptedAutomaticStart = true
         await start(operation)
     }
@@ -50,19 +50,22 @@ final class CallerControls: ObservableObject {
     }
 
     func start(_ operation: @escaping () async throws -> Void) async {
-        guard visible, !active, startTask == nil, enrollment?.isBusy != true else { return }
+        guard visible, !active, startTask == nil, enrollment?.isBusy != true, !Task.isCancelled else { return }
         presentError(nil)
         starting = true
         // Own startup as well as the call, including a host's asynchronous caller-token request.
         let task = Task { try await operation() }
         startTask = task
         defer { startTask = nil; starting = false }
-        do { try await task.value }
+        do {
+            try await withTaskCancellationHandler(operation: { try await task.value }, onCancel: { task.cancel() })
+        }
         catch is CancellationError {}
         catch { presentError(error) }
     }
 
     func end() async {
+        attemptedAutomaticStart = true
         startTask?.cancel()
         await call.end()
     }

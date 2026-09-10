@@ -34,6 +34,13 @@ final class CallerControlsTests: XCTestCase {
     }
 
     @MainActor
+    func testEndBeforeAutomaticTaskRunsCannotStartACall() async {
+        let controls = CallerControls(call: makeCall(UITransport()), enrollment: nil)
+        await controls.end()
+        await controls.startAutomatically { XCTFail("A cancelled presentation cannot start") }
+    }
+
+    @MainActor
     func testAutomaticFailureDoesNotRetryAndEndCancelsHostTokenFetch() async {
         let transport = UITransport()
         let call = makeCall(transport)
