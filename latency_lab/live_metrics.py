@@ -39,6 +39,7 @@ class MetricMapper:
             "tts_request_start", "tts_first_audio_chunk", "tts_request_complete",
             "livekit_audio_frame_enqueued", "speculation_start", "speculation_cancel",
             "playback_release_authorized",
+            "generation_cancel", "turn_close", "tool_call_prepared",
         }
         if item.event not in supported or not item.turn_id or not item.turn_id.startswith("turn-"):
             return None
@@ -108,6 +109,14 @@ class MetricMapper:
             payload.update(event="preemptive_discard", reason=item.reason)
         elif event == "playback_release_authorized":
             payload.update(event="preemptive_release")
+        elif event == "generation_cancel":
+            payload.update(event="generation_cancelled", reason=item.reason)
+        elif event == "turn_close":
+            payload.update(event="turn_closed", reason=item.reason)
+        elif event == "tool_call_prepared":
+            # A tool-only response has no spoken text token. Never invent a TTFT
+            # from the fully assembled tool call or expose its arguments.
+            payload.update(event="llm_tool_response")
         return payload
 
 
