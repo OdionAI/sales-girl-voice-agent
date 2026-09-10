@@ -126,6 +126,7 @@ class ConversationStore:
         client_session_id: str,
         room_name: str = "",
         transport: str | None = None,
+        channel: str | None = None,
     ) -> None:
         self.config = config
         self.session = session
@@ -139,7 +140,7 @@ class ConversationStore:
         normalized = to_e164(self.caller)
         if re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", self.caller):
             self.channel, self.external_id = "web", self.caller.lower()
-        elif re.fullmatch(r"\+[1-9]\d{7,14}", normalized):
+        elif channel != "web" and re.fullmatch(r"\+[1-9]\d{7,14}", normalized):
             self.channel, self.external_id = "voice", normalized
         else:
             # The web resolver requires email. Scope aliases to this session and

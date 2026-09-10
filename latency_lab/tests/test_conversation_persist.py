@@ -104,6 +104,13 @@ class ConversationStoreTest(unittest.IsolatedAsyncioTestCase):
         self.stores.append(store)
         return store
 
+    async def test_sdk_phone_contact_is_still_a_web_call(self):
+        store = self.store(caller='+2348012345678', channel='web')
+        await store.start()
+        self.assertEqual(store.channel, 'web')
+        self.assertTrue(store.external_id.endswith('@sdk.invalid'))
+        self.assertEqual(store.caller, '+2348012345678')
+
     def events(self):
         return [call.args[0] for call in self.trace.record.call_args_list]
 
