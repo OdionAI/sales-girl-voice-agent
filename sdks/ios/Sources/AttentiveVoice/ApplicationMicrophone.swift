@@ -1,7 +1,8 @@
 import AVFoundation
 import Combine
+internal import AttentiveRTC
 
-/// iOS input muting is application-wide and can outlive an individual room or track.
+/// Native input mute can outlive a room even when its new microphone track is enabled.
 @MainActor
 final class ApplicationMicrophone {
     var onChange: ((Bool) -> Void)?
@@ -20,19 +21,25 @@ final class ApplicationMicrophone {
     convenience init() {
         self.init(isInputMuted: {
             #if os(iOS)
-            if #available(iOS 17, *) { return AVAudioApplication.shared.isInputMuted }
+            if #available(iOS 17, *), AVAudioApplication.shared.isInputMuted { return true }
             #endif
-            return false
+            return AudioManager.shared.isMicrophoneMuted
         }, unmuteInput: {
             #if os(iOS)
             if #available(iOS 17, *), AVAudioApplication.shared.isInputMuted {
                 try AVAudioApplication.shared.setInputMuted(false)
             }
             #endif
+            if AudioManager.shared.isMicrophoneMuted {
+                AudioManager.shared.isMicrophoneMuted = false
+                guard !AudioManager.shared.isMicrophoneMuted else { throw CallError.connectionFailed }
+            }
         })
         #if os(iOS)
         if #available(iOS 17, *) {
             subscription = NotificationCenter.default.publisher(for: AVAudioApplication.inputMuteStateChangeNotification)
+                .merge(with: NotificationCenter.default.publisher(for: AVAudioSession.routeChangeNotification),
+                       NotificationCenter.default.publisher(for: AVAudioSession.interruptionNotification))
                 .sink { [weak self] _ in
                     Task { @MainActor [weak self] in self?.refresh() }
                 }

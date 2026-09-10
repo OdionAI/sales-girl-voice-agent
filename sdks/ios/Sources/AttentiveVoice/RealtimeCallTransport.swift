@@ -61,6 +61,8 @@ final class RealtimeCallTransport: NSObject, CallTransport {
             captureOptions: AudioCaptureOptions(echoCancellation: true, autoGainControl: true, noiseSuppression: true))
         try Task.checkCancellation()
         guard !closing else { throw CancellationError() }
+        // Publishing can reuse an audio engine whose input was muted by the previous room.
+        if enabled { try microphone.prepareToEnable() }
         microphone.updateTrack(enabled: enabled)
     }
 
