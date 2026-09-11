@@ -101,6 +101,20 @@ class AuthObserverLogicTests(unittest.TestCase):
         self.assertTrue(userdata["auth_observer_enabled"])
         self.assertIn("every Wema tool call", instructions)
 
+    def test_apply_session_respects_disabled_agent_policy(self) -> None:
+        userdata = {
+            "enabled_tool_names": ["wema_get_balance"],
+            "voice_auth_required": False,
+            "end_user_id": "a@b.com",
+        }
+        with patch.dict(os.environ, {"AUTH_OBSERVER_ENABLED": "true"}):
+            instructions = apply_auth_observer_session(
+                userdata, "You are a helpful agent."
+            )
+
+        self.assertFalse(userdata["auth_observer_enabled"])
+        self.assertEqual(instructions, "You are a helpful agent.")
+
     def test_observer_verifies_session_once_from_first_usable_clip(self) -> None:
         session = _FakeSession()
         compares = [_match(True)]

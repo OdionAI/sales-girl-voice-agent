@@ -113,8 +113,10 @@ def apply_auth_observer_session(userdata: dict[str, Any], instructions: str) -> 
         for name in (userdata.get("enabled_tool_names") or [])
         if str(name or "").strip()
     }
-    if not auth_observer_enabled() or not any(
-        is_privileged_action(name) for name in enabled_tool_names
+    if (
+        userdata.get("voice_auth_required") is False
+        or not auth_observer_enabled()
+        or not any(is_privileged_action(name) for name in enabled_tool_names)
     ):
         userdata["auth_observer_enabled"] = False
         return instructions

@@ -406,6 +406,13 @@ async def _authorize_privileged_dynamic_tool(
         return True, None, None
 
     userdata = _session_userdata(ctx)
+    if userdata.get("voice_auth_required") is False:
+        logger.info(
+            "[TOOL] %s running with voice authentication disabled by saved agent policy",
+            tool_name,
+        )
+        return True, None, None
+
     observer = userdata.get("auth_observer")
     authorize = getattr(observer, "authorize_action", None)
     if not callable(authorize):

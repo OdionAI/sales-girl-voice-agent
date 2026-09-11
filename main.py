@@ -3088,6 +3088,7 @@ def _hydrate_userdata_from_active_agent_config(
     business_use_case: str,
 ) -> None:
     cfg = active_agent_config or {}
+    userdata["voice_auth_required"] = cfg.get("voice_auth_required") is not False
     configured_kb_ids = cfg.get("knowledge_base_ids")
     userdata["knowledge_base_ids"] = [
         str(kb_id).strip()

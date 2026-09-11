@@ -25,6 +25,7 @@ class WemaBusinessRoutingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(use_case, "generic")
         userdata["business_use_case"] = use_case
         main._hydrate_userdata_from_active_agent_config(userdata, config, use_case)
+        self.assertTrue(userdata["voice_auth_required"])
         base = main._effective_base_prompt(
             static_prompt="Default", active_agent_config=config,
             business_use_case=use_case, language="en",
@@ -39,6 +40,15 @@ class WemaBusinessRoutingTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(main, "ops_get_account_overview") as overview:
             self.assertEqual(await main._build_preloaded_ops_context(userdata), "")
         overview.assert_not_called()
+
+    def test_saved_voice_auth_policy_is_hydrated_from_agent_config(self) -> None:
+        userdata = {}
+        main._hydrate_userdata_from_active_agent_config(
+            userdata,
+            {"tools": [], "voice_auth_required": False},
+            "generic",
+        )
+        self.assertFalse(userdata["voice_auth_required"])
 
     def test_legacy_fidelity_tool_routing_is_unchanged(self) -> None:
         self.assertEqual(main._detect_business_use_case(
