@@ -39,14 +39,38 @@ struct CallerIconStyle: ButtonStyle {
 
 struct CallerAvatar: View {
     let speaking: Bool
-    let image: Image
+    let image: Image?
+    let themeKey: String?
     @ObservedObject var audioLevel: AgentAudioLevel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private var scale: Double {
         speaking && !reduceMotion ? 1 + Double(audioLevel.energy) * 0.25 : 1
     }
+
+    private var assetName: String {
+        switch themeKey?.lowercased() {
+        case "theme_2": return "CallerAvatarTheme2"
+        case "theme_3": return "CallerAvatarTheme3"
+        default: return "CallerAvatar"
+        }
+    }
+
+    private var fillColor: Color? {
+        guard let value = themeKey?.lowercased(), value.hasPrefix("color:#"), value.count == 13,
+              let hex = UInt32(value.dropFirst("color:#".count), radix: 16) else { return nil }
+        return Color(hex: hex)
+    }
+
     var body: some View {
-        image.resizable().scaledToFill()
+        Group {
+            if let image {
+                image.resizable().scaledToFill()
+            } else if let fillColor {
+                fillColor
+            } else {
+                Image(assetName, bundle: .module).resizable().scaledToFill()
+            }
+        }
             .frame(width: 123, height: 123).clipShape(Circle()).scaleEffect(scale)
             .animation(reduceMotion ? nil : .interpolatingSpring(mass: 0.68, stiffness: 300, damping: 22), value: scale)
             .frame(width: 204, height: 204).accessibilityHidden(true)

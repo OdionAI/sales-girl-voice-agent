@@ -100,7 +100,7 @@ struct CallerContent: View {
                     if controls.active || startsAutomatically {
                         VStack(spacing: 22) {
                             CallerAvatar(speaking: call.agentState == .speaking,
-                                         image: configuration.avatar ?? Image("CallerAvatar", bundle: .module),
+                                         image: configuration.avatar, themeKey: configuration.themeKey,
                                          audioLevel: call.agentAudioLevel)
                                 .accessibilityElement(children: .ignore)
                                 .accessibilityLabel("\(configuration.agentName), \(status)")

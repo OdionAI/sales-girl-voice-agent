@@ -10,6 +10,7 @@ final class SDKClientTests: XCTestCase {
         let configuration = try await client.configuration()
         XCTAssertEqual(configuration.title, "Talk to Example Bank")
         XCTAssertEqual(configuration.agentName, "Example")
+        XCTAssertNil(configuration.themeKey)
         _ = try await client.credentials(callerToken: nil)
         _ = try await client.credentials(callerToken: "signed-caller-token")
         XCTAssertFalse(client.description.contains(key))
@@ -61,6 +62,11 @@ final class SDKClientTests: XCTestCase {
         catch { XCTAssertEqual(error as? CallError, .invalidRequest) }
     }
 
+    func testDashboardThemeIsDecodedWhenPresent() async throws {
+        let configuration = try await makeClient("theme").configuration()
+        XCTAssertEqual(configuration.themeKey, "theme_3")
+    }
+
     private func makeClient(_ path: String = "success", customerID: String? = nil) -> SDKClient {
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [SDKProtocol.self]
@@ -104,7 +110,9 @@ private final class SDKProtocol: URLProtocol {
         if errorStatuses[path] != nil { response = ["code": path, "message": "private-backend"] }
         else if request.url!.lastPathComponent == "configuration" {
             response = ["agentId": path == "wrong-agent" ? "agt_other" : "agt_example",
-                        "agentName": "Example", "title": "Talk to Example Bank", "callerRequired": false]
+                        "agentName": "Example", "title": "Talk to Example Bank",
+                        "callerRequired": false]
+            if path == "theme" { response["themeKey"] = "theme_3" }
         } else {
             response = ["serverUrl": path == "insecure" ? "ws://rtc.example.test" : "wss://rtc.example.test",
                         "roomName": "room", "participantToken": "test-token"]

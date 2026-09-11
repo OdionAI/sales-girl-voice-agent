@@ -17,6 +17,8 @@ public struct CallerUIConfiguration {
     public var toolDisplayNames: [String: String]
     public var accentColor: Color
     public var avatar: Image?
+    /// Dashboard-selected avatar theme. A host-supplied avatar takes precedence.
+    public var themeKey: String?
     /// Set false only when the host deliberately retains the call after dismissing the UI.
     public var endsCallOnDisappear: Bool
 
@@ -26,7 +28,7 @@ public struct CallerUIConfiguration {
                 showsProfile: Bool = false, showsToolWaitSelection: Bool = true,
                 toolDisplayNames: [String: String] = [:],
                 accentColor: Color = Color(red: 132.0 / 255, green: 39.0 / 255, blue: 35.0 / 255),
-                avatar: Image? = nil, endsCallOnDisappear: Bool = true) {
+                avatar: Image? = nil, themeKey: String? = nil, endsCallOnDisappear: Bool = true) {
         self.title = title
         self.agentName = agentName
         self.profileTitle = profileTitle
@@ -38,6 +40,7 @@ public struct CallerUIConfiguration {
         self.toolDisplayNames = toolDisplayNames
         self.accentColor = accentColor
         self.avatar = avatar
+        self.themeKey = themeKey
         self.endsCallOnDisappear = endsCallOnDisappear
     }
 }
