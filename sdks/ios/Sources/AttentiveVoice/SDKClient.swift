@@ -5,6 +5,8 @@ public struct AgentConfiguration: Decodable, Equatable, Sendable {
     public let agentId: String
     public let agentName: String
     public let title: String
+    /// Dashboard-selected visual theme. Nil preserves the default caller appearance.
+    public let themeKey: String?
     public let callerRequired: Bool
 }
 

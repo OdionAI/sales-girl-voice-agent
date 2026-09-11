@@ -39,7 +39,7 @@ public struct AttentiveAgentView: View {
             if let metadata = call.configuration {
                 CallerContent(call: call, request: $request,
                     configuration: .init(title: metadata.title, agentName: metadata.agentName,
-                                         showsToolWaitSelection: false),
+                                         showsToolWaitSelection: false, themeKey: metadata.themeKey),
                     enrollment: nil, microphoneOnStart: true, onSettings: nil,
                     startsAutomatically: startsAutomatically, onCallEnded: { dismiss() },
                     startCall: {
