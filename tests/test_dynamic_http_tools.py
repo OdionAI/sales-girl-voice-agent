@@ -394,6 +394,45 @@ class DynamicHttpToolsTests(unittest.IsolatedAsyncioTestCase):
                 observer.publish_action_outcome.assert_not_awaited()
                 client.request.assert_awaited_once()
 
+    async def test_wema_tool_uses_saved_disabled_voice_auth_policy(self) -> None:
+        tools = build_dynamic_http_tools(
+            {
+                "tools": [
+                    {
+                        "name": "wema_get_balance",
+                        "description": "Read protected Wema account information.",
+                        "method": "POST",
+                        "url": "https://wema.example.com/wema_get_balance",
+                        "request_schema": {
+                            "type": "object",
+                            "properties": {},
+                            "required": [],
+                            "additionalProperties": False,
+                        },
+                    }
+                ]
+            }
+        )
+        context = self._run_context(
+            ["wema_get_balance"],
+            voice_auth_required=False,
+        )
+
+        with patch("agent.dynamic_tools.httpx.AsyncClient") as client_cls:
+            client = AsyncMock()
+            client.request.return_value = httpx.Response(
+                200,
+                json={"status": "ok", "data": {}},
+                headers={"content-type": "application/json"},
+            )
+            client_cls.return_value.__aenter__.return_value = client
+            client_cls.return_value.__aexit__.return_value = False
+
+            result = await tools[0](ctx=context, raw_arguments={})
+
+        self.assertEqual(result["status"], "ok")
+        client.request.assert_awaited_once()
+
     async def test_execute_prepared_hides_auth_fields_from_model_schema(self) -> None:
         tools = build_dynamic_http_tools(
             self._execute_prepared_config(include_auth_fields=True)
