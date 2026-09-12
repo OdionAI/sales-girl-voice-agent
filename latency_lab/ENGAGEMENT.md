@@ -149,6 +149,16 @@ Listening-only correction on 2026-09-12:
 - Regression suite: 234 tests run, 12 skipped, no failures. Coverage includes
   immediate publication/persistence, recognition during delayed reviews, quiet
   partials, interruption, shutdown, recall context, and compaction provenance.
+- The updated web caller also retained all 3 facts and replied on "Okay, now you
+  can talk" with "Your notebook is green, the meeting is on Friday, and there will
+  be 5 guests." The trace recorded 0 audio chunks and 0 tool starts between the
+  silence and resume requests. This was a text-input web-call test in addition
+  to the synthetic-speech ASR test above. Physical microphone acceptance remains
+  for the caller to repeat; browser-visible transcript is not proof of audibility.
+- Restored the stopped loopback-only service tunnel. LiveKit was still trying to
+  dispatch to an unreachable old local worker registration, so the local worker
+  and dashboard now use the fresh name `rvc-silent-listening-local`. No shared
+  LiveKit service, production worker, or deployment configuration was restarted.
 
 ## Release gate
 
