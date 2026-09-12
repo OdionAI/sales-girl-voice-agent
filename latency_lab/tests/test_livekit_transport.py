@@ -204,6 +204,25 @@ class LiveKitPCMTransportTests(unittest.IsolatedAsyncioTestCase):
         await drain
         self.assertNotIn("tts_stop", self.pipeline.events)
 
+    async def test_engagement_segment_does_not_finish_turn(self):
+        self.transport.playing = True
+        original = self.pipeline.attempt
+        await self.transport.send({"type": "tts_segment_end"})
+        self.assertEqual(self.pipeline.events, ["tts_segment_stop"])
+        self.assertIs(self.pipeline.attempt, original)
+        self.assertTrue(self.source.waited)
+
+    async def test_stale_engagement_segment_cannot_change_replacement_turn(self):
+        waiting = asyncio.Event()
+        self.source.wait_for_playout = waiting.wait
+        self.transport.playing = True
+        drain = asyncio.create_task(self.transport.send({"type": "tts_segment_end"}))
+        await asyncio.sleep(0)
+        self.pipeline.attempt = SimpleNamespace(id="replacement")
+        waiting.set()
+        await drain
+        self.assertEqual(self.pipeline.events, [])
+
     async def test_final_transcript_supports_web_and_swift_with_same_identity(self):
         writer = SimpleNamespace(write=AsyncMock(), aclose=AsyncMock())
         participant = SimpleNamespace(identity="agent-test", publish_transcription=AsyncMock(),

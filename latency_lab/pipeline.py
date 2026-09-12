@@ -744,6 +744,19 @@ class ConversationPipeline:
             self.final_timeout_task.cancel()
             self.final_timeout_task = None
         self.final_text = text
+        if self.config.engagement_enabled:
+            reviewed_turn = self.turn_id
+            accepted = await self.engagement.accept_caller_turn(text)
+            if self.turn_id != reviewed_turn:
+                return
+            if not accepted:
+                await self._cancel_attempt("silence_preference_unaddressed_speech")
+                self.closed_turns.add(reviewed_turn)
+                self.last_closed_turn_id = reviewed_turn
+                self.turn_id = None
+                self._clear_speech_candidate()
+                self._transition("idle", "silence_preference_preserved")
+                return
         self.engagement.caller_final(text)
         self.memory.user(self.turn_id, text)
         self.conversations.spawn(self.conversations.add_user(text, turn_id=self.turn_id))
@@ -990,7 +1003,8 @@ class ConversationPipeline:
                 await self.send(
                     {
                         "type": "partial_assistant_answer",
-                        "content": attempt.spoken_knowledge_acknowledgement,
+                        "content": (attempt.initial_answer if self.config.engagement_enabled
+                                    else attempt.spoken_knowledge_acknowledgement),
                     }
                 )
                 available, availability_reason = self.knowledge.availability()
@@ -1027,11 +1041,25 @@ class ConversationPipeline:
                         speculative=False,
                         knowledge_base_count=len(self.agent_context.knowledge_base_ids),
                     )
-                    attempt.knowledge_task = asyncio.create_task(
-                        self.knowledge.search(attempt.knowledge_query),
-                        name=f"{attempt.id}-knowledge",
-                    )
-                    attempt.knowledge_result = await attempt.knowledge_task
+                    if self.config.engagement_enabled:
+                        lookup = ActionToolCall(f"knowledge-{attempt.id}", "knowledge_lookup", {"query": attempt.knowledge_query})
+
+                        async def search():
+                            result = await self.knowledge.search(attempt.knowledge_query)
+                            self._retain_tool_result(attempt, lookup, {
+                                "status": result.status, "context": result.prompt_context(),
+                            })
+                            return result
+
+                        result = await self.engagement.run_tool(attempt, lookup, search)
+                        attempt.knowledge_result = (result if isinstance(result, KnowledgeResult)
+                            else KnowledgeResult(query=attempt.knowledge_query, status="failed", error=result["message"]))
+                    else:
+                        attempt.knowledge_task = asyncio.create_task(
+                            self.knowledge.search(attempt.knowledge_query),
+                            name=f"{attempt.id}-knowledge",
+                        )
+                        attempt.knowledge_result = await attempt.knowledge_task
                 else:
                     attempt.knowledge_result = KnowledgeResult(
                         query=self.final_text or attempt.hypothesis,
@@ -1331,6 +1359,8 @@ class ConversationPipeline:
 
     async def _run_banking_tools(self, attempt: Attempt, messages: list[dict], calls: list) -> None:
         rounds = max(4, min(12, self.config.engagement_bank_tool_rounds)) if self.config.engagement_enabled else 4
+        listed_accounts = False
+        completed_balances: set[str] = set()
         for round_number in range(rounds):
             if attempt.cancelled or not attempt.authorized:
                 return
@@ -1347,10 +1377,21 @@ class ConversationPipeline:
                 )
                 request, reply = self._retain_tool_result(attempt, call, body)
                 messages.extend([request, reply])
+                if call.name == "wema_get_balance" and body.get("status") in {"ok", "success", "completed"}:
+                    completed_balances.add(str(call.arguments.get("source_account") or self.banking.profile.get("account_number") or ""))
                 if self.banking.prepared and call.name.startswith("wema_prepare_"):
                     await self._request_bank_confirmation(attempt)
                     return
-                if body.get("status") not in {"ok", "success", "completed"}:
+                data = body.get("data")
+                accounts = data.get("accounts") if isinstance(data, dict) else None
+                selection = (self.config.engagement_enabled and not listed_accounts
+                             and call.name == "wema_get_balance" and not call.arguments.get("source_account")
+                             and body.get("status") == "needs_input"
+                             and isinstance(accounts, list) and bool(accounts)
+                             and all(isinstance(account, dict) and re.fullmatch(r"\d{10}", str(account.get("source_account", "")))
+                                     for account in accounts))
+                listed_accounts = listed_accounts or selection
+                if body.get("status") not in {"ok", "success", "completed"} and not selection:
                     # Do not hammer failed authentication or repeat a connector failure.
                     calls = []
                     break
@@ -1358,7 +1399,44 @@ class ConversationPipeline:
                               if item["function"]["name"] in BANK_TOOLS] if calls and round_number < rounds - 1 else None
             if attempt.answer:
                 attempt.answer = attempt.answer.rstrip() + " "
+            previous_answer = attempt.answer
             calls = await self._stream_llm_and_tts(attempt, messages, phase="bank_tool_result", tools=followup_tools)
+            if self.config.engagement_enabled:
+                spoken = attempt.answer[len(previous_answer):].strip()
+                if spoken:
+                    messages.append({"role": "assistant", "content": spoken})
+                if not calls and followup_tools:
+                    # A spoken "checking the next account" is not a tool call.
+                    # Reconsider only the already-requested read-only balance
+                    # work; never recover by issuing a consequential operation.
+                    balance_tools = [tool for tool in followup_tools if tool["function"]["name"] == "wema_get_balance"]
+                    if balance_tools and any(tool.get("function", {}).get("name") == "wema_get_balance"
+                                             for message in messages for tool in (message.get("tool_calls") or [])):
+                        continuation_prompt = (
+                                "Reconsider the caller's balance request against the actual tool results. "
+                                "If a requested account balance is still missing, call wema_get_balance for "
+                                "the next exact owned account from the returned list. Do not recheck an "
+                                "account whose balance was already returned. Do not call tools for accounts "
+                                "the caller did not request. If all requested results are present, or a "
+                                "selection/clarification is needed, return no tool call. Text saying you "
+                                "will check is not execution. Return only a tool call or empty content."
+                        )
+                        continuation_messages = [dict(message) for message in messages]
+                        if continuation_messages and continuation_messages[0]["role"] == "system":
+                            continuation_messages[0]["content"] += "\n" + continuation_prompt
+                        else:
+                            continuation_messages.insert(0, {"role": "system", "content": continuation_prompt})
+                        try:
+                            async with asyncio.timeout(self.config.engagement_generation_timeout_seconds):
+                                async for event in self.llm.stream(continuation_messages, tools=balance_tools):
+                                    if attempt.cancelled:
+                                        return
+                                    if (isinstance(event, ActionToolCall) and event.name == "wema_get_balance"
+                                            and str(event.arguments.get("source_account") or "") not in completed_balances):
+                                        calls.append(event)
+                        except Exception as exc:
+                            calls = []
+                            self.trace.record("engagement_continuation_skipped", reason=type(exc).__name__)
             if not calls:
                 return
         await self._speak_text(attempt, "Please tell me which request you would like to handle next.", phase="tool_limit")
@@ -1438,7 +1516,8 @@ class ConversationPipeline:
                 )
                 await phrase_queue.put(phrase)
             await phrase_queue.put(None)
-            if self.config.engagement_enabled and tool_calls:
+            if self.config.engagement_enabled and (
+                    tool_calls or (phase == "prompt_first" and requests_knowledge_lookup(attempt.answer))):
                 # Speech may drain while the committed tool executes. Keep task
                 # ownership on this attempt so barge-in still cancels its audio.
                 attempt.speech_tasks.append(tts_task)
@@ -1490,7 +1569,7 @@ class ConversationPipeline:
             if phrase is None or attempt.cancelled:
                 return
             model_phrase = phrase
-            if phase == "prompt_first" and requests_knowledge_lookup(phrase):
+            if not self.config.engagement_enabled and phase == "prompt_first" and requests_knowledge_lookup(phrase):
                 phrase = attempt.spoken_knowledge_acknowledgement
             phrase_index += 1
             self.trace.record(

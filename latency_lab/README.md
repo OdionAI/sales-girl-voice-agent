@@ -6,6 +6,10 @@ This is the experimental speculative-generation pipeline for measuring the natur
 
 ## Ownership and release boundary
 
+For the opt-in contextual acknowledgements, pending-tool updates, and silence
+preferences, see [Contextual engagement](ENGAGEMENT.md). This is implemented in
+RVC; it does not transfer orchestration to LiveKit.
+
 ```mermaid
 sequenceDiagram
     participant B as Browser mic/VAD playback

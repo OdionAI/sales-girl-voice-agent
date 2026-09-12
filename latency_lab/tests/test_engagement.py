@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock
 
 from latency_lab.action_tools import ActionToolCall
+from latency_lab.agentic import KnowledgeMatch, KnowledgeResult
 from latency_lab.config import LabConfig
 from latency_lab.pipeline import Attempt, ConversationPipeline
 from latency_lab.trace import TraceRecorder
@@ -299,6 +300,202 @@ class EngagementTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(completed, ["0", "1", "2", "3", "4"])
         self.assertEqual(len(self.pipe.tts.texts), 5)
         self.assertIn("Account 4: 500.", attempt.answer)
+
+    async def test_owned_account_selection_keeps_balance_tool_available_once(self):
+        attempt = self.attempt()
+        call = ActionToolCall("list", "wema_get_balance", {})
+        self.pipe.action_tools = [{"type": "function", "function": {"name": "wema_get_balance"}}]
+        self.pipe.banking.execute = AsyncMock(return_value={"status": "needs_input", "data": {
+            "accounts": [{"source_account": "0123456789", "currency": "NGN"}]}})
+        self.pipe._stream_llm_and_tts = AsyncMock(side_effect=[[call], []])
+        await self.pipe._run_banking_tools(attempt, [], [call])
+        followups = self.pipe._stream_llm_and_tts.call_args_list
+        self.assertEqual(followups[0].kwargs["tools"], self.pipe.action_tools)
+        self.assertIsNone(followups[1].kwargs["tools"])
+
+    async def test_auth_failure_or_invalid_selection_never_reenables_tools(self):
+        for body in ({"status": "failed", "data": {"accounts": [{"source_account": "0123456789"}]}},
+                     {"status": "needs_input", "data": {"accounts": [{"source_account": "invalid"}]}}):
+            attempt = self.attempt()
+            self.pipe.banking.execute = AsyncMock(return_value=body)
+            self.pipe._stream_llm_and_tts = AsyncMock(return_value=[])
+            await self.pipe._run_banking_tools(attempt, [], [ActionToolCall("list", "wema_get_balance", {})])
+            self.assertIsNone(self.pipe._stream_llm_and_tts.call_args.kwargs["tools"])
+
+    async def test_missing_next_call_is_reconsidered_read_only_without_replaying_completed_account(self):
+        attempt = self.attempt()
+        first = ActionToolCall("one", "wema_get_balance", {"source_account": "0123456789"})
+        second = ActionToolCall("two", "wema_get_balance", {"source_account": "1123456789"})
+        unsafe = ActionToolCall("unsafe", "wema_execute_prepared", {"operation_id": "not-authorized"})
+        self.pipe.action_tools = [{"type": "function", "function": {"name": "wema_get_balance"}}]
+        self.pipe.banking.execute = AsyncMock(return_value={"status": "success", "data": {"balance": 100}})
+        self.pipe._stream_llm_and_tts = AsyncMock(side_effect=lambda *args, **kwargs: [])
+
+        class ContinuationLLM:
+            rounds = 0
+
+            async def stream(inner, messages, **kwargs):
+                self.assertEqual(messages[0]["role"], "system")
+                self.assertFalse(any(message["role"] == "system" for message in messages[1:]))
+                inner.rounds += 1
+                if inner.rounds == 1:
+                    for call in (unsafe, first, second):
+                        yield call
+
+        self.pipe.llm = ContinuationLLM()
+        await self.pipe._run_banking_tools(attempt, [], [first])
+        self.assertEqual([call.args[0] for call in self.pipe.banking.execute.call_args_list], [first, second])
+
+    async def test_feature_off_preserves_legacy_tool_cancellation(self):
+        self.policy.enabled = False
+        attempt = self.attempt()
+        call = ActionToolCall("legacy", "wema_get_balance", {})
+        cancelled = asyncio.Event()
+
+        async def execute():
+            try:
+                self.tool_started.set()
+                await asyncio.Event().wait()
+            finally:
+                cancelled.set()
+
+        task = self.task(self.policy.run_tool(attempt, call, execute))
+        await self.tool_started.wait()
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        self.assertTrue(cancelled.is_set())
+        self.assertIsNone(self.policy.operation)
+
+    async def test_unknown_operation_outcome_is_retained_and_never_retried(self):
+        attempt = self.attempt()
+        call = ActionToolCall("uncertain", "create_ticket", {})
+        invoke = AsyncMock(side_effect=TimeoutError())
+        body = await self.policy.run_tool(attempt, call, invoke)
+        self.assertEqual(body["status"], "unknown")
+        self.assertEqual(await self.policy.run_tool(attempt, call, invoke), body)
+        invoke.assert_awaited_once()
+        self.assertIn("unknown", json.dumps(self.policy.task_state()))
+
+    async def test_silence_decision_does_not_poll_completed_operation_forever(self):
+        attempt, tool = await self.pending()
+        attempt.task = tool
+        await self.pipe._cancel_attempt("barge_in")
+        self.release.set()
+        await self.policy.operation.task
+        self.pipe.state = "idle"
+        self.pipe.llm = DecisionLLM(speak=False, quiet="until_user")
+        await self.policy.reconsider("tool_completed", None)
+        self.assertIsNone(self.policy.opportunity())
+        self.assertFalse(self.policy.operation.delivered)
+
+    async def test_speculative_tool_never_executes_before_authorized_final(self):
+        selected = asyncio.Event()
+        call = ActionToolCall("read", "wema_get_balance", {"source_account": "0123456789"})
+
+        async def generate(attempt, messages, **kwargs):
+            selected.set()
+            return [call]
+
+        self.pipe._stream_llm_and_tts = generate
+        self.pipe._run_banking_tools = AsyncMock()
+        await self.pipe._start_attempt("check my balance", speculative=True, authorized=False)
+        attempt = self.pipe.attempt
+        await selected.wait()
+        await asyncio.sleep(0)
+        self.pipe._run_banking_tools.assert_not_awaited()
+        await self.pipe._cancel_attempt("final_transcript_changed")
+        self.pipe._run_banking_tools.assert_not_awaited()
+        self.assertTrue(attempt.task.cancelled())
+
+    async def test_continuation_failure_does_not_abort_already_spoken_results(self):
+        attempt = self.attempt()
+        call = ActionToolCall("read", "wema_get_balance", {"source_account": "0123456789"})
+        self.pipe.action_tools = [{"type": "function", "function": {"name": "wema_get_balance"}}]
+        self.pipe.banking.execute = AsyncMock(return_value={"status": "success", "data": {"balance": 100}})
+        self.pipe._stream_llm_and_tts = AsyncMock(return_value=[])
+
+        class FailingLLM:
+            async def stream(self, *args, **kwargs):
+                raise TimeoutError()
+                yield
+
+        self.pipe.llm = FailingLLM()
+        await self.pipe._run_banking_tools(attempt, [], [call])
+        self.pipe.banking.execute.assert_awaited_once()
+
+    async def test_quiet_review_does_not_delay_ordinary_generation(self):
+        self.pipe.llm.output = json.dumps({"addressed": True, "quiet": "until_user"})
+        self.pipe.llm.release.clear()
+        self.assertTrue(await self.policy.accept_caller_turn("Please stay quiet."))
+        await self.pipe.llm.started.wait()
+        self.assertFalse(self.policy.preference_task.done())
+        self.pipe.llm.release.set()
+        await self.policy.preference_task
+        self.assertEqual(self.policy.quiet, "until_user")
+
+    async def test_background_dialogue_cannot_resume_quiet_or_start_tools(self):
+        self.policy.quiet = "until_user"
+        self.pipe.llm.output = json.dumps({"addressed": False, "quiet": "none"})
+        self.pipe.turn_id, self.pipe.state = "movie", "awaiting_final"
+        self.pipe._start_attempt = AsyncMock()
+        await self.pipe.on_final("I will have Stevens draw up the contract at once.")
+        self.pipe._start_attempt.assert_not_awaited()
+        self.assertEqual(self.policy.quiet, "until_user")
+        self.assertEqual(self.pipe.state, "idle")
+        self.assertEqual(self.sent, [])
+        self.assertNotIn("Stevens", json.dumps(self.pipe.history))
+
+    async def test_clear_request_can_resume_after_background_dialogue(self):
+        self.policy.quiet = "until_user"
+        self.pipe.llm.output = json.dumps({"addressed": True, "quiet": "none"})
+        self.assertTrue(await self.policy.accept_caller_turn("SAW, can you help me with my account again?"))
+        self.assertEqual(self.policy.quiet, "none")
+
+    async def test_failed_review_preserves_quiet_and_blocks_response(self):
+        self.policy.quiet = "until_user"
+        self.pipe.llm.output = "invalid"
+        self.assertFalse(await self.policy.accept_caller_turn("unrelated speech"))
+        self.assertEqual(self.policy.quiet, "until_user")
+        self.assertTrue(self.policy.preference_uncertain)
+
+    async def test_next_turn_waits_for_previous_quiet_review(self):
+        self.pipe.llm.output = json.dumps({"addressed": True, "quiet": "until_user"})
+        self.pipe.llm.release.clear()
+        self.assertTrue(await self.policy.accept_caller_turn("Please stay quiet."))
+        await self.pipe.llm.started.wait()
+        second = self.task(self.policy.accept_caller_turn("movie dialogue"))
+        await asyncio.sleep(0)
+        self.assertFalse(second.done())
+        second.cancel()
+        await asyncio.gather(second, return_exceptions=True)
+        self.assertFalse(self.policy.preference_task.cancelled())
+        self.pipe.llm.release.set()
+        await self.policy.preference_task
+        self.assertEqual(self.policy.quiet, "until_user")
+
+    async def test_knowledge_result_survives_interruption_in_real_generation_path(self):
+        class LookupLLM:
+            async def stream(self, *args, **kwargs):
+                yield "Let me check that for you."
+
+        async def search(query):
+            self.tool_started.set()
+            await self.release.wait()
+            return KnowledgeResult(query=query, status="success", matches=(
+                KnowledgeMatch("Hours", "Verified hours are 9 AM to 5 PM", .9),))
+
+        self.pipe.llm = LookupLLM()
+        self.pipe.knowledge.availability = lambda: (True, "attached")
+        self.pipe.knowledge.search = search
+        self.pipe.final_text = "What are your opening hours?"
+        await self.pipe._start_attempt(self.pipe.final_text, speculative=False, authorized=True)
+        await asyncio.wait_for(self.tool_started.wait(), 1)
+        await self.pipe._cancel_attempt("caller_interrupt")
+        self.assertFalse(self.policy.operation.task.done())
+        self.release.set()
+        await self.policy.operation.task
+        self.assertIn("Verified hours", json.dumps(self.pipe.history))
+        self.assertEqual(self.policy.operation.snapshot()["result"]["status"], "success")
 
 
 if __name__ == "__main__":
