@@ -1,0 +1,38 @@
+# Apply after the existing Lagos compose.yaml; paths are relative to that file.
+services:
+  egress:
+    image: livekit/egress:v1.14.1@sha256:bf2b648b947349c3e9ff7aa8c718f00378d5c06af7624652a3653318e00333ce
+    restart: unless-stopped
+    network_mode: host
+    cap_add: [SYS_ADMIN]
+    cpus: 2.0
+    mem_limit: 3g
+    shm_size: 256m
+    env_file: [.private/egress.env]
+    environment:
+      EGRESS_CONFIG_FILE: /etc/egress.yaml
+    volumes:
+      - ./.private/egress.yaml:/etc/egress.yaml:ro
+      - ./.private/recordings:/recordings
+    stop_grace_period: 90s
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
+    depends_on:
+      redis: {condition: service_healthy}
+      livekit: {condition: service_started}
+
+  voice:
+    environment:
+      LIVEKIT_RECORDING_ENABLED: "true"
+      LIVEKIT_RECORDING_STORAGE_PROVIDER: local
+      LIVEKIT_RECORDING_LOCAL_DIRECTORY: /recordings
+      LIVEKIT_RECORDING_FILE_PREFIX: livekit-recordings
+      LIVEKIT_RECORDING_FORMAT: mp3
+    volumes:
+      - ./.private/recordings:/recordings:ro
+    stop_grace_period: 90s
+
+  conversations:
+    environment:
+      LOCAL_RECORDING_DIRECTORY: /recordings

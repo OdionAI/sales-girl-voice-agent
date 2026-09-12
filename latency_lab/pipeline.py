@@ -37,6 +37,8 @@ from .trace import TraceRecorder
 from .banking_tools import BankingTools, BANK_TOOLS
 from .memory import ConversationMemory, CONVERSATION_RULES
 from .engagement import Engagement, ENGAGEMENT_RULES
+from .conversation_persist import ConversationStore, caller_from_identity
+from .usage import UsageCollector, UsageReporter
 
 
 class Outbound(Protocol):
@@ -146,6 +148,16 @@ class ConversationPipeline:
         self.action_executor = ActionToolExecutor(
             config, self.http, self.agent_context, self.trace
         )
+        room_name = str((session_identity or {}).get("room_name") or "")
+        self.conversations = ConversationStore(
+            config, self.http, self.agent_context, self.trace,
+            caller=caller_from_identity(session_identity, room_name),
+            client_session_id=trace.session_id, room_name=room_name, transport=transport,
+            channel=("web" if room_name.startswith("rvc-livekit-") or transport == "browser" else None),
+        )
+        self.usage = UsageCollector()
+        self.llm.usage = self.tts.usage = self.stt.usage = self.usage
+        self.usage_reporter = UsageReporter(config, self.http, self.conversations, self.usage, trace)
         self.pending_action: PendingAction | None = None
         self.transport = transport
         self.state = "idle"
@@ -201,6 +213,8 @@ class ConversationPipeline:
 
     async def start(self) -> None:
         self.engagement.start()
+        self.conversations.spawn(self.conversations.start())
+        self.usage_reporter.start()
         if self.config.memory_compaction_enabled and not self._memory_loop_task:
             self._memory_loop_task = asyncio.create_task(self._memory_loop())
         self.trace.record(
@@ -307,6 +321,7 @@ class ConversationPipeline:
         self._transition("generating", "proactive_opening_greeting")
         try:
             await self._speak_text(attempt, greeting, phase="opening_greeting")
+            self.conversations.spawn(self.conversations.add_assistant(greeting, turn_id=opening_turn_id))
             attempt.audio_complete = True
             await self.send(
                 {"type": "final_assistant_answer", "content": attempt.answer.strip()}
@@ -731,6 +746,7 @@ class ConversationPipeline:
         self.final_text = text
         self.engagement.caller_final(text)
         self.memory.user(self.turn_id, text)
+        self.conversations.spawn(self.conversations.add_user(text, turn_id=self.turn_id))
         self.trace.record(
             "stt_final",
             turn_id=self.turn_id,
@@ -1379,6 +1395,10 @@ class ConversationPipeline:
         )
         first_token = True
         try:
+            self.trace.record(
+                "llm_request_start", turn_id=attempt.turn_id, attempt_id=attempt.id,
+                phase=phase,
+            )
             async for event in self.llm.stream(messages, tools=tools):
                 if attempt.cancelled:
                     raise asyncio.CancelledError
@@ -1390,7 +1410,7 @@ class ConversationPipeline:
                     first_token = False
                     self.trace.record(
                         "llm_first_token",
-                        turn_id=self.turn_id,
+                        turn_id=attempt.turn_id,
                         attempt_id=attempt.id,
                         reason="first_stream_delta",
                         phase=phase,
@@ -1475,7 +1495,7 @@ class ConversationPipeline:
             phrase_index += 1
             self.trace.record(
                 "tts_request_start",
-                turn_id=self.turn_id,
+                turn_id=attempt.turn_id,
                 attempt_id=attempt.id,
                 reason=(
                     "dynamic_knowledge_acknowledgement_dispatched"
@@ -1493,14 +1513,21 @@ class ConversationPipeline:
             )
             sample_rate, chunks = await self.tts.stream(phrase)
             first = True
+            audio_bytes = 0
+            chunk_count = 0
+            first_audio_ns = None
             async for chunk in chunks:
                 if attempt.cancelled:
                     return
+                if not chunk:
+                    continue
+                audio_bytes += len(chunk)
+                chunk_count += 1
                 if first:
                     first = False
-                    self.trace.record(
+                    first_audio = self.trace.record(
                         "tts_first_audio_chunk",
-                        turn_id=self.turn_id,
+                        turn_id=attempt.turn_id,
                         attempt_id=attempt.id,
                         reason="first_nonempty_provider_chunk",
                         phrase_index=phrase_index,
@@ -1510,10 +1537,17 @@ class ConversationPipeline:
                         held=not attempt.authorized,
                         phase=phase,
                     )
+                    first_audio_ns = first_audio.mono_ns
                 if attempt.authorized:
                     await self._send_audio(sample_rate, chunk, attempt)
                 else:
                     attempt.held_audio.append((sample_rate, chunk))
+            self.trace.record(
+                "tts_request_complete", turn_id=attempt.turn_id, attempt_id=attempt.id,
+                phase=phase, phrase_index=phrase_index, bytes=audio_bytes,
+                chunks=chunk_count, audio_seconds=audio_bytes / (sample_rate * 2),
+                first_audio_ns=first_audio_ns,
+            )
 
     async def _release_held(self, attempt: Attempt) -> None:
         self.trace.record(
@@ -1580,6 +1614,7 @@ class ConversationPipeline:
         if not attempt.proactive:
             self.memory.user(turn_id, self.final_text or attempt.hypothesis)
         self.memory.answer(turn_id, attempt.answer.strip())
+        self.conversations.spawn(self.conversations.add_assistant(attempt.answer.strip(), turn_id=turn_id))
         await self.send({"type": "final_assistant_answer", "content": attempt.answer.strip()})
 
     async def _send_audio(self, sample_rate: int, chunk: bytes, attempt: Attempt) -> None:
@@ -1650,6 +1685,10 @@ class ConversationPipeline:
             discarded_bytes=sum(len(chunk) for _, chunk in attempt.held_audio),
             **data,
         )
+        if attempt.audio_sent and attempt.answer and not attempt.response_committed:
+            self.conversations.spawn(self.conversations.add_assistant(
+                attempt.answer.strip(), turn_id=attempt.turn_id or self.turn_id, interrupted=True,
+            ))
         if not attempt.turn_id or not attempt.turn_id.startswith("opening-"):
             turn_id = attempt.turn_id or self.turn_id
             if released and attempt.audio_sent and attempt.answer and not attempt.response_committed:
@@ -1724,6 +1763,7 @@ class ConversationPipeline:
             self.trace.record("history_cleared", reason="browser_request")
 
     async def close(self) -> None:
+        self.conversations.mark_disconnected()
         await self.engagement.close()
         tasks = [task for task in (self._memory_loop_task, self._compaction_task) if task]
         for task in tasks:
@@ -1742,5 +1782,7 @@ class ConversationPipeline:
             self.attempt.authorized = False
         await self._cancel_attempt("session_disconnect")
         await self.stt.close()
+        await self.conversations.close()
+        await self.usage_reporter.close()
         await self.http.close()
         self.trace.record("session_close", reason=f"{self.transport}_transport_disconnected")

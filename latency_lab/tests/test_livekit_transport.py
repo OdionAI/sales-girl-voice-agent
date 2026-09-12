@@ -56,6 +56,43 @@ class LiveKitPCMTransportTests(unittest.IsolatedAsyncioTestCase):
         await self.transport.close()
         self.temp.cleanup()
 
+    async def test_pipeline_metrics_reach_caller_without_changing_audio(self):
+        async def llm_stream(*args, **kwargs):
+            yield "Hello there."
+
+        async def tts_stream(*args, **kwargs):
+            async def chunks():
+                yield b""
+                yield b"\x01\x00" * 2400
+            return 24000, chunks()
+
+        participant = SimpleNamespace(identity="agent", publish_data=AsyncMock(), set_attributes=AsyncMock())
+        self.transport.local_participant = participant
+        self.transport.user_identity = "caller-test"
+        self.transport.start_metrics()
+        pipeline = ConversationPipeline(LabConfig(), self.trace, self.transport.send, transport="livekit")
+        self.transport.bind(pipeline)
+        pipeline.llm = SimpleNamespace(stream=llm_stream)
+        pipeline.tts = SimpleNamespace(stream=tts_stream)
+        pipeline.turn_id = "turn-0001"
+        pipeline.attempt = Attempt(id="a", hypothesis="Hello", speculative=False,
+                                   authorized=True, turn_id="turn-0001")
+        try:
+            self.trace.record("user_speech_end", turn_id=pipeline.turn_id)
+            self.trace.record("stt_final", turn_id=pipeline.turn_id, text="Hello")
+            await pipeline._stream_llm_and_tts(pipeline.attempt, [], phase="prompt_first")
+            await self.transport.metrics.queue.join()
+            packets = [json.loads(call.args[0]) for call in participant.publish_data.call_args_list]
+            self.assertTrue({"stt_final", "llm_first_token", "tts_first_audio", "tts_done"}
+                            <= {packet["event"] for packet in packets})
+            done = next(packet for packet in packets if packet["event"] == "tts_done")
+            self.assertEqual(done["audio_seconds"], 0.1)
+            self.assertIsNotNone(done["rtf"])
+            self.assertEqual(len(self.source.frames), 1)
+            self.assertTrue(any(packet.get("system_since_user_final_ms") is not None for packet in packets))
+        finally:
+            await pipeline.http.close()
+
     async def test_pcm_is_enqueued_and_playout_is_measured(self) -> None:
         pcm = b"\x01\x00" * 2400
         await self.transport.send(
