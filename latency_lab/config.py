@@ -230,6 +230,10 @@ def apply_runtime_overrides(
     """Map Voice Lab runtime overrides onto a latency-lab config."""
     payload = overrides if isinstance(overrides, dict) else {}
     updates: dict[str, Any] = {}
+    # Sessions may opt out, but cannot enable an operator-disabled experiment.
+    engagement = payload.get("engagement_enabled")
+    if engagement is False or engagement == "false":
+        updates["engagement_enabled"] = False
 
     stt_model = str(payload.get("stt_model") or "").strip()
     stt_base_url = str(payload.get("stt_base_url") or "").strip()

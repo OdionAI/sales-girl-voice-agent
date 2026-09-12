@@ -784,8 +784,13 @@ class ConversationPipeline:
         await self._respond_to_final(text)
 
     async def _review_final_response(self, turn_id: str, text: str) -> None:
+        review = asyncio.create_task(self.engagement.accept_caller_turn(text))
         try:
-            accepted = await self.engagement.accept_caller_turn(text)
+            # Reuse RVC's speculative buffer during permission review. Audio,
+            # assistant transcripts and tools remain held until authorization.
+            if not self.attempt or self.attempt.hypothesis.strip().casefold() != text.strip().casefold():
+                await self._start_attempt(text, speculative=True, authorized=False)
+            accepted = await review
             if self.turn_id != turn_id or self.speech_candidate_active or self.engagement.closed:
                 return
             if not accepted:
@@ -800,6 +805,9 @@ class ConversationPipeline:
             self.memory.turn(turn_id).listening_only = False
             await self._respond_to_final(text)
         finally:
+            if not review.done():
+                review.cancel()
+            await asyncio.gather(review, return_exceptions=True)
             turn = next((turn for turn in self.memory.turns if turn.id == turn_id), None)
             if turn and turn.listening_only:
                 self.memory.finish(turn_id)
@@ -1030,13 +1038,14 @@ class ConversationPipeline:
                         attempt, prompt, phase="tool_confirmation"
                     )
             elif requests_knowledge_lookup(attempt.initial_answer):
-                await self.send(
-                    {
-                        "type": "partial_assistant_answer",
-                        "content": (attempt.initial_answer if self.config.engagement_enabled
-                                    else attempt.spoken_knowledge_acknowledgement),
-                    }
-                )
+                if not self.config.engagement_enabled or attempt.authorized:
+                    await self.send(
+                        {
+                            "type": "partial_assistant_answer",
+                            "content": (attempt.initial_answer if self.config.engagement_enabled
+                                        else attempt.spoken_knowledge_acknowledgement),
+                        }
+                    )
                 available, availability_reason = self.knowledge.availability()
                 self.trace.record(
                     "knowledge_lookup_requested",
@@ -1524,7 +1533,8 @@ class ConversationPipeline:
                         phase=phase,
                     )
                 attempt.answer += token
-                await self.send({"type": "partial_assistant_answer", "content": attempt.answer})
+                if not self.config.engagement_enabled or attempt.authorized:
+                    await self.send({"type": "partial_assistant_answer", "content": attempt.answer})
                 for phrase in tokenizer.push(token):
                     self.trace.record(
                         "tokenizer_phrase_ready",
@@ -1564,9 +1574,10 @@ class ConversationPipeline:
         if not clean or attempt.cancelled:
             return
         attempt.answer = f"{attempt.answer.strip()} {clean}".strip()
-        await self.send(
-            {"type": "partial_assistant_answer", "content": attempt.answer}
-        )
+        if not self.config.engagement_enabled or attempt.authorized:
+            await self.send(
+                {"type": "partial_assistant_answer", "content": attempt.answer}
+            )
         self.trace.record(
             "tokenizer_phrase_ready",
             turn_id=self.turn_id,
@@ -1659,6 +1670,8 @@ class ConversationPipeline:
             )
 
     async def _release_held(self, attempt: Attempt) -> None:
+        if self.config.engagement_enabled and attempt.answer and not attempt.audio_complete:
+            await self.send({"type": "partial_assistant_answer", "content": attempt.answer})
         self.trace.record(
             "playback_release_authorized",
             turn_id=self.turn_id,

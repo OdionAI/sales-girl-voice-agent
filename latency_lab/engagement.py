@@ -48,6 +48,8 @@ Return ONLY JSON: {"addressed": true, "quiet": "none"}.
 quiet is none, until_user, or until_result. Pin explicit requests to stay quiet,
 wait, or give the caller a minute as until_user. 'Only tell me when finished'
 means until_result. Use the current utterance and conversation to interpret intent.
+Review the latest explicit silence/resume instructions in the full conversation,
+even if an earlier review was cancelled and the pinned quiet state is not updated.
 When quiet is already active, mere speech is NOT permission to resume. Movie/TV
 dialogue, conversation between other people, fragments and unrelated narration
 are not directed to the assistant. Set addressed=false and preserve quiet.
@@ -133,13 +135,19 @@ class Engagement:
             return True
         # Input/transcripts continue independently. Only response authorization
         # waits for this review; speculative preparation remains unauthorised.
-        if self.preference_task:
-            await asyncio.shield(self.preference_task)
+        if self.preference_task and not self.preference_task.done():
+            # Latest history includes the previous utterance. Do not queue a
+            # resume request behind a slow review of background speech.
+            self.preference_task.cancel()
+            await asyncio.gather(self.preference_task, return_exceptions=True)
         self.preference_task = asyncio.create_task(self._review_preference(text))
         return await asyncio.shield(self.preference_task)
 
     async def _review_preference(self, text: str) -> bool:
         quiet = self.quiet
+        turn_id = self.pipe.turn_id
+        started = self.clock()
+        self.pipe.trace.record("engagement_caller_review_start", turn_id=turn_id, quiet=quiet)
         try:
             async with asyncio.timeout(self.config.engagement_generation_timeout_seconds):
                 output = "".join([piece async for piece in self.pipe.llm.stream([
@@ -158,8 +166,9 @@ class Engagement:
             self.preference_uncertain = False
             if quiet == "none" or decision["addressed"]:
                 self.quiet = decision["quiet"]
-            self.pipe.trace.record("engagement_caller_decision", addressed=decision["addressed"],
-                                   quiet=self.quiet)
+            self.pipe.trace.record("engagement_caller_decision", turn_id=turn_id,
+                                   addressed=decision["addressed"], quiet=self.quiet,
+                                   elapsed_ms=round((self.clock() - started) * 1000, 1))
             return decision["addressed"] and self.quiet != "until_user"
         except asyncio.CancelledError:
             raise

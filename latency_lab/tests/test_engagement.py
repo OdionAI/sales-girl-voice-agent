@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock
 
 from latency_lab.action_tools import ActionToolCall
 from latency_lab.agentic import KnowledgeMatch, KnowledgeResult
-from latency_lab.config import LabConfig
+from latency_lab.config import LabConfig, apply_runtime_overrides
 from latency_lab.pipeline import Attempt, ConversationPipeline
 from latency_lab.trace import TraceRecorder
 
@@ -84,6 +84,13 @@ class EngagementTests(unittest.IsolatedAsyncioTestCase):
         task = asyncio.create_task(coro)
         self.tasks.append(task)
         return task
+
+    def assert_no_released_response(self):
+        if isinstance(self.pipe._start_attempt, AsyncMock):
+            self.assertTrue(all(not call.kwargs["authorized"] for call in self.pipe._start_attempt.call_args_list))
+        self.assertFalse(any(message["type"] in {
+            "tts_chunk", "partial_assistant_answer", "final_assistant_answer", "tool_activity"
+        } for message in self.sent))
 
     def attempt(self):
         attempt = Attempt("one", "check balances", False, authorized=True, turn_id="one")
@@ -435,11 +442,11 @@ class EngagementTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn({"type": "final_user_request", "content": "Please stay quiet."}, self.sent)
         self.assertIn("Please stay quiet.", json.dumps(self.pipe.history))
         self.pipe.conversations.add_user.assert_awaited_once_with("Please stay quiet.", turn_id="quiet")
-        self.pipe._start_attempt.assert_not_awaited()
+        self.assert_no_released_response()
         self.pipe.llm.release.set()
         await self.pipe._final_response_task
         self.assertEqual(self.policy.quiet, "until_user")
-        self.pipe._start_attempt.assert_not_awaited()
+        self.assert_no_released_response()
         self.assertEqual(self.pipe.tts.texts, [])
         self.assertTrue(self.pipe.memory.turn("quiet").closed)
 
@@ -450,7 +457,7 @@ class EngagementTests(unittest.IsolatedAsyncioTestCase):
         self.pipe._start_attempt = AsyncMock()
         await self.pipe.on_final("I will have Stevens draw up the contract at once.")
         await self.pipe._final_response_task
-        self.pipe._start_attempt.assert_not_awaited()
+        self.assert_no_released_response()
         self.assertEqual(self.policy.quiet, "until_user")
         self.assertEqual(self.pipe.state, "idle")
         self.assertEqual(self.sent, [{"type": "final_user_request",
@@ -468,7 +475,8 @@ class EngagementTests(unittest.IsolatedAsyncioTestCase):
         for text in facts:
             await self.pipe.text(text)
             await self.pipe._final_response_task
-        self.pipe._stream_llm_and_tts.assert_not_awaited()
+        self.assertEqual(self.pipe._stream_llm_and_tts.await_count, 3)
+        self.assert_no_released_response()
         self.assertEqual(self.pipe.tts.texts, [])
         self.pipe.llm.output = json.dumps({"addressed": True, "quiet": "none"})
         resume = "Okay, now you can talk. What did I just tell you?"
@@ -492,7 +500,7 @@ class EngagementTests(unittest.IsolatedAsyncioTestCase):
         await self.pipe._final_response_task
         self.assertIn({"type": "final_user_request", "content": "The meeting is tomorrow."}, self.sent)
         self.assertIn("The meeting is tomorrow.", json.dumps(self.pipe.history))
-        self.pipe._start_attempt.assert_not_awaited()
+        self.assert_no_released_response()
         self.assertTrue(self.policy.preference_uncertain)
 
     async def test_quiet_partials_are_published_without_speculative_tts(self):
@@ -520,7 +528,7 @@ class EngagementTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("The meeting starts at 3 PM.", json.dumps(self.pipe.history))
         self.pipe.llm.release.set()
         await self.pipe._final_response_task
-        self.pipe._start_attempt.assert_not_awaited()
+        self.assert_no_released_response()
 
     async def test_new_microphone_speech_can_interrupt_pending_review(self):
         self.policy.quiet = "until_user"
@@ -539,7 +547,7 @@ class EngagementTests(unittest.IsolatedAsyncioTestCase):
         await self.pipe.on_partial("Actually, one more thing", "Actually, one more thing")
         self.pipe.llm.release.set()
         await self.policy.preference_task
-        self.pipe._start_attempt.assert_not_awaited()
+        self.assert_no_released_response()
         self.assertIn({"type": "partial_user_request", "content": "Actually, one more thing"}, self.sent)
 
     async def test_shutdown_cancels_pending_response_review(self):
@@ -564,21 +572,104 @@ class EngagementTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.policy.quiet, "until_user")
         self.assertTrue(self.policy.preference_uncertain)
 
-    async def test_next_turn_waits_for_previous_quiet_review(self):
-        self.pipe.llm.output = json.dumps({"addressed": True, "quiet": "until_user"})
-        self.pipe.llm.release.clear()
-        first = self.task(self.policy.accept_caller_turn("Please stay quiet."))
-        await self.pipe.llm.started.wait()
-        second = self.task(self.policy.accept_caller_turn("movie dialogue"))
-        await asyncio.sleep(0)
-        self.assertFalse(second.done())
-        second.cancel()
-        await asyncio.gather(second, return_exceptions=True)
-        self.assertFalse(self.policy.preference_task.cancelled())
-        self.pipe.llm.release.set()
-        await self.policy.preference_task
-        self.assertFalse(await first)
-        self.assertEqual(self.policy.quiet, "until_user")
+    async def test_resume_does_not_queue_behind_slow_background_review(self):
+        started = asyncio.Event()
+        cancelled = asyncio.Event()
+
+        class LatestLLM:
+            async def stream(inner, messages, **kwargs):
+                if json.loads(messages[-1]["content"])["utterance"] == "movie dialogue":
+                    started.set()
+                    try:
+                        await asyncio.Event().wait()
+                    finally:
+                        cancelled.set()
+                yield json.dumps({"addressed": True, "quiet": "none"})
+
+        self.policy.quiet = "until_user"
+        self.pipe.llm = LatestLLM()
+        first = self.task(self.policy.accept_caller_turn("movie dialogue"))
+        await started.wait()
+        self.assertTrue(await asyncio.wait_for(self.policy.accept_caller_turn("Now you can talk."), .1))
+        await asyncio.gather(first, return_exceptions=True)
+        self.assertTrue(cancelled.is_set())
+        self.assertTrue(first.cancelled())
+        self.assertEqual(self.policy.quiet, "none")
+
+    async def test_buffered_answer_is_ready_before_review_without_leaking_output(self):
+        review_started, allow = asyncio.Event(), asyncio.Event()
+
+        class ParallelLLM:
+            async def stream(inner, messages, **kwargs):
+                if kwargs.get("max_tokens") == 80:
+                    review_started.set()
+                    await allow.wait()
+                    yield json.dumps({"addressed": True, "quiet": "none"})
+                else:
+                    yield "Your notebook is green."
+
+        self.pipe.llm = ParallelLLM()
+        self.policy.quiet = "until_user"
+        await self.pipe.text("Now you can talk. What colour was it?")
+        await review_started.wait()
+        await self.pipe.tts.started.wait()
+        attempt = self.pipe.attempt
+        await attempt.task
+        self.assertTrue(attempt.held_audio)
+        self.assertFalse(attempt.authorized)
+        self.assert_no_released_response()
+        allow.set()
+        await self.pipe._final_response_task
+        self.assertTrue(any(message["type"] == "tts_chunk" for message in self.sent))
+        self.assertIn({"type": "final_assistant_answer", "content": "Your notebook is green."}, self.sent)
+        self.assertEqual(len(self.pipe.tts.texts), 1)
+
+    async def test_rejected_review_discards_prepared_audio_and_native_tool(self):
+        allow, prepared = asyncio.Event(), asyncio.Event()
+        self.pipe._run_banking_tools = AsyncMock()
+
+        class ParallelLLM:
+            async def stream(inner, messages, **kwargs):
+                if kwargs.get("max_tokens") == 80:
+                    await allow.wait()
+                    yield json.dumps({"addressed": False, "quiet": "until_user"})
+                else:
+                    yield "I will check that."
+                    yield ActionToolCall("blocked", "wema_get_balance", {})
+                    prepared.set()
+
+        self.policy.quiet = "until_user"
+        self.pipe.llm = ParallelLLM()
+        await self.pipe.text("background account discussion")
+        await prepared.wait()
+        await self.pipe.tts.started.wait()
+        self.assert_no_released_response()
+        self.pipe._run_banking_tools.assert_not_awaited()
+        allow.set()
+        await self.pipe._final_response_task
+        self.pipe._run_banking_tools.assert_not_awaited()
+        self.assert_no_released_response()
+        self.assertIsNone(self.pipe.attempt)
+        self.assertIn("background account discussion", json.dumps(self.pipe.history))
+
+    async def test_session_opt_out_bypasses_review_entirely(self):
+        config = apply_runtime_overrides(self.pipe.config, {"engagement_enabled": "false"})
+        self.pipe.config = config
+        self.policy.enabled = config.engagement_enabled
+        self.pipe._start_attempt = AsyncMock()
+        self.policy.accept_caller_turn = AsyncMock()
+        await self.pipe.text("What is 2 plus 2?")
+        self.policy.accept_caller_turn.assert_not_awaited()
+        self.pipe._start_attempt.assert_awaited_once_with("What is 2 plus 2?", speculative=False, authorized=True)
+        self.assertIsNone(self.pipe._final_response_task)
+
+    def test_session_flag_cannot_enable_master_disabled_feature(self):
+        disabled = replace(self.pipe.config, engagement_enabled=False)
+        for value in (True, "true", "invalid", None):
+            self.assertFalse(apply_runtime_overrides(disabled, {"engagement_enabled": value}).engagement_enabled)
+        for value in (False, "false"):
+            self.assertFalse(apply_runtime_overrides(self.pipe.config, {"engagement_enabled": value}).engagement_enabled)
+        self.assertTrue(apply_runtime_overrides(self.pipe.config, {}).engagement_enabled)
 
     async def test_knowledge_result_survives_interruption_in_real_generation_path(self):
         class LookupLLM:

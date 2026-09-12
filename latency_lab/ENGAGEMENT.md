@@ -76,9 +76,33 @@ Defaults in `.env.example`: first pending opportunity 0.3 s, later opportunities
 per operation and 1 idle check per caller turn, 8 banking rounds (clamped 4-12).
 These are reconsideration thresholds, not guaranteed speech deadlines. The caller
 preference review adds a model request per committed utterance and must finish
-before response release. Ordinary speculative preparation can overlap the review,
-but listening-only turns do not speculate replies/TTS. Measure contention, usage,
-and response latency before enabling broadly; this is not a zero-latency guarantee.
+before response release. Reply preparation now overlaps that review using RVC's
+existing speculative buffer, including during quiet mode. Audio, assistant
+transcripts and tool execution remain blocked until approval. A rejected or stale
+review discards the prepared response. This can spend LLM/TTS work on replies that
+will never play; measure contention, usage and response latency before enabling
+broadly. It is not a zero-latency guarantee. A new committed utterance cancels an
+older pending preference review rather than waiting behind it.
+
+### Per-call A/B comparison
+
+On the isolated dashboard, set `PUBLIC_AGENT_ENGAGEMENT_PREVIEW_ENABLED=true` and
+restart its development server. Keep `RVC_LAB_ENGAGEMENT_ENABLED=true` on the
+isolated voice worker. Open the local caller page and change the **Contextual
+engagement** checkbox before starting a call:
+
+- Checked: quiet/listening control, contextual tool updates and idle checks on.
+- Unchecked: baseline response path, without the additional caller preference
+  review or contextual engagement scheduler. Deterministic quiet/listening
+  enforcement is also off; the normal agent prompt still applies.
+
+End the call before changing modes. Use the same model, voice, caller and test
+phrases in both calls. The checkbox is hidden during calls and outside an opted-in
+development preview; production ignores this public override. The signed session
+passes `engagement_enabled=false` (boolean or string) to opt out. It cannot enable
+an operator-disabled worker flag. Existing clients that omit it keep the worker's
+configured behavior. This is an operator A/B control, not a model-callable tool,
+so conversation content cannot accidentally switch the test mode.
 
 Rollback: stop only the isolated worker, or set the feature flag false before
 starting new sessions. Do not restart an unrelated live service. A process-level
@@ -160,6 +184,45 @@ Listening-only correction on 2026-09-12:
   and dashboard now use the fresh name `rvc-silent-listening-local`. No shared
   LiveKit service, production worker, or deployment configuration was restarted.
 
+Latency correction on 2026-09-13:
+
+- Earlier traces showed about 1 second of caller preference review before reply
+  generation began; one background review took 5.437 seconds. New resume requests
+  no longer queue behind such an old review. Trace decisions now include their
+  turn ID and review duration.
+- Three samples per mode using the same configured LLM/TTS measured median time
+  from committed text to the first server audio chunk as follows:
+
+  | Mode | Before | After |
+  | --- | ---: | ---: |
+  | Engagement off, ordinary reply | 1.263 s | 1.230 s |
+  | Engagement on, ordinary reply | 2.136 s | 1.868 s |
+  | Engagement on, natural resume and recall | 2.092 s | 1.955 s |
+
+  This is a small local sample, not an acoustic/WebRTC end-to-end latency claim.
+  The resume improvement is modest and about 0.7 seconds of overhead remains
+  compared with the ordinary baseline. Two concurrent model requests still use
+  shared serving capacity; the optimization does not remove the review request.
+- Regression suite: 238 tests run, 12 skipped, no failures. Additional coverage
+  checks cancellation of slow reviews, buffered reply reuse, no quiet-mode audio
+  or assistant transcript leaks, no premature tool dispatch, baseline bypass,
+  and per-session opt-out without enabling a disabled master flag.
+- Dashboard hybrid tests: 45 passed. Production build and scoped lint passed
+  (3 pre-existing image warnings). The checkbox was checked in mobile and desktop
+  layouts, is absent during calls, and both settings reached the local worker.
+- Web-call verification with typed input: off returned the baseline answer; on
+  retained the notebook, meeting and guest count while quiet, then recalled all
+  3 on "Okay, now you can talk." There were 0 audio chunks during the quiet turns,
+  0 tool starts and 0 generation errors. Resume reached the first server audio
+  chunk in 2.517 s in this full configured-agent call, distinct from the smaller
+  benchmark above. Microphone was muted for controlled submissions; incidental
+  pre-mute speech means this is not a clean acoustic latency measurement.
+- Two repeated synthetic-speech ASR checks did not finish: a short sentence
+  failed the existing 240 ms continuous-speech gate and never produced a final
+  transcript. Earlier utterances were retained silently. No VAD threshold was
+  weakened to make this pass. Physical microphone acceptance and this short-speech
+  edge case remain unverified by the current change.
+
 ## Release gate
 
 Do not deploy this checkout over a running image without comparing its source
@@ -167,5 +230,5 @@ and release manifest. The inspected Lagos runtime contains additional SIP/AICC
 handoff and closing-intent changes not present in the Git base used here. Preserve
 and reconcile those first. The Git `dev` branch and RVC `main` history also differ
 substantially; a promotion must not sweep unrelated changes into the old stack.
-No deployment targets, secrets, live services, SDKs, or dashboard layout are changed
+No deployment targets, secrets, live services, SDKs, or production dashboard layout are changed
 by this feature.
