@@ -104,6 +104,15 @@ class LiveKitPCMTransport:
                 await self.source.wait_for_playout()
             await self._finish_playout(attempt)
             return
+        if kind == "tts_segment_end":
+            attempt = self.pipeline.attempt if self.pipeline else None
+            if self.playing:
+                await self.source.wait_for_playout()
+            if self.pipeline is not None and self.pipeline.attempt is attempt:
+                self.playing = False
+                await self.set_state("listening")
+                await self.pipeline.client_event("tts_segment_stop")
+            return
         if kind in {"stop_tts", "tts_interruption"}:
             self.source.clear_queue()
             if self.playing and self.pipeline is not None:

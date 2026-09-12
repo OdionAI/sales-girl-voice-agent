@@ -36,6 +36,7 @@ from .providers import RLLMClient, RSTTClient, RTTSClient, tts_token_budget
 from .trace import TraceRecorder
 from .banking_tools import BankingTools, BANK_TOOLS
 from .memory import ConversationMemory, CONVERSATION_RULES
+from .engagement import Engagement, ENGAGEMENT_RULES
 
 
 class Outbound(Protocol):
@@ -113,6 +114,8 @@ class Attempt:
     tool_messages: list[dict[str, Any]] = field(default_factory=list)
     turn_id: str | None = None
     audio_sent: bool = False
+    speech_tasks: list[asyncio.Task] = field(default_factory=list)
+    proactive: bool = False
 
 
 class ConversationPipeline:
@@ -169,6 +172,10 @@ class ConversationPipeline:
         self.final_timeout_task: asyncio.Task[None] | None = None
         self.turn_pcm16 = bytearray()
         self._opening_task: asyncio.Task[None] | None = None
+        self._speech_lock = asyncio.Lock()
+        self.engagement = Engagement(self)
+        if config.engagement_enabled:
+            self.system_prompt += ENGAGEMENT_RULES
 
     @property
     def history(self) -> list[dict]:
@@ -193,6 +200,7 @@ class ConversationPipeline:
             self._maybe_compact()
 
     async def start(self) -> None:
+        self.engagement.start()
         if self.config.memory_compaction_enabled and not self._memory_loop_task:
             self._memory_loop_task = asyncio.create_task(self._memory_loop())
         self.trace.record(
@@ -241,6 +249,7 @@ class ConversationPipeline:
             memory_compaction_interval_seconds=self.config.memory_compaction_interval_seconds,
             memory_recent_exchanges=self.config.memory_recent_exchanges,
             memory_context_tokens_estimate=self.config.memory_context_tokens,
+            engagement_enabled=self.config.engagement_enabled,
         )
         await self.stt.connect()
         stt_warmed = False
@@ -418,6 +427,8 @@ class ConversationPipeline:
             self._pause_compaction()
             if self.state in {"idle", "playing", "releasing"}:
                 if not self.speech_candidate_active:
+                    if self.config.engagement_enabled:
+                        self.engagement.invalidate()
                     self.turn_pcm16.clear()
                     self.speech_candidate_active = True
                     self.candidate_turn_id = f"turn-{self.turn_number + 1:04d}"
@@ -718,6 +729,7 @@ class ConversationPipeline:
             self.final_timeout_task.cancel()
             self.final_timeout_task = None
         self.final_text = text
+        self.engagement.caller_final(text)
         self.memory.user(self.turn_id, text)
         self.trace.record(
             "stt_final",
@@ -765,6 +777,8 @@ class ConversationPipeline:
         text = text.strip()
         if not text:
             return
+        if self.config.engagement_enabled:
+            self.engagement.invalidate()
         await self._cancel_attempt("caller_text_message")
         if self.stability_task:
             self.stability_task.cancel()
@@ -1048,6 +1062,7 @@ class ConversationPipeline:
                 )
                 if attempt.tool_calls:
                     await self._run_banking_tools(attempt, followup_messages, attempt.tool_calls)
+            await self._finish_speech(attempt)
             attempt.audio_complete = True
             if attempt.cancelled:
                 return
@@ -1178,9 +1193,10 @@ class ConversationPipeline:
                     if pending.call.name == "create_ticket"
                     else "Okay, one moment while I send that email."
                 )
-                await self._speak_text(
-                    attempt, acknowledgement, phase="tool_execution_acknowledgement"
-                )
+                if not self.config.engagement_enabled:
+                    await self._speak_text(
+                        attempt, acknowledgement, phase="tool_execution_acknowledgement"
+                    )
                 self.trace.record(
                     "tool_execution_start",
                     turn_id=self.turn_id,
@@ -1190,20 +1206,26 @@ class ConversationPipeline:
                 )
                 if pending.call.name in BANK_TOOLS:
                     from .action_tools import ActionResult
-                    body = await self.banking.execute(
-                        pending.call, confirmed_operation=pending.call.arguments.get("operation_id", ""),
-                        on_result=lambda body: self._retain_tool_result(attempt, pending.call, body),
+                    body = await self.engagement.run_tool(
+                        attempt, pending.call, lambda: self.banking.execute(
+                            pending.call, confirmed_operation=pending.call.arguments.get("operation_id", ""),
+                            on_result=lambda body: self._retain_tool_result(attempt, pending.call, body),
+                        ),
                     )
                     result = ActionResult(body.get("status", "failed"), body.get("message", "Request could not be completed."), body, 0)
                 else:
-                    await self.banking.activity(pending.call, "started")
-                    result = await self.action_executor.execute(pending.call)
-                    self._retain_tool_result(attempt, pending.call, {
-                        "status": result.status, "message": result.message, "data": result.data,
-                    })
-                    await self.banking.activity(pending.call, "completed", {
-                        "status": result.status, "message": result.message, "data": result.data,
-                    })
+                    async def execute_action():
+                        await self.banking.activity(pending.call, "started")
+                        result = await self.action_executor.execute(pending.call)
+                        body = {"status": result.status, "message": result.message, "data": result.data}
+                        self._retain_tool_result(attempt, pending.call, body)
+                        await self.banking.activity(pending.call, "completed", body)
+                        return result
+
+                    result = await self.engagement.run_tool(attempt, pending.call, execute_action)
+                    if isinstance(result, dict):
+                        from .action_tools import ActionResult
+                        result = ActionResult(result["status"], result["message"], result["data"], 0)
                 self.trace.record(
                     "tool_execution_complete",
                     turn_id=self.turn_id,
@@ -1221,6 +1243,7 @@ class ConversationPipeline:
                 await self._speak_text(
                     attempt, result.message, phase="tool_execution_feedback"
                 )
+            await self._finish_speech(attempt)
             attempt.audio_complete = True
             if attempt.cancelled:
                 return
@@ -1263,6 +1286,8 @@ class ConversationPipeline:
         messages = self.memory.context(exclude_turn_id=attempt.turn_id if attempt else self.turn_id)
         # Pin existing application state; summaries cannot create or confirm actions.
         state = {}
+        if self.config.engagement_enabled:
+            state.update(self.engagement.task_state())
         if self.banking.prepared:
             state["prepared_preview_not_executed"] = self.banking.prepared
         if self.pending_action:
@@ -1289,7 +1314,8 @@ class ConversationPipeline:
         return request, reply
 
     async def _run_banking_tools(self, attempt: Attempt, messages: list[dict], calls: list) -> None:
-        for round_number in range(4):
+        rounds = max(4, min(12, self.config.engagement_bank_tool_rounds)) if self.config.engagement_enabled else 4
+        for round_number in range(rounds):
             if attempt.cancelled or not attempt.authorized:
                 return
             for call in calls:
@@ -1298,8 +1324,10 @@ class ConversationPipeline:
                 if call.name == "wema_execute_prepared" and self.banking.prepared:
                     await self._request_bank_confirmation(attempt)
                     return
-                body = await self.banking.execute(
-                    call, on_result=lambda body: self._retain_tool_result(attempt, call, body)
+                body = await self.engagement.run_tool(
+                    attempt, call, lambda call=call: self.banking.execute(
+                        call, on_result=lambda body: self._retain_tool_result(attempt, call, body)
+                    ),
                 )
                 request, reply = self._retain_tool_result(attempt, call, body)
                 messages.extend([request, reply])
@@ -1311,7 +1339,7 @@ class ConversationPipeline:
                     calls = []
                     break
             followup_tools = [item for item in self.action_tools
-                              if item["function"]["name"] in BANK_TOOLS] if calls and round_number < 3 else None
+                              if item["function"]["name"] in BANK_TOOLS] if calls and round_number < rounds - 1 else None
             if attempt.answer:
                 attempt.answer = attempt.answer.rstrip() + " "
             calls = await self._stream_llm_and_tts(attempt, messages, phase="bank_tool_result", tools=followup_tools)
@@ -1390,7 +1418,12 @@ class ConversationPipeline:
                 )
                 await phrase_queue.put(phrase)
             await phrase_queue.put(None)
-            await tts_task
+            if self.config.engagement_enabled and tool_calls:
+                # Speech may drain while the committed tool executes. Keep task
+                # ownership on this attempt so barge-in still cancels its audio.
+                attempt.speech_tasks.append(tts_task)
+            else:
+                await tts_task
             return tool_calls
         except BaseException:
             tts_task.cancel()
@@ -1419,6 +1452,12 @@ class ConversationPipeline:
         await self._synthesize_phrases(attempt, phrase_queue, phase=phase)
 
     async def _synthesize_phrases(
+        self, attempt: Attempt, queue: asyncio.Queue[str | None], *, phase: str,
+    ) -> None:
+        async with self._speech_lock:
+            await self._synthesize_phrases_locked(attempt, queue, phase=phase)
+
+    async def _synthesize_phrases_locked(
         self,
         attempt: Attempt,
         queue: asyncio.Queue[str | None],
@@ -1492,12 +1531,54 @@ class ConversationPipeline:
             await self._commit_attempt_text(attempt)
             await self.send({"type": "tts_end"})
 
+    async def _finish_speech(self, attempt: Attempt) -> None:
+        if attempt.speech_tasks:
+            await asyncio.gather(*attempt.speech_tasks)
+            attempt.speech_tasks.clear()
+
+    async def _play_engagement(self, policy, attempt, reason, revision, text, sample_rate, chunks):
+        async with self._speech_lock:
+            if not policy.safe(revision, attempt, reason):
+                return False
+            proactive = attempt is None
+            if proactive:
+                attempt = Attempt(id=f"engagement-{uuid.uuid4().hex[:8]}", hypothesis="",
+                                  speculative=False, authorized=True, proactive=True,
+                                  turn_id=f"engagement-{uuid.uuid4().hex[:8]}")
+                attempt.authorization_event.set()
+                self.attempt = attempt
+                self.turn_id = attempt.turn_id
+                self._transition("releasing", "contextual_engagement")
+            policy.emitting = True
+            try:
+                for chunk in chunks:
+                    if not policy.safe(revision, attempt, reason):
+                        return False
+                    await self._send_audio(sample_rate, chunk, attempt)
+                attempt.answer = f"{attempt.answer.strip()} {text}".strip()
+                await self.send({"type": "partial_assistant_answer", "content": attempt.answer})
+                self.trace.record("engagement_spoken", turn_id=attempt.turn_id,
+                                  attempt_id=attempt.id, reason=reason, text=text)
+                if proactive:
+                    attempt.audio_complete = True
+                    await self._commit_attempt_text(attempt)
+                    await self.send({"type": "tts_end"})
+                elif self.transport == "livekit":
+                    await self.send({"type": "tts_segment_end"})
+                return True
+            finally:
+                if proactive and self.attempt is attempt and not attempt.audio_sent:
+                    self.attempt = None
+                    self.turn_id = None
+                    self._transition("idle", "engagement_discarded")
+
     async def _commit_attempt_text(self, attempt: Attempt) -> None:
         if attempt.response_committed:
             return
         attempt.response_committed = True
         turn_id = attempt.turn_id or self.turn_id
-        self.memory.user(turn_id, self.final_text or attempt.hypothesis)
+        if not attempt.proactive:
+            self.memory.user(turn_id, self.final_text or attempt.hypothesis)
         self.memory.answer(turn_id, attempt.answer.strip())
         await self.send({"type": "final_assistant_answer", "content": attempt.answer.strip()})
 
@@ -1510,6 +1591,8 @@ class ConversationPipeline:
                 "sample_rate": sample_rate,
             }
         )
+        if self.config.engagement_enabled:
+            self.engagement.audio_sent(len(chunk) / (sample_rate * 2))
         self.trace.record(
             "audio_chunk_sent",
             turn_id=self.turn_id,
@@ -1520,10 +1603,15 @@ class ConversationPipeline:
         )
 
     async def _cancel_attempt(self, reason: str, **data: Any) -> None:
+        if self.config.engagement_enabled:
+            self.engagement.invalidate()
         attempt = self.attempt
         if not attempt:
             return
         attempt.cancelled = True
+        for task in attempt.speech_tasks:
+            task.cancel()
+        await asyncio.gather(*attempt.speech_tasks, return_exceptions=True)
         released = attempt.authorized
         knowledge_was_pending = bool(
             attempt.knowledge_task and not attempt.knowledge_task.done()
@@ -1569,6 +1657,7 @@ class ConversationPipeline:
             self.memory.finish(turn_id, interrupted=True)
         if released:
             await self.send({"type": "stop_tts"})
+            self.engagement.playback_stopped()
         self.attempt = None
 
     async def client_event(self, kind: str, data: dict[str, Any] | None = None) -> None:
@@ -1598,6 +1687,7 @@ class ConversationPipeline:
             )
             self._transition("playing", f"{self.transport}_confirmed_playback")
         elif kind == "tts_stop":
+            self.engagement.playback_stopped()
             self.trace.record(
                 f"{self.transport}_playback_stop",
                 turn_id=self.turn_id,
@@ -1608,6 +1698,10 @@ class ConversationPipeline:
                     else "livekit_audio_source_queue_drained"
                 ),
             )
+            if (self.config.engagement_enabled and self.attempt
+                    and not self.attempt.audio_complete and not self.attempt.cancelled):
+                self._transition("releasing", "audio_segment_drained_work_still_pending")
+                return
             if self.turn_id:
                 self.memory.finish(self.turn_id)
                 self.closed_turns.add(self.turn_id)
@@ -1620,12 +1714,17 @@ class ConversationPipeline:
             self._transition("idle", "turn_completed")
             self.turn_id = None
             self.attempt = None
+        elif kind == "tts_segment_stop":
+            self.engagement.playback_stopped()
+            if self.attempt and not self.attempt.cancelled:
+                self._transition("releasing", "engagement_segment_drained")
         elif kind == "clear_history":
             self._pause_compaction()
             self.memory.clear()
             self.trace.record("history_cleared", reason="browser_request")
 
     async def close(self) -> None:
+        await self.engagement.close()
         tasks = [task for task in (self._memory_loop_task, self._compaction_task) if task]
         for task in tasks:
             task.cancel()

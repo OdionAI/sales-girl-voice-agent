@@ -64,6 +64,14 @@ def _bool(name: str, default: bool) -> bool:
 
 @dataclass(frozen=True)
 class LabConfig:
+    engagement_enabled: bool = _bool("RVC_LAB_ENGAGEMENT_ENABLED", False)
+    engagement_ack_seconds: float = _float("RVC_LAB_ENGAGEMENT_ACK_SECONDS", 0.3)
+    engagement_tool_seconds: float = _float("RVC_LAB_ENGAGEMENT_TOOL_SECONDS", 8.0)
+    engagement_idle_seconds: float = _float("RVC_LAB_ENGAGEMENT_IDLE_SECONDS", 18.0)
+    engagement_generation_timeout_seconds: float = _float("RVC_LAB_ENGAGEMENT_GENERATION_TIMEOUT_SECONDS", 6.0)
+    engagement_max_tool_updates: int = int(_float("RVC_LAB_ENGAGEMENT_MAX_TOOL_UPDATES", 3))
+    engagement_max_idle_updates: int = int(_float("RVC_LAB_ENGAGEMENT_MAX_IDLE_UPDATES", 1))
+    engagement_bank_tool_rounds: int = int(_float("RVC_LAB_ENGAGEMENT_BANK_TOOL_ROUNDS", 8))
     opening_greeting_enabled: bool = _bool("RVC_LAB_OPENING_GREETING_ENABLED", True)
     opening_greeting_text: str = os.getenv("RVC_LAB_OPENING_GREETING_TEXT", "").strip()
     agent_config_api_base_url: str = _url(
