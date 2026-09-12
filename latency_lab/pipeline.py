@@ -169,6 +169,7 @@ class ConversationPipeline:
         self.final_text = ""
         self.attempt: Attempt | None = None
         self.stability_task: asyncio.Task[None] | None = None
+        self._final_response_task: asyncio.Task[None] | None = None
         self.memory = ConversationMemory(config, trace)
         self._memory_loop_task: asyncio.Task | None = None
         self._compaction_task: asyncio.Task | None = None
@@ -700,6 +701,11 @@ class ConversationPipeline:
             await asyncio.sleep(self.config.stable_partial_ms / 1000)
             if text != self.last_partial or self.state not in {"speaking", "speculating"}:
                 return
+            if self.config.engagement_enabled and (
+                self.engagement.quiet != "none" or self.engagement.preference_uncertain
+                or (self.engagement.preference_task and not self.engagement.preference_task.done())
+            ):
+                return
             self.trace.record(
                 "stt_stable_partial",
                 turn_id=self.turn_id,
@@ -744,21 +750,11 @@ class ConversationPipeline:
             self.final_timeout_task.cancel()
             self.final_timeout_task = None
         self.final_text = text
-        if self.config.engagement_enabled:
-            reviewed_turn = self.turn_id
-            accepted = await self.engagement.accept_caller_turn(text)
-            if self.turn_id != reviewed_turn:
-                return
-            if not accepted:
-                await self._cancel_attempt("silence_preference_unaddressed_speech")
-                self.closed_turns.add(reviewed_turn)
-                self.last_closed_turn_id = reviewed_turn
-                self.turn_id = None
-                self._clear_speech_candidate()
-                self._transition("idle", "silence_preference_preserved")
-                return
+        reviewed_turn = self.turn_id
         self.engagement.caller_final(text)
-        self.memory.user(self.turn_id, text)
+        # Retain input before any response decision, including when the model is
+        # slow or the caller asks us to listen without speaking.
+        self.memory.user(self.turn_id, text, listening_only=self.config.engagement_enabled)
         self.conversations.spawn(self.conversations.add_user(text, turn_id=self.turn_id))
         self.trace.record(
             "stt_final",
@@ -775,6 +771,40 @@ class ConversationPipeline:
         if self.stability_task:
             self.stability_task.cancel()
             self.stability_task = None
+        if self.config.engagement_enabled:
+            if self._final_response_task:
+                self._final_response_task.cancel()
+                await asyncio.gather(self._final_response_task, return_exceptions=True)
+            # Return to the ASR receive loop immediately. New microphone speech
+            # can interrupt this decision just as it can interrupt a response.
+            self._transition("releasing", "caller_final_retained_pending_response")
+            self._final_response_task = asyncio.create_task(
+                self._review_final_response(reviewed_turn, text), name="rvc-final-response")
+            return
+        await self._respond_to_final(text)
+
+    async def _review_final_response(self, turn_id: str, text: str) -> None:
+        try:
+            accepted = await self.engagement.accept_caller_turn(text)
+            if self.turn_id != turn_id or self.speech_candidate_active or self.engagement.closed:
+                return
+            if not accepted:
+                await self._cancel_attempt("silence_preference_preserved")
+                self.closed_turns.add(turn_id)
+                self.last_closed_turn_id = turn_id
+                self.trace.record("turn_close", turn_id=turn_id, reason="listening_only")
+                self.turn_id = None
+                self._clear_speech_candidate()
+                self._transition("idle", "silence_preference_preserved")
+                return
+            self.memory.turn(turn_id).listening_only = False
+            await self._respond_to_final(text)
+        finally:
+            turn = next((turn for turn in self.memory.turns if turn.id == turn_id), None)
+            if turn and turn.listening_only:
+                self.memory.finish(turn_id)
+
+    async def _respond_to_final(self, text: str) -> None:
         if self.attempt:
             similarity = SequenceMatcher(None, normalize(self.attempt.hypothesis), normalize(text)).ratio()
             # Approximate text matches cannot authorize banking arguments.
@@ -1717,6 +1747,10 @@ class ConversationPipeline:
         )
 
     async def _cancel_attempt(self, reason: str, **data: Any) -> None:
+        if self._final_response_task and self._final_response_task is not asyncio.current_task():
+            self._final_response_task.cancel()
+            await asyncio.gather(self._final_response_task, return_exceptions=True)
+            self._final_response_task = None
         if self.config.engagement_enabled:
             self.engagement.invalidate()
         attempt = self.attempt

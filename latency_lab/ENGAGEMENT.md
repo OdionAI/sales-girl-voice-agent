@@ -15,11 +15,18 @@ is introduced.
   tools need no filler. Updates may describe only actual pending work/results.
 - Idle gaps can trigger one contextual check-in, or silence. There is no canned
   progress/idle utterance. Invalid output and timeouts produce no optional audio.
-- A lightweight model preference review runs alongside ordinary turns. The next
-  turn observes that review before proceeding. While quiet is pinned, incoming
-  speech must be judged directed to the assistant before replies or tools start.
-  Background dialogue and ambiguous speech preserve quiet. This is contextual
-  filtering, not speaker identification or acoustic noise suppression.
+- Quiet means listening-only, not input suppression. Final ASR text is published
+  and persisted immediately, before response authorization. Partials still appear.
+  Quiet-period speech remains in memory as listening-only reference, not requests
+  or confirmations to execute later. Long listening periods can be compacted with
+  that provenance; normal context-size limits still apply.
+- A lightweight model preference review authorizes responses off the ASR receive
+  loop. It can suppress even the initial acknowledgement of a silence request.
+  New speech can interrupt a pending decision; stale responses cannot start.
+  While quiet is pinned, background dialogue and ambiguous speech preserve quiet.
+  Natural resume requests work without a fixed wake phrase, unless the caller
+  explicitly specified one. This is contextual filtering, not speaker identity
+  detection or acoustic noise suppression. Microphone mute still stops input.
 - Quiet is stored outside compacted chat history. Time passing cannot clear it.
   `until_user` suppresses check-ins; `until_result` suppresses pending updates.
 - One speech lock prevents overlapping synthesis/playback streams. Optional
@@ -68,8 +75,10 @@ Defaults in `.env.example`: first pending opportunity 0.3 s, later opportunities
 8 s, idle 18 s, decision/audio preparation deadline 6 s, at most 3 pending checks
 per operation and 1 idle check per caller turn, 8 banking rounds (clamped 4-12).
 These are reconsideration thresholds, not guaranteed speech deadlines. The caller
-preference review adds a model request per committed utterance; measure contention
-and usage alongside normal response latency before enabling broadly.
+preference review adds a model request per committed utterance and must finish
+before response release. Ordinary speculative preparation can overlap the review,
+but listening-only turns do not speculate replies/TTS. Measure contention, usage,
+and response latency before enabling broadly; this is not a zero-latency guarantee.
 
 Rollback: stop only the isolated worker, or set the feature flag false before
 starting new sessions. Do not restart an unrelated live service. A process-level
@@ -95,9 +104,12 @@ Manual acceptance sequence:
    first, then report each balance before checking the next."
 3. Verify one account-list lookup and five actual balance results. Spoken promises
    alone do not count. Check audio continuity, barge-in, and final playout drain.
-4. Ask the agent to stay quiet until another question. Wait beyond the idle timer,
-   then play unrelated dialogue. Neither the timer nor that dialogue should resume it.
-5. Address the assistant explicitly and ask a new question. Verify it resumes.
+4. Ask the agent to keep listening silently until told it can talk. Speak 3 facts,
+   wait beyond the idle timer, then play unrelated dialogue. All recognized speech
+   must remain visible in the transcript without replies or new tool execution.
+5. Say "Okay, now you can talk. What did I just tell you?" Verify it recalls those
+   facts. Repeat while a preference review is slow and with ordinary resume
+   paraphrases. Repeat with an explicit wake phrase and respect that condition.
 6. Use controlled delayed read-only work to exercise progress updates; short bank
    responses may never require a timed update. Test result-arrival/caller-speech races.
 
@@ -122,6 +134,21 @@ Local evaluation on 2026-09-12:
   committed-turn path. Repeat the acoustic movie/microphone test before rollout.
 - Regression suite: 225 tests run, 12 skipped, no failures. The additional dashboard
   saved-policy test passed. No SDK build or production deployment was performed.
+
+Listening-only correction on 2026-09-12:
+
+- The earlier unaddressed-turn test incorrectly expected discarded history. Quiet
+  now gates output/actions after transcript retention, not incoming speech. The
+  preference review also no longer blocks ASR from receiving another utterance.
+- An actual-provider test fed synthesized caller speech through the configured
+  streaming ASR and pipeline. The agent stayed silent while retaining a green
+  notebook, Friday meeting, and 5 guests, stayed silent beyond the idle timer, then
+  recalled all 3 details on natural-language permission to resume. This verifies
+  ASR/model/TTS behavior with synthetic speech, not a physical microphone or what
+  a caller hears over WebRTC.
+- Regression suite: 234 tests run, 12 skipped, no failures. Coverage includes
+  immediate publication/persistence, recognition during delayed reviews, quiet
+  partials, interruption, shutdown, recall context, and compaction provenance.
 
 ## Release gate
 
