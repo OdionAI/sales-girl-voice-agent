@@ -2,6 +2,10 @@
 
 Status: opt-in local evaluation. `RVC_LAB_ENGAGEMENT_ENABLED=false` by default.
 
+Current implementation: the normal conversation LLM controls an output gate via
+`set_speech_enabled`. The earlier separate caller-preference review is removed.
+The dated evaluation notes below retain the history of that superseded design.
+
 The timer decides when to reconsider; the model decides whether and what to
 say; the RVC runtime decides whether it is still safe to play it. LiveKit remains
 PCM/data transport. No `AgentSession` orchestration or additional model/provider
@@ -20,13 +24,23 @@ is introduced.
   Quiet-period speech remains in memory as listening-only reference, not requests
   or confirmations to execute later. Long listening periods can be compacted with
   that provenance; normal context-size limits still apply.
-- A lightweight model preference review authorizes responses off the ASR receive
-  loop. It can suppress even the initial acknowledgement of a silence request.
-  New speech can interrupt a pending decision; stale responses cannot start.
-  While quiet is pinned, background dialogue and ambiguous speech preserve quiet.
-  Natural resume requests work without a fixed wake phrase, unless the caller
-  explicitly specified one. This is contextual filtering, not speaker identity
-  detection or acoustic noise suppression. Microphone mute still stops input.
+- The existing conversation generation interprets natural-language instructions
+  and calls `set_speech_enabled({enabled, response})`. There are no phrase/keyword
+  checks and no second review model request. While closed, only this tool is
+  available, with required structured output: the model can keep enabled=false
+  and response empty, or open the gate and supply its first spoken reply in the
+  same generation. Ordinary open-gate replies still stream normally.
+- Quiet suppresses TTS and assistant transcript output, not input or model
+  context. New speech cancels stale generation. Natural resume wording works
+  without a fixed wake phrase, unless the caller explicitly specified one. This
+  remains model-based interpretation, not speaker identity or noise suppression.
+  Microphone mute still stops input.
+- Gate changes require final utterance authority; speculation cannot change it.
+  Timers/tool results cannot reopen it, and resuming cannot confirm a pending
+  action. The gate-changing generation cannot also dispatch a business tool.
+  The model is instructed to call the close tool before emitting spoken text.
+  The runtime stops queued speech as soon as that tool arrives, but cannot retract
+  words already heard if the model violates that ordering.
 - Quiet is stored outside compacted chat history. Time passing cannot clear it.
   `until_user` suppresses check-ins; `until_result` suppresses pending updates.
 - One speech lock prevents overlapping synthesis/playback streams. Optional
@@ -74,15 +88,12 @@ setting for both RVC transport modes; do not turn off server authentication to t
 Defaults in `.env.example`: first pending opportunity 0.3 s, later opportunities
 8 s, idle 18 s, decision/audio preparation deadline 6 s, at most 3 pending checks
 per operation and 1 idle check per caller turn, 8 banking rounds (clamped 4-12).
-These are reconsideration thresholds, not guaranteed speech deadlines. The caller
-preference review adds a model request per committed utterance and must finish
-before response release. Reply preparation now overlaps that review using RVC's
-existing speculative buffer, including during quiet mode. Audio, assistant
-transcripts and tool execution remain blocked until approval. A rejected or stale
-review discards the prepared response. This can spend LLM/TTS work on replies that
-will never play; measure contention, usage and response latency before enabling
-broadly. It is not a zero-latency guarantee. A new committed utterance cancels an
-older pending preference review rather than waiting behind it.
+These are reconsideration thresholds, not guaranteed speech deadlines. Ordinary
+turns use one conversation generation, not a response plus a permission review.
+While quiet, that generation interprets input through the gate tool, without TTS
+unless it opens the gate. Normal speculation remains unchanged; quiet partials
+are published but wait for a final transcript before generation. Extra tool/schema
+tokens and model/TTS serving time still cost time; this is not a zero-latency claim.
 
 ### Per-call A/B comparison
 
@@ -92,8 +103,8 @@ isolated voice worker. Open the local caller page and change the **Contextual
 engagement** checkbox before starting a call:
 
 - Checked: quiet/listening control, contextual tool updates and idle checks on.
-- Unchecked: baseline response path, without the additional caller preference
-  review or contextual engagement scheduler. Deterministic quiet/listening
+- Unchecked: baseline response path, without the output-gate tool or contextual
+  engagement scheduler. Deterministic quiet/listening
   enforcement is also off; the normal agent prompt still applies.
 
 End the call before changing modes. Use the same model, voice, caller and test
@@ -132,7 +143,7 @@ Manual acceptance sequence:
    wait beyond the idle timer, then play unrelated dialogue. All recognized speech
    must remain visible in the transcript without replies or new tool execution.
 5. Say "Okay, now you can talk. What did I just tell you?" Verify it recalls those
-   facts. Repeat while a preference review is slow and with ordinary resume
+   facts. Repeat while a caller generation is slow and with ordinary resume
    paraphrases. Repeat with an explicit wake phrase and respect that condition.
 6. Use controlled delayed read-only work to exercise progress updates; short bank
    responses may never require a timed update. Test result-arrival/caller-speech races.
@@ -222,6 +233,41 @@ Latency correction on 2026-09-13:
   transcript. Earlier utterances were retained silently. No VAD threshold was
   weakened to make this pass. Physical microphone acceptance and this short-speech
   edge case remain unverified by the current change.
+
+## Tool-controlled gate evaluation (2026-09-13)
+
+This supersedes the separate-review implementation described in the earlier logs.
+The normal generation has a `set_speech_enabled` tool. Open-gate turns keep normal
+streaming and automatic tool choice. Closed-gate turns offer only the gate tool
+with required structured output, so the model can retain silence or reopen it
+and supply its first reply without a second request. No caller sentence matching
+is performed. Timer generations cannot change this state.
+
+The actual configured LLM/TTS passed two natural silence/resume cycles, remembered
+the green notebook/Friday/5 guests and blue suitcase, and ignored a quoted movie
+line asking whether someone could talk. Plain-text-only resume output was caught
+in an early probe; requiring the gate tool while closed corrected that failure.
+
+Three local committed-text samples measured ordinary first server audio at
+1176/1157/1504 ms off and 1186/1195/2429 ms on (medians 1176 and 1195 ms).
+Three resume samples were 3108/1749/1723 ms, all with the correct recalled answer.
+These are small samples, not microphone-to-ear guarantees; one earlier baseline
+probe failed with a TTS connection reset. Tool schema/argument generation and
+provider variability still take time. The removed extra review request is not
+hidden behind another background request.
+
+The regression suite covers ordinary single-generation responses, no quiet TTS,
+natural-command tool application, stale/speculative tool rejection, partial and
+final transcript retention, cancellation of slow quiet generations, invalid tool
+arguments, timer non-authority, and pending-action protection. Closing the gate
+does not wait for TTS to finish. Other deployment restrictions below still apply.
+
+239 regression tests ran successfully (12 skipped). The updated local web call
+also retained all 3 details while quiet and recalled them on "You have the floor
+again." Its trace contained exactly one conversation generation for each of the
+3 submitted turns, 0 quiet-period audio chunks, and 0 generation errors. This was
+typed input through a real LiveKit call with the microphone muted, not a fresh
+physical-microphone acceptance test. Production was not changed.
 
 ## Release gate
 

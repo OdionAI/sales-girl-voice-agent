@@ -36,7 +36,7 @@ from .providers import RLLMClient, RSTTClient, RTTSClient, tts_token_budget
 from .trace import TraceRecorder
 from .banking_tools import BankingTools, BANK_TOOLS
 from .memory import ConversationMemory, CONVERSATION_RULES
-from .engagement import Engagement, ENGAGEMENT_RULES
+from .engagement import Engagement, ENGAGEMENT_RULES, SPEECH_GATE_RULES, SPEECH_GATE_TOOL
 from .conversation_persist import ConversationStore, caller_from_identity
 from .usage import UsageCollector, UsageReporter
 
@@ -112,6 +112,8 @@ class Attempt:
     knowledge_task: asyncio.Task[KnowledgeResult] | None = None
     knowledge_result: KnowledgeResult | None = None
     tool_calls: list[ActionToolCall] = field(default_factory=list)
+    speech_control: ActionToolCall | None = None
+    speech_control_applied: bool = False
     end_call_requested: bool = False
     tool_messages: list[dict[str, Any]] = field(default_factory=list)
     turn_id: str | None = None
@@ -702,8 +704,7 @@ class ConversationPipeline:
             if text != self.last_partial or self.state not in {"speaking", "speculating"}:
                 return
             if self.config.engagement_enabled and (
-                self.engagement.quiet != "none" or self.engagement.preference_uncertain
-                or (self.engagement.preference_task and not self.engagement.preference_task.done())
+                not self.engagement.speech_enabled
             ):
                 return
             self.trace.record(
@@ -750,11 +751,10 @@ class ConversationPipeline:
             self.final_timeout_task.cancel()
             self.final_timeout_task = None
         self.final_text = text
-        reviewed_turn = self.turn_id
         self.engagement.caller_final(text)
         # Retain input before any response decision, including when the model is
         # slow or the caller asks us to listen without speaking.
-        self.memory.user(self.turn_id, text, listening_only=self.config.engagement_enabled)
+        self.memory.user(self.turn_id, text, listening_only=not self.engagement.speech_enabled)
         self.conversations.spawn(self.conversations.add_user(text, turn_id=self.turn_id))
         self.trace.record(
             "stt_final",
@@ -776,41 +776,12 @@ class ConversationPipeline:
                 self._final_response_task.cancel()
                 await asyncio.gather(self._final_response_task, return_exceptions=True)
             # Return to the ASR receive loop immediately. New microphone speech
-            # can interrupt this decision just as it can interrupt a response.
+            # can interrupt this generation without stopping input retention.
             self._transition("releasing", "caller_final_retained_pending_response")
             self._final_response_task = asyncio.create_task(
-                self._review_final_response(reviewed_turn, text), name="rvc-final-response")
+                self._respond_to_final(text), name="rvc-final-response")
             return
         await self._respond_to_final(text)
-
-    async def _review_final_response(self, turn_id: str, text: str) -> None:
-        review = asyncio.create_task(self.engagement.accept_caller_turn(text))
-        try:
-            # Reuse RVC's speculative buffer during permission review. Audio,
-            # assistant transcripts and tools remain held until authorization.
-            if not self.attempt or self.attempt.hypothesis.strip().casefold() != text.strip().casefold():
-                await self._start_attempt(text, speculative=True, authorized=False)
-            accepted = await review
-            if self.turn_id != turn_id or self.speech_candidate_active or self.engagement.closed:
-                return
-            if not accepted:
-                await self._cancel_attempt("silence_preference_preserved")
-                self.closed_turns.add(turn_id)
-                self.last_closed_turn_id = turn_id
-                self.trace.record("turn_close", turn_id=turn_id, reason="listening_only")
-                self.turn_id = None
-                self._clear_speech_candidate()
-                self._transition("idle", "silence_preference_preserved")
-                return
-            self.memory.turn(turn_id).listening_only = False
-            await self._respond_to_final(text)
-        finally:
-            if not review.done():
-                review.cancel()
-            await asyncio.gather(review, return_exceptions=True)
-            turn = next((turn for turn in self.memory.turns if turn.id == turn_id), None)
-            if turn and turn.listening_only:
-                self.memory.finish(turn_id)
 
     async def _respond_to_final(self, text: str) -> None:
         if self.attempt:
@@ -833,6 +804,10 @@ class ConversationPipeline:
                 self.attempt.authorized = True
                 self.attempt.authorization_event.set()
                 self._transition("releasing", "final_validated_prepared_response")
+                if self.attempt.speech_control:
+                    # The generation task applies the tool after final authority.
+                    # Do not release speculative text prepared before that tool.
+                    return
                 await self._release_held(self.attempt)
                 return
             await self._cancel_attempt("final_transcript_changed", similarity=round(similarity, 3))
@@ -876,7 +851,8 @@ class ConversationPipeline:
             ),
         )
         if authorized:
-            self.memory.user(attempt.turn_id, self.final_text or text)
+            self.memory.user(attempt.turn_id, self.final_text or text,
+                             listening_only=not self.engagement.speech_enabled)
             attempt.authorization_event.set()
         attempt.knowledge_query = text
         attempt.knowledge_gate_reason = "awaiting_explicit_llm_knowledge_request"
@@ -889,7 +865,10 @@ class ConversationPipeline:
             text=text,
             authorized=authorized,
         )
-        if self.pending_action:
+        if self.pending_action and (not self.config.engagement_enabled or (
+                self.engagement.speech_enabled and (
+                    self._bank_confirmation(text) if self.pending_action.call.name == "wema_execute_prepared"
+                    else confirmation_decision(text)) != "unclear")):
             self.trace.record(
                 "tool_confirmation_evidence_start",
                 turn_id=self.turn_id,
@@ -913,9 +892,47 @@ class ConversationPipeline:
         )
         attempt.task = asyncio.create_task(self._generate(attempt), name=attempt.id)
 
+    async def _apply_speech_control(self, attempt: Attempt) -> None:
+        call = attempt.speech_control
+        if (not call or attempt.speech_control_applied or not attempt.authorized
+                or attempt.cancelled or self.attempt is not attempt
+                or self.turn_id != attempt.turn_id or self.engagement.closed):
+            return
+        attempt.speech_control_applied = True
+        args = call.arguments
+        if (set(args) != {"enabled", "response"} or type(args.get("enabled")) is not bool
+                or not isinstance(args.get("response"), str) or len(args["response"]) > 2000
+                or (not args["enabled"] and args["response"])):
+            self.trace.record("speech_gate_rejected", turn_id=attempt.turn_id,
+                              reason="invalid_structured_arguments")
+            attempt.answer = ""
+            attempt.held_audio.clear()
+            return
+        self.engagement.set_speech_enabled(args["enabled"])
+        attempt.answer = ""
+        attempt.held_audio.clear()
+        self._retain_tool_result(attempt, call, {"speech_enabled": args["enabled"]})
+        self.trace.record("speech_gate_changed", turn_id=attempt.turn_id,
+                          enabled=args["enabled"])
+        if not args["enabled"]:
+            for task in attempt.speech_tasks:
+                task.cancel()
+            await asyncio.gather(*attempt.speech_tasks, return_exceptions=True)
+            attempt.speech_tasks.clear()
+            await self.send({"type": "stop_tts"})
+            self.engagement.playback_stopped()
+            self.memory.turn(attempt.turn_id).listening_only = True
+        elif args["response"]:
+            await self._speak_text(attempt, args["response"], phase="speech_gate_resume")
+
     async def _generate(self, attempt: Attempt) -> None:
         messages = [
-            {"role": "system", "content": self.system_prompt},
+            {"role": "system", "content": self.system_prompt + (
+                "\n" + SPEECH_GATE_RULES +
+                f"\nThe current speech_enabled flag is {str(self.engagement.speech_enabled).lower()}. "
+                "When false, plain text is discarded: use the gate tool to respond "
+                "to contextual permission to resume."
+                if self.config.engagement_enabled else "")},
             *self._recent_history(attempt),
             {"role": "user", "content": attempt.hypothesis},
         ]
@@ -924,8 +941,19 @@ class ConversationPipeline:
                 attempt,
                 messages,
                 phase="prompt_first",
-                tools=self.action_tools,
+                tools=([SPEECH_GATE_TOOL] + (
+                    self.action_tools if self.engagement.speech_enabled and not self.pending_action else []
+                ) if self.config.engagement_enabled else self.action_tools),
             )
+            if attempt.speech_control:
+                if not attempt.authorized:
+                    await attempt.authorization_event.wait()
+                await self._apply_speech_control(attempt)
+                attempt.tool_calls = []
+            if not self.engagement.speech_enabled:
+                attempt.tool_calls = []
+                attempt.answer = ""
+                attempt.held_audio.clear()
             attempt.initial_answer = attempt.answer.strip()
             if attempt.tool_calls:
                 call = attempt.tool_calls[0]
@@ -1037,7 +1065,8 @@ class ConversationPipeline:
                     await self._speak_text(
                         attempt, prompt, phase="tool_confirmation"
                     )
-            elif requests_knowledge_lookup(attempt.initial_answer):
+            elif (self.engagement.speech_enabled and not attempt.speech_control
+                  and not self.pending_action and requests_knowledge_lookup(attempt.initial_answer)):
                 if not self.config.engagement_enabled or attempt.authorized:
                     await self.send(
                         {
@@ -1516,11 +1545,24 @@ class ConversationPipeline:
                 "llm_request_start", turn_id=attempt.turn_id, attempt_id=attempt.id,
                 phase=phase,
             )
-            async for event in self.llm.stream(messages, tools=tools):
+            gate_choice = ({"tool_choice": "required"}
+                           if self.config.engagement_enabled and phase == "prompt_first"
+                           and not self.engagement.speech_enabled else {})
+            async for event in self.llm.stream(messages, tools=tools, **gate_choice):
                 if attempt.cancelled:
                     raise asyncio.CancelledError
                 if isinstance(event, ActionToolCall):
+                    if self.config.engagement_enabled and event.name == "set_speech_enabled":
+                        if phase == "prompt_first" and attempt.speech_control is None:
+                            attempt.speech_control = event
+                            if attempt.authorized and event.arguments.get("enabled") is False:
+                                await self._apply_speech_control(attempt)
+                                tts_task.cancel()
+                                await asyncio.gather(tts_task, return_exceptions=True)
+                        continue
                     tool_calls.append(event)
+                    continue
+                if not self.engagement.speech_enabled:
                     continue
                 token = event
                 if first_token:
@@ -1561,7 +1603,7 @@ class ConversationPipeline:
                 # Speech may drain while the committed tool executes. Keep task
                 # ownership on this attempt so barge-in still cancels its audio.
                 attempt.speech_tasks.append(tts_task)
-            else:
+            elif not tts_task.cancelled():
                 await tts_task
             return tool_calls
         except BaseException:
@@ -1571,7 +1613,7 @@ class ConversationPipeline:
 
     async def _speak_text(self, attempt: Attempt, text: str, *, phase: str) -> None:
         clean = str(text or "").strip()
-        if not clean or attempt.cancelled:
+        if not clean or attempt.cancelled or not self.engagement.speech_enabled:
             return
         attempt.answer = f"{attempt.answer.strip()} {clean}".strip()
         if not self.config.engagement_enabled or attempt.authorized:
@@ -1607,7 +1649,7 @@ class ConversationPipeline:
         phrase_index = 0
         while True:
             phrase = await queue.get()
-            if phrase is None or attempt.cancelled:
+            if phrase is None or attempt.cancelled or not self.engagement.speech_enabled:
                 return
             model_phrase = phrase
             if not self.config.engagement_enabled and phase == "prompt_first" and requests_knowledge_lookup(phrase):
@@ -1670,6 +1712,9 @@ class ConversationPipeline:
             )
 
     async def _release_held(self, attempt: Attempt) -> None:
+        if not self.engagement.speech_enabled:
+            attempt.held_audio.clear()
+            return
         if self.config.engagement_enabled and attempt.answer and not attempt.audio_complete:
             await self.send({"type": "partial_assistant_answer", "content": attempt.answer})
         self.trace.record(
@@ -1729,6 +1774,10 @@ class ConversationPipeline:
                     self._transition("idle", "engagement_discarded")
 
     async def _commit_attempt_text(self, attempt: Attempt) -> None:
+        if not self.engagement.speech_enabled or (self.config.engagement_enabled and not attempt.answer.strip()):
+            self.memory.turn(attempt.turn_id).listening_only = not self.engagement.speech_enabled
+            self.memory.finish(attempt.turn_id)
+            return
         if attempt.response_committed:
             return
         attempt.response_committed = True
@@ -1740,6 +1789,8 @@ class ConversationPipeline:
         await self.send({"type": "final_assistant_answer", "content": attempt.answer.strip()})
 
     async def _send_audio(self, sample_rate: int, chunk: bytes, attempt: Attempt) -> None:
+        if attempt.cancelled or not self.engagement.speech_enabled:
+            return
         attempt.audio_sent = True
         await self.send(
             {

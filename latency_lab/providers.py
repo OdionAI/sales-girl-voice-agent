@@ -597,6 +597,7 @@ class RLLMClient:
         messages: list[dict[str, str]],
         *,
         tools: list[dict[str, Any]] | None = None,
+        tool_choice: str = "auto",
         max_tokens: int = 180,
         temperature: float = 0.35,
     ) -> AsyncIterator[str | ActionToolCall]:
@@ -614,7 +615,7 @@ class RLLMClient:
         }
         if tools:
             payload["tools"] = tools
-            payload["tool_choice"] = "auto"
+            payload["tool_choice"] = tool_choice
         headers = {"Authorization": f"Bearer {self.config.llm_api_key}"}
         pending_calls: dict[int, dict[str, str]] = {}
         emitted_output = False

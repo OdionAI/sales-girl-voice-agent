@@ -56,6 +56,14 @@ class FakeSession:
 
 
 class LLMOutputTest(unittest.IsolatedAsyncioTestCase):
+    async def test_tool_choice_defaults_to_auto_and_supports_required_gate_output(self):
+        for choice in ("auto", "required"):
+            session = FakeSession([])
+            client = RLLMClient(LabConfig(), session)
+            kwargs = {} if choice == "auto" else {"tool_choice": choice}
+            _ = [event async for event in client.stream([], tools=TOOLS, **kwargs)]
+            self.assertEqual(session.payload["tool_choice"], choice)
+
     async def output(self, deltas, *, tools=None, byte_chunks=False):
         session = FakeSession(deltas, byte_chunks)
         client = RLLMClient(LabConfig(llm_enable_thinking=False), session)
