@@ -11,6 +11,7 @@ import wave
 from collections.abc import AsyncIterator, Awaitable, Callable
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import aiohttp
 
@@ -193,8 +194,8 @@ class RSTTClient:
                         {
                             "type": "session.update",
                             "model": self.config.stt_model,
-                            "language": "en",
-                            "to_language": "en",
+                            "language": "fr" if self.config.tts_language.lower() in {"fr", "french", "français"} else "en",
+                            "to_language": "fr" if self.config.tts_language.lower() in {"fr", "french", "français"} else "en",
                         }
                     )
                     await candidate.send_json(
@@ -397,7 +398,7 @@ class RSTTClient:
             content_type="audio/wav",
         )
         form.add_field("model", self.config.stt_model)
-        form.add_field("language", "en")
+        form.add_field("language", "fr" if self.config.tts_language.lower() in {"fr", "french", "français"} else "en")
         self.on_provider_event(
             "stt_batch_request_start",
             {
@@ -613,6 +614,9 @@ class RLLMClient:
                 "thinking": bool(self.config.llm_enable_thinking),
             },
         }
+        # Groq rejects the self-hosted Qwen chat-template extension.
+        if urlsplit(self.config.llm_base_url).hostname == "api.groq.com":
+            payload.pop("chat_template_kwargs", None)
         if tools:
             payload["tools"] = tools
             payload["tool_choice"] = tool_choice

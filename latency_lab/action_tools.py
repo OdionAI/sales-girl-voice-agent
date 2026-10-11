@@ -12,6 +12,8 @@ from .agentic import AgentRuntimeContext
 from .config import LabConfig
 from .trace import TraceRecorder
 from .banking_tools import bank_tool_definitions
+from .provider_directory import definitions as directory_definitions
+from .directory_email import definitions as directory_email_definitions
 
 
 SUPPORTED_ACTION_TOOLS = {"create_ticket", "send_email", "end_call"}
@@ -194,7 +196,7 @@ def action_tool_definitions(context: AgentRuntimeContext) -> list[dict[str, Any]
                 },
             }
         )
-    return definitions + bank_tool_definitions(context)
+    return definitions + bank_tool_definitions(context) + directory_definitions(context) + directory_email_definitions(context)
 
 
 def parse_tool_arguments(raw: str) -> dict[str, Any]:

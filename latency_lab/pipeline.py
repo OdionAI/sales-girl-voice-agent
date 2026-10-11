@@ -35,6 +35,7 @@ from .action_tools import (
 from .providers import RLLMClient, RSTTClient, RTTSClient, tts_token_budget
 from .trace import TraceRecorder
 from .banking_tools import BankingTools, BANK_TOOLS
+from . import provider_directory, directory_email, directory_locations
 from .memory import ConversationMemory, CONVERSATION_RULES
 from .engagement import Engagement, ENGAGEMENT_RULES, SPEECH_GATE_RULES, SPEECH_GATE_TOOL
 from .conversation_persist import ConversationStore, caller_from_identity
@@ -147,6 +148,13 @@ class ConversationPipeline:
         self.system_prompt = self.agent_context.system_prompt(config.system_prompt) + self.banking.prompt() + CONVERSATION_RULES
         self.knowledge = KnowledgeClient(config, self.http, self.agent_context)
         self.action_tools = action_tool_definitions(self.agent_context)
+        self.directory_enabled = provider_directory.enabled(self.agent_context)
+        self.pending_directory = None
+        self.directory_email = directory_email.DirectoryEmail(self.agent_context, session_identity, trace.session_id)
+        if directory_email.enabled(self.agent_context):
+            self.system_prompt += directory_email.RULES
+        if self.directory_enabled:
+            self.system_prompt += provider_directory.RULES
         self.action_executor = ActionToolExecutor(
             config, self.http, self.agent_context, self.trace
         )
@@ -369,6 +377,9 @@ class ConversationPipeline:
         if configured:
             return configured
         name = str(self.agent_context.name or "").strip()
+        if self.config.tts_language.lower() in {"fr", "french", "français"}:
+            return (f"Bonjour ! Je suis {name}. Comment puis-je vous aider aujourd'hui ?"
+                    if name else "Bonjour ! Comment puis-je vous aider aujourd'hui ?")
         if name:
             return f"Hello! This is {name}. How can I help you today?"
         return "Hello! How can I help you today?"
@@ -865,9 +876,17 @@ class ConversationPipeline:
             text=text,
             authorized=authorized,
         )
+        if self.pending_directory and self.directory_enabled:
+            if (re.match(r"^(no\b|not\b|cancel\b)", text.strip().lower())
+                    or directory_locations.new_location(text, self.pending_directory["data"]["suggested_filters"])):
+                self.pending_directory = None
+            else:
+                attempt.task = asyncio.create_task(self._handle_directory_confirmation(attempt), name=attempt.id)
+                return
         if self.pending_action and (not self.config.engagement_enabled or (
                 self.engagement.speech_enabled and (
                     self._bank_confirmation(text) if self.pending_action.call.name == "wema_execute_prepared"
+                    else "semantic_pending" if self.pending_action.call.name == directory_email.TOOL_NAME
                     else confirmation_decision(text)) != "unclear")):
             self.trace.record(
                 "tool_confirmation_evidence_start",
@@ -982,7 +1001,11 @@ class ConversationPipeline:
                     await attempt.authorization_event.wait()
                 if attempt.cancelled:
                     return
-                if call.name in BANK_TOOLS:
+                if call.name == provider_directory.TOOL_NAME and self.directory_enabled:
+                    await self._run_directory_lookup(attempt, messages, call)
+                elif call.name == directory_email.TOOL_NAME and directory_email.enabled(self.agent_context):
+                    await self._prepare_directory_email(attempt, call, messages)
+                elif call.name in BANK_TOOLS:
                     await self._run_banking_tools(attempt, messages, attempt.tool_calls)
                 elif call.name == "end_call":
                     committed_text = self.final_text if attempt.authorized else ""
@@ -1275,6 +1298,12 @@ class ConversationPipeline:
             decision = confirmation_decision(evidence)
             if pending.call.name == "wema_execute_prepared":
                 decision = self._bank_confirmation(evidence)
+            elif pending.call.name == directory_email.TOOL_NAME:
+                decision = await directory_email.confirmation_decision(
+                    self.llm, evidence, pending.confirmation_prompt,
+                    history=self.memory.context(exclude_turn_id=attempt.turn_id))
+            if attempt.cancelled or self.pending_action is not pending:
+                return
             self.trace.record(
                 "tool_confirmation_decision",
                 turn_id=self.turn_id,
@@ -1287,6 +1316,8 @@ class ConversationPipeline:
             if decision == "rejected":
                 self.pending_action = None
                 self.banking.prepared = None
+                if pending.call.name == directory_email.TOOL_NAME:
+                    self.directory_email.prepared = None
                 await self._speak_text(
                     attempt,
                     "No problem. I won't carry out that action.",
@@ -1328,7 +1359,12 @@ class ConversationPipeline:
                 else:
                     async def execute_action():
                         await self.banking.activity(pending.call, "started")
-                        result = await self.action_executor.execute(pending.call)
+                        if pending.call.name == directory_email.TOOL_NAME:
+                            from .action_tools import ActionResult
+                            outcome = await self.directory_email.send(self.http)
+                            result = ActionResult(outcome["status"], outcome["message"], outcome["data"], 0)
+                        else:
+                            result = await self.action_executor.execute(pending.call)
                         body = {"status": result.status, "message": result.message, "data": result.data}
                         self._retain_tool_result(attempt, pending.call, body)
                         await self.banking.activity(pending.call, "completed", body)
@@ -1424,6 +1460,160 @@ class ConversationPipeline:
         if not any(message.get("tool_call_id") == call.id for message in attempt.tool_messages):
             attempt.tool_messages.extend([request, reply])
         return request, reply
+
+    async def _prepare_directory_email(self, attempt, call, messages=None):
+        # A caller's committed request is the authorization; no second consent turn.
+        if not attempt.authorized:
+            await attempt.authorization_event.wait()
+        if attempt.cancelled:
+            return
+        body = self.directory_email.prepare(call.arguments)
+        if body["status"] == "ready":
+            async def send_with_updates():
+                task = asyncio.create_task(self.directory_email.send(self.http))
+                try:
+                    await self._speak_text(attempt, body["message"], phase="directory_email_sending")
+                    if self.transport == "livekit":
+                        await self.send({"type": "tts_segment_end"})
+                    while not task.done() and not attempt.cancelled:
+                        done, _ = await asyncio.wait({task}, timeout=6)
+                        if not done and not attempt.cancelled:
+                            await self._speak_text(attempt, "I'm still getting that email ready. Thanks for waiting.", phase="directory_email_wait")
+                            if self.transport == "livekit":
+                                await self.send({"type": "tts_segment_end"})
+                    if attempt.cancelled:
+                        raise asyncio.CancelledError
+                    return await task
+                finally:
+                    if not task.done():
+                        task.cancel()
+                        await asyncio.gather(task, return_exceptions=True)
+            self.trace.record("tool_execution_start", turn_id=attempt.turn_id,
+                              tool_name=call.name, reason="committed_caller_email_request")
+            body = await self.engagement.run_tool(attempt, call, send_with_updates)
+            self.trace.record("tool_execution_complete", turn_id=attempt.turn_id,
+                              tool_name=call.name, status=body.get("status"), data=body.get("data", {}))
+        request, reply = self._retain_tool_result(attempt, call, body)
+        await self.banking.activity(call, "completed", body)
+        if attempt.cancelled:
+            return
+        if (messages is not None and body["status"] == "needs_input"
+                and self.directory_email.filters is None and self.directory_email.recipient()):
+            messages.extend([request, reply])
+            messages.append({"role": "system", "content": "The caller requested a hospital email before a search was selected. First call lookup_provider_directory using the plan, provider and location already supplied by the caller. Do not ask again for details they already gave. After a successful search, send the requested list immediately; do not offer it or ask for permission again. If essential details are missing, ask only for those details."})
+            followups = await self._stream_llm_and_tts(attempt, messages,
+                phase="directory_email_search", tools=provider_directory.definitions(self.agent_context))
+            if followups and followups[0].name == provider_directory.TOOL_NAME:
+                await self._run_directory_lookup(attempt, messages, followups[0])
+                return
+        await self._speak_text(attempt, body["message"], phase="directory_email_feedback")
+
+    async def _handle_directory_confirmation(self, attempt):
+        if not attempt.authorized:
+            await attempt.authorization_event.wait()
+        if attempt.cancelled:
+            return
+        pending = self.pending_directory
+        evidence = (self.final_text or attempt.hypothesis).strip().lower()
+        decision = await directory_email.confirmation_decision(
+            self.llm, evidence, pending["message"], action="location",
+            history=self.memory.context(exclude_turn_id=attempt.turn_id))
+        if attempt.cancelled or self.pending_directory is not pending:
+            return
+        if decision == "confirmed":
+            self.pending_directory = None
+            call = ActionToolCall("location-" + attempt.id, provider_directory.TOOL_NAME, pending["data"]["suggested_filters"])
+            messages = [{"role": "system", "content": self.system_prompt}, *self._recent_history(attempt),
+                        {"role": "user", "content": self.final_text or attempt.hypothesis}]
+            await self._run_directory_lookup(attempt, messages, call, confirmed=True)
+        elif decision == "rejected":
+            self.pending_directory = None
+            await self._speak_text(attempt, "No problem. Which area and plan should I check?", phase="location_confirmation")
+        else:
+            await self._speak_text(attempt, pending["message"], phase="location_confirmation")
+        await self._finish_speech(attempt)
+        attempt.audio_complete = True
+        if not attempt.cancelled:
+            await self._commit_attempt_text(attempt)
+            await self.send({"type": "tts_end"})
+
+    async def _run_directory_lookup(self, attempt, messages, call, confirmed=False):
+        await self.banking.activity(call, "started")
+        args = provider_directory.prepare_args(call.arguments)
+        body = provider_directory.preflight(args)
+        if body is None and not confirmed:
+            body = directory_locations.clarify(args, self.final_text or attempt.hypothesis)
+        remote = body is None
+        if body is None:
+            async def read_with_update():
+                started = time.perf_counter()
+                self.trace.record("provider_lookup_started", turn_id=attempt.turn_id, filters=args)
+                async def bounded_read():
+                    try:
+                        async with asyncio.timeout(28):
+                            return await provider_directory.lookup(self.http, args)
+                    except TimeoutError:
+                        return {"status": "failed", "data": {"error_type": "TimeoutError"}}
+                # Start the read before speaking, so acknowledgement adds no search delay.
+                task = asyncio.create_task(bounded_read())
+                try:
+                    acknowledgements = ("Let me check that for you.", "I'll check those options now.", "Give me a moment to check.")
+                    index = getattr(self, "_directory_ack_count", 0)
+                    self._directory_ack_count = index + 1
+                    await self._speak_text(attempt, acknowledgements[index % len(acknowledgements)], phase="provider_lookup_acknowledgement")
+                    if self.transport == "livekit":
+                        await self.send({"type": "tts_segment_end"})
+                    updates = 0
+                    while not task.done() and not attempt.cancelled:
+                        done, _ = await asyncio.wait({task}, timeout=5 if updates == 0 else 7)
+                        if not done and not attempt.cancelled:
+                            text = ("Thanks for waiting. I'm still checking that for you." if updates == 0
+                                    else "It's taking a little longer than usual. Thank you for bearing with me.")
+                            await self._speak_text(attempt, text, phase="provider_lookup_wait")
+                            updates += 1
+                            if self.transport == "livekit":
+                                await self.send({"type": "tts_segment_end"})
+                    if attempt.cancelled:
+                        raise asyncio.CancelledError
+                    return await task
+                finally:
+                    if not task.done():
+                        task.cancel()
+                        await asyncio.gather(task, return_exceptions=True)
+                    self.trace.record("provider_lookup_finished", turn_id=attempt.turn_id,
+                                      elapsed_ms=round((time.perf_counter()-started)*1000), cancelled=attempt.cancelled)
+            body = await self.engagement.run_tool(attempt, call, read_with_update)
+        self.directory_email.remember(body)
+        request, reply = self._retain_tool_result(attempt, call, body)
+        await self.banking.activity(call, "completed", body)
+        self.trace.record("provider_directory_result", tool_name=call.name,
+                          turn_id=attempt.turn_id, status=body.get("status"),
+                          data=body.get("data", {}), message=body.get("message", ""))
+        if attempt.cancelled:
+            return
+        if body.get("status") == "unsupported":
+            await self._speak_text(attempt, body["message"], phase="provider_scope_limit")
+            return
+        if body.get("status") == "needs_confirmation":
+            self.pending_directory = body
+            await self._speak_text(attempt, body["message"], phase="location_confirmation")
+            return
+        if body.get("status") == "needs_input":
+            await self._speak_text(attempt, body["message"], phase="provider_lookup_clarification")
+            return
+        if body.get("status") == "failed":
+            await self._speak_text(attempt, "I'm sorry, I couldn't complete the check right now. That doesn't mean there are no hospitals available. Would you like me to try again?", phase="provider_lookup_failure")
+            return
+        messages.extend([request, reply])
+        if remote:
+            messages.append({"role": "system", "content": "You have already said you are checking. Now give the result or clarification directly. Do not say directory, spreadsheet, database or tool. If the source failed, say checking is temporarily unavailable, not that the caller gave a wrong name. If offering nearby options, state their actual areas and keep the same plan. Do not claim a closest distance or journey time."})
+        if attempt.answer:
+            attempt.answer = attempt.answer.rstrip() + " "
+        followups = await self._stream_llm_and_tts(
+            attempt, messages, phase="provider_directory_result",
+            tools=directory_email.definitions(self.agent_context) or None)
+        if followups and followups[0].name == directory_email.TOOL_NAME and directory_email.enabled(self.agent_context):
+            await self._prepare_directory_email(attempt, followups[0])
 
     async def _run_banking_tools(self, attempt: Attempt, messages: list[dict], calls: list) -> None:
         rounds = max(4, min(12, self.config.engagement_bank_tool_rounds)) if self.config.engagement_enabled else 4
@@ -1548,6 +1738,8 @@ class ConversationPipeline:
             gate_choice = ({"tool_choice": "required"}
                            if self.config.engagement_enabled and phase == "prompt_first"
                            and not self.engagement.speech_enabled else {})
+            if getattr(self, "directory_enabled", False) and phase in {"prompt_first", "directory_email_search"} and self.engagement.speech_enabled:
+                gate_choice = {"tool_choice": "required"}
             async for event in self.llm.stream(messages, tools=tools, **gate_choice):
                 if attempt.cancelled:
                     raise asyncio.CancelledError
@@ -1563,6 +1755,9 @@ class ConversationPipeline:
                     tool_calls.append(event)
                     continue
                 if not self.engagement.speech_enabled:
+                    continue
+                if getattr(self, "directory_enabled", False) and phase in {"prompt_first", "directory_email_search"}:
+                    # No provider claims are spoken before the fresh lookup result.
                     continue
                 token = event
                 if first_token:
@@ -1673,7 +1868,7 @@ class ConversationPipeline:
                 tts_voice=self.config.tts_voice or None,
                 phase=phase,
             )
-            sample_rate, chunks = await self.tts.stream(phrase)
+            sample_rate, chunks = await self.tts.stream(directory_email.speech_text(phrase) if self.directory_enabled else phrase)
             first = True
             audio_bytes = 0
             chunk_count = 0

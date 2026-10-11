@@ -20,6 +20,7 @@ from .config import apply_runtime_overrides, lab_config_from_environ, load_platf
 from .pipeline import ConversationPipeline
 from .report import generate_report
 from .session_identity import verify_session_token
+from .sip_bootstrap import resolve_route as resolve_sip_route, participant_identity as sip_participant_identity
 from .trace import TraceRecorder
 from .live_metrics import LiveMetricPublisher
 
@@ -343,7 +344,8 @@ async def entrypoint(ctx: JobContext) -> None:
     ready = asyncio.Event()
     input_lock = asyncio.Lock()
     try:
-        identity = resolve_dispatch(ctx.job.metadata, ctx.room.name, config.agent_config_service_token)
+        sip_route = resolve_sip_route(ctx.job.metadata, ctx.room.name)
+        identity = {} if sip_route else resolve_dispatch(ctx.job.metadata, ctx.room.name, config.agent_config_service_token)
         config = apply_runtime_overrides(config, identity.get("runtime_overrides"), language=identity.get("language", "en"))
         trace.record(
             "livekit_job_received",
@@ -352,9 +354,16 @@ async def entrypoint(ctx: JobContext) -> None:
             agent_name=os.getenv("RVC_LAB_LIVEKIT_AGENT_NAME", DEFAULT_AGENT_NAME),
         )
         await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
-        participant = await asyncio.wait_for(
-            ctx.wait_for_participant(identity=identity["participant_identity"]), timeout=30,
-        )
+        if sip_route:
+            participant = await asyncio.wait_for(
+                ctx.wait_for_participant(kind=rtc.ParticipantKind.PARTICIPANT_KIND_SIP), timeout=30,
+            )
+            identity = sip_participant_identity(sip_route, participant, ctx.room.name,
+                                               rtc.ParticipantKind.PARTICIPANT_KIND_SIP)
+        else:
+            participant = await asyncio.wait_for(
+                ctx.wait_for_participant(identity=identity["participant_identity"]), timeout=30,
+            )
         def on_participant_disconnected(remote: rtc.RemoteParticipant) -> None:
             if remote.identity == participant.identity:
                 disconnected.set()

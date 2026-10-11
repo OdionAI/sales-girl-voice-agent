@@ -144,12 +144,12 @@ class AgentRuntimeContext:
             "- Keep the spoken answer to one or two short sentences unless the caller asks for more detail."
         ]
         banking = bank_records(self)
-        supported = sorted(enabled.intersection({"create_ticket", "send_email"}) | banking.keys())
+        supported = sorted(enabled.intersection({"create_ticket", "send_email", "email_provider_results"}) | banking.keys())
         if supported:
             lines.extend(
                 [
                     f"- Configured action tools: {', '.join(supported)}.",
-                    "- When the caller requests one of those actions, call the matching function. Banking reads and previews run after the final caller transcript and follow the application's session voice-verification policy. Tickets, emails and prepared transaction execution require a separate confirmation turn.",
+                    "- When the caller requests one of those actions, call the matching function. Banking reads and previews run after the final caller transcript and follow the application's session voice-verification policy. Tickets, generic send_email and prepared transaction execution require a separate confirmation turn. For email_provider_results, a committed caller request to email the hospital list is sufficient: send to the saved caller email without another confirmation.",
                     "- Never claim an action succeeded before its function result confirms success.",
                 ]
             )
