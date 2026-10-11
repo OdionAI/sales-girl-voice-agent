@@ -153,7 +153,16 @@ events cover the map decision (only a phone suffix), authorization, goodbye
 playout completion, and room deletion.
 
 Once the remote participant, microphone track, and RVC output track are ready,
-the worker proactively speaks one short greeting using the saved agent name.
+the worker proactively speaks one short greeting. To customize it for one
+agent, add a single line to that agent's saved instructions:
+
+```text
+SPOKEN_OPENING: Hello, I'm Amaka calling from Leadway Health. I'm calling to check in and hear how your experience has been so far. Is now a convenient time for a quick chat?
+```
+
+The worker speaks this line directly through TTS before the first caller turn.
+Without it, the shared `RVC_LAB_OPENING_GREETING_TEXT` setting or the default
+name-based greeting applies. Keep the line under 500 characters.
 This opening is recorded as `opening-0000`, adds only an assistant message to
 conversation history, and does not create a fake caller transcript or change
 the measured caller-turn response path. Set

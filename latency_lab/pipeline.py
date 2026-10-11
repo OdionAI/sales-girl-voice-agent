@@ -373,6 +373,14 @@ class ConversationPipeline:
                 self.attempt = None
 
     def opening_greeting_text(self) -> str:
+        # The opening is spoken directly by TTS, before the LLM sees a caller
+        # turn. Allow an agent's own instructions to supply that first line.
+        for line in self.agent_context.instructions.splitlines():
+            label, separator, text = line.partition(":")
+            if separator and label.strip().upper() == "SPOKEN_OPENING":
+                greeting = text.strip()
+                if 0 < len(greeting) <= 500:
+                    return greeting
         configured = str(self.config.opening_greeting_text or "").strip()
         if configured:
             return configured
