@@ -116,6 +116,11 @@ by the dashboard/runtime environment. `AGENT_CONFIG_API_BASE_URL`, when set,
 overrides it for an isolated experiment. This keeps mapped SIP calls from
 silently falling back to the lab prompt and losing their configured tools.
 
+For a verified AICC SIP route, the worker marks its conversation session as an
+explicitly routed voice call. The conversation service can then record that
+agent's session even if a different agent remains the business default. The
+marker is not set for browser calls or unverified SIP identities.
+
 ### Increment 3: confirmed internal actions
 
 The current branch exposes native LLM function definitions only for an agent's
@@ -167,6 +172,11 @@ This opening is recorded as `opening-0000`, adds only an assistant message to
 conversation history, and does not create a fake caller transcript or change
 the measured caller-turn response path. Set
 `RVC_LAB_OPENING_GREETING_ENABLED=false` to disable it.
+
+Outbound agents may also set `SPOKEN_GOODBYE: ...` in their saved instructions
+for the final line after `builtin://end_call` is authorized. Other agents keep
+the default goodbye. The action still requires a committed caller utterance
+that clearly finishes the conversation; a mere thank-you is not enough.
 
 With the dashboard running on port 3000, start the transport worker:
 

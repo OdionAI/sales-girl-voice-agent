@@ -164,6 +164,11 @@ class ConversationPipeline:
             caller=caller_from_identity(session_identity, room_name),
             client_session_id=trace.session_id, room_name=room_name, transport=transport,
             channel=("web" if room_name.startswith("rvc-livekit-") or transport == "browser" else None),
+            explicitly_routed_agent=(
+                transport == "livekit"
+                and (session_identity or {}).get("entry_surface") == "aicc_inbound"
+                and (session_identity or {}).get("sip_caller_verified") is True
+            ),
         )
         self.usage = UsageCollector()
         self.llm.usage = self.tts.usage = self.stt.usage = self.usage
@@ -391,6 +396,17 @@ class ConversationPipeline:
         if name:
             return f"Hello! This is {name}. How can I help you today?"
         return "Hello! How can I help you today?"
+
+    def closing_goodbye_text(self) -> str:
+        # Outbound agents should not thank the member for calling them. Keep
+        # the existing generic goodbye unless that agent supplies its own.
+        for line in self.agent_context.instructions.splitlines():
+            label, separator, text = line.partition(":")
+            if separator and label.strip().upper() == "SPOKEN_GOODBYE":
+                goodbye = text.strip()
+                if 0 < len(goodbye) <= 500:
+                    return goodbye
+        return "Thank you for calling. Goodbye."
 
     async def _wait_for_stt_ready(self, timeout_seconds: float = 3.0) -> bool:
         deadline = time.monotonic() + max(0.0, timeout_seconds)
@@ -1073,7 +1089,7 @@ class ConversationPipeline:
                         )
                         await self._speak_text(
                             attempt,
-                            "Thank you for calling. Goodbye.",
+                            self.closing_goodbye_text(),
                             phase="end_call_goodbye",
                         )
                 else:

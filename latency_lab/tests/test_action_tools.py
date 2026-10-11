@@ -87,6 +87,22 @@ class ActionDefinitionTest(unittest.TestCase):
             with self.subTest(text=text):
                 self.assertFalse(explicit_end_call_intent(text))
 
+    def test_outbound_agent_can_use_its_own_spoken_goodbye(self) -> None:
+        from types import SimpleNamespace
+
+        outbound = SimpleNamespace(agent_context=AgentRuntimeContext(
+            instructions="SPOKEN_GOODBYE: Thank you for sharing your feedback. Goodbye."
+        ))
+        self.assertEqual(
+            ConversationPipeline.closing_goodbye_text(outbound),
+            "Thank you for sharing your feedback. Goodbye.",
+        )
+        generic = SimpleNamespace(agent_context=AgentRuntimeContext())
+        self.assertEqual(
+            ConversationPipeline.closing_goodbye_text(generic),
+            "Thank you for calling. Goodbye.",
+        )
+
 
 class ActionConfirmationLifecycleTest(unittest.IsolatedAsyncioTestCase):
     class ToolLLM:
