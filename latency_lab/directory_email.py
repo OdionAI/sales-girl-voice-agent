@@ -66,12 +66,12 @@ def definitions(context):
         return []
     return [{"type": "function", "function": {
         "name": TOOL_NAME,
-        "description": "When the caller requests the hospital/provider list by email, email the most recent successful hospital search directly, without a second confirmation. The application resolves the saved email from the actual SIP caller, refreshes the source, then sends. Call only when the caller requests or accepts an offer to email hospital results, never for plan benefits or merely asking which email is saved. If the requested list has a different scope from the latest search, look up that scope first. If no search exists, look up the requested providers first. Never ask for or supply a recipient or an email body.",
+        "description": "When the caller requests the hospital/provider list by email, email at most the seven best matching results from the most recent successful search, without a second confirmation. The application resolves the saved email from the actual SIP caller, refreshes the source, then sends. Call only when the caller requests or accepts an offer to email hospital results, never for plan benefits or merely asking which email is saved. If the requested list has a different scope from the latest search, look up that scope first. If no search exists, look up the requested providers first. Never ask for or supply a recipient or an email body.",
         "parameters": {"type": "object", "properties": {}, "additionalProperties": False}}}]
 
 
 RULES = """
-Directory email capability: email_provider_results is enabled. When the caller requests email, use it after a successful directory search. If the caller asks for a new search and an email together, first look up the requested providers, then use email_provider_results. It sends to the email already linked to the actual calling number, never to a number or address merely spoken by a caller. The caller's request or natural acceptance of an email offer is sufficient permission: call email_provider_results immediately, without asking them to confirm again. The application re-reads the sheet before sending. Do not send for a refusal, an unresolved condition, or an unrelated question. Never offer or promise a different list from the latest successful search: search the requested scope first. This tool cannot send policy benefits. Do not claim the email was sent before the confirmed tool result. If the caller is not mapped, explain that their calling number needs to be added to the contact list; do not collect or substitute an address. The tool sends all matching entries up to one hundred, not just the few read aloud. For broader searches, help narrow the location. Email acceptance does not prove inbox delivery.
+Directory email capability: email_provider_results is enabled. When the caller requests email, use it after a successful directory search. If the caller asks for a new search and an email together, first look up the requested providers, then use email_provider_results. It sends to the email already linked to the actual calling number, never to a number or address merely spoken by a caller. The caller's request or natural acceptance of an email offer is sufficient permission: call email_provider_results immediately, without asking them to confirm again. The application re-reads the sheet before sending and emails no more than the seven best matches for the confirmed plan, clinic type and location. Do not send for a refusal, an unresolved condition, or an unrelated question. Never offer or promise a different list from the latest successful search: search the requested scope first. This tool cannot send policy benefits. Do not claim the email was sent before the confirmed tool result. If the caller is not mapped, explain that their calling number needs to be added to the contact list; do not collect or substitute an address. If many providers match, send the short relevant list, not every matching row. Email acceptance does not prove inbox delivery.
 """
 
 
@@ -204,16 +204,15 @@ class DirectoryEmail:
         key, sender = os.getenv("ZEPTO_API_KEY", ""), os.getenv("ZEPTO_FROM_ADDRESS", "")
         if not key or not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", sender):
             return result("failed", "Email sending is not available right now.")
-        fresh = await provider_directory.lookup(http, prepared["filters"], limit=100)
+        fresh = await provider_directory.lookup(http, prepared["filters"], limit=7)
         data = fresh.get("data", {})
-        rows = data.get("matches", [])
+        rows = data.get("matches", [])[:7]
+        data["matches"] = rows
         if fresh.get("status") != "ok":
             return result("failed", "I couldn't refresh the hospital list just now, so the email hasn't gone out. That doesn't mean the hospitals are no longer listed. Would you like me to try again?",
                           source_status=fresh.get("status"), source_error=data.get("error_type", ""))
         if not rows:
             return result("needs_input", "The latest check didn't return hospitals for that search, so I haven't emailed an empty list. Let's check the plan and area again.")
-        if data.get("total_matches", 0) > 100:
-            return result("needs_input", "That search has more than a hundred matches. Let's narrow the location before I email the list.")
         search_hash = hashlib.sha256(json.dumps(prepared["filters"], sort_keys=True).encode()).hexdigest()
         phone, recipient = prepared["recipient"]
         operation = str(uuid.uuid4())

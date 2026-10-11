@@ -178,6 +178,15 @@ for the final line after `builtin://end_call` is authorized. Other agents keep
 the default goodbye. The action still requires a committed caller utterance
 that clearly finishes the conversation; a mere thank-you is not enough.
 
+The Leadway provider lookup accepts plan, town, specific area, and specialty
+filters. Town and area are matched against both town and address fields;
+specialty checks use the sheet's specialty, category, and provider-name fields.
+Results are ranked by these text matches, with a maximum of five returned for
+the spoken response. This ranking is not a geographic distance calculation.
+When the caller requests the list by email, the worker refreshes those same
+filters and sends no more than the seven highest-ranked matches, even when many
+rows qualify. A directory match is not confirmation of individual coverage.
+
 With the dashboard running on port 3000, start the transport worker:
 
 ```bash

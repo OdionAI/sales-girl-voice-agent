@@ -78,6 +78,57 @@ class SearchFlow(PipelineChecks):
         self.assertEqual(d.prepare_args({'intent':'lookup','plan':'Max'})['plan'],'Max')
         self.assertEqual(d.preflight(d.prepare_args({'intent':'lookup','plan':' ','town':'Ikeja'}))['data']['missing_fields'],['plan'])
 
+    def test_specific_area_can_match_only_the_address(self):
+        rows = [
+            ["CODE", "ZONE", "STATE", "TOWN", "PROVIDER", "ADDRESS", "CAT", "PLAN", "SPECIALTY"],
+            ["1", "Lagos", "Lagos", "Lagos Island", "Victoria Dental Centre", "12 Adeola Odeku Street, Victoria Island", "Dental Clinic", "PLUS & HIGHER", "Dental"],
+            ["2", "Lagos", "Lagos", "Ikeja", "Ikeja General Hospital", "Ikeja", "General Hospital", "PLUS & HIGHER", "General Medicine"],
+        ]
+        args = {"intent": "lookup", "network": "PROVIDER", "plan": "Plus", "town": "Lagos", "area": "Victoria Island"}
+        matches = d.match_records("PROVIDER", rows, args)
+        self.assertEqual([row["provider"] for row in matches], ["Victoria Dental Centre"])
+
+    def test_dental_clinic_matches_sheet_specialty_or_category(self):
+        rows = [
+            ["CODE", "ZONE", "STATE", "TOWN", "PROVIDER", "ADDRESS", "CAT", "PLAN", "SPECIALTY"],
+            ["1", "Lagos", "Lagos", "Ikeja", "Opebi Medical Centre", "Opebi, Ikeja", "Hospital", "PLUS & HIGHER", "Dental"],
+            ["2", "Lagos", "Lagos", "Ikeja", "Ikeja General Hospital", "Ikeja", "General Hospital", "PLUS & HIGHER", "General Medicine"],
+            ["3", "Lagos", "Lagos", "Ikeja", "Ikeja Dental Clinic", "Ikeja", "Clinic", "PLUS & HIGHER", ""],
+        ]
+        args = {"intent": "lookup", "network": "PROVIDER", "plan": "Plus", "town": "Ikeja", "specialty": "dental clinic"}
+        matches = d.match_records("PROVIDER", rows, args)
+        self.assertEqual({row["provider"] for row in matches}, {"Opebi Medical Centre", "Ikeja Dental Clinic"})
+
+    def test_area_ranking_prefers_address_match_and_no_proximity_claim(self):
+        rows = [
+            ["CODE", "ZONE", "STATE", "TOWN", "PROVIDER", "ADDRESS", "CAT", "PLAN", "SPECIALTY"],
+            ["1", "Lagos", "Lagos", "Ikeja", "Broad Hospital", "Ikeja", "Hospital", "PLUS & HIGHER", "Dental"],
+            ["2", "Lagos", "Lagos", "Lagos", "Opebi Clinic", "Opebi Road, Ikeja", "Clinic", "PLUS & HIGHER", "Dental"],
+        ]
+        args = {"intent": "lookup", "network": "PROVIDER", "plan": "Plus", "town": "Ikeja", "area": "Opebi", "specialty": "Dental"}
+        matches = d.match_records("PROVIDER", rows, args)
+        self.assertEqual(matches[0]["provider"], "Opebi Clinic")
+
+    async def test_lookup_caps_results_even_if_caller_requests_more(self):
+        class Response:
+            async def __aenter__(self): return self
+            async def __aexit__(self, *args): pass
+            def raise_for_status(self): pass
+            async def json(self, **kwargs):
+                rows = [["CODE", "ZONE", "STATE", "TOWN", "PROVIDER", "ADDRESS", "CAT", "PLAN", "SPECIALTY"]]
+                rows += [[str(i), "Lagos", "Lagos", "Ikeja", f"Dental Clinic {i}", f"Opebi Road, Ikeja", "Dental Clinic", "PLUS & HIGHER", "Dental"] for i in range(1, 13)]
+                return {"ok": True, "spreadsheetId": d.SHEET_ID, "readCompletedAt": "2026-10-11T00:00:00Z",
+                        "sheets": [{"name": "PROVIDER", "values": rows}]}
+        class HTTP:
+            def post(self, *args, **kwargs): return Response()
+        env = patch.dict(d.os.environ, {"PROVIDER_DIRECTORY_ENDPOINT": "https://script.google.com/macros/s/test/exec", "PROVIDER_DIRECTORY_TOKEN": "test"})
+        with env:
+            result = await d.lookup(HTTP(), {"intent": "lookup", "plan": "Plus", "town": "Ikeja", "area": "Opebi", "specialty": "dental clinic"}, limit=70)
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["data"]["total_matches"], 12)
+        self.assertEqual(len(result["data"]["matches"]), 7)
+        self.assertIn("not distance-ranked", result["message"])
+
     async def test_other_explicit_schemes_are_preserved(self):
         self.assertEqual(d.prepare_args({'intent':'lookup','network':'FBN'})['network'],'FBN')
         result=await d.lookup(None,{'intent':'lookup','network':'invalid','town':'Ikeja','plan':'Max'})

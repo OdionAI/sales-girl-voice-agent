@@ -77,7 +77,7 @@ class EmailTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(m.provider_directory, "lookup", AsyncMock(return_value=source())) as read:
             out = await self.mail.send(http)
             self.assertEqual(out["status"], "success")
-            read.assert_awaited_once_with(http, self.mail.filters, limit=100)
+            read.assert_awaited_once_with(http, self.mail.filters, limit=7)
             payload = http.calls[0][1]["json"]
             self.assertEqual(payload["to"], [{"email_address": {"address": "caller@example.test"}}])
             self.assertIn("Fresh Road", payload["textbody"])
@@ -86,13 +86,31 @@ class EmailTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue((await self.mail.send(http))["data"]["deduplicated"])
             self.assertEqual(len(http.calls), 1)
 
-    async def test_source_failure_and_too_many_prevent_send(self):
+    async def test_source_failure_and_empty_results_prevent_send(self):
         http = HTTP()
-        for body in [{"status": "failed", "data": {}}, source(count=101), {"status": "ok", "data": {"matches": []}}]:
+        for body in [{"status": "failed", "data": {}}, {"status": "ok", "data": {"matches": []}}]:
             self.mail.prepare({})
             with patch.object(m.provider_directory, "lookup", AsyncMock(return_value=body)):
                 self.assertNotEqual((await self.mail.send(http))["status"], "success")
         self.assertEqual(http.calls, [])
+
+    async def test_email_is_capped_at_seven_ranked_results(self):
+        http = HTTP()
+        self.mail.prepare({})
+        body = source(count=75)
+        body["data"]["matches"] = [
+            {"provider": f"Clinic {index}", "address": f"Street {index}", "town": "Ikeja", "plan": "PLUS & HIGHER"}
+            for index in range(1, 16)
+        ]
+        with patch.object(m.provider_directory, "lookup", AsyncMock(return_value=body)) as read:
+            result = await self.mail.send(http)
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["data"]["count"], 7)
+        read.assert_awaited_once_with(http, self.mail.filters, limit=7)
+        payload = http.calls[0][1]["json"]
+        self.assertEqual(payload["textbody"].count("Clinic "), 7)
+        with m.connect(self.path) as db:
+            self.assertEqual(db.execute("SELECT result_count FROM directory_email_outbox").fetchone()[0], 7)
 
     async def test_uncertain_submission_is_not_retried(self):
         http = HTTP()
