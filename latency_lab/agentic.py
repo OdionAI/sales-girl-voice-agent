@@ -149,7 +149,7 @@ class AgentRuntimeContext:
             lines.extend(
                 [
                     f"- Configured action tools: {', '.join(supported)}.",
-                    "- When the caller requests one of those actions, call the matching function. Banking reads and previews run after the final caller transcript and follow the application's session voice-verification policy. Tickets, generic send_email and prepared transaction execution require a separate confirmation turn. For email_provider_results, a committed caller request to email the hospital list is sufficient: send to the saved caller email without another confirmation.",
+                    "- When the caller requests one of those actions, call the matching function. Banking reads and previews run after the final caller transcript and follow the application's session voice-verification policy. Tickets, generic send_email and prepared transaction execution require a separate confirmation turn. For email_provider_results, a committed request is sufficient to send the hospital list to the verified caller's saved email. If the caller explicitly asks for another address, pass only the address they stated; the application reads it back and requires a separate clear confirmation before sending there.",
                     "- Never claim an action succeeded before its function result confirms success.",
                 ]
             )

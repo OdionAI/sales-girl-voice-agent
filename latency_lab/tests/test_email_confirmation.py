@@ -17,6 +17,19 @@ class Confirmation(unittest.IsolatedAsyncioTestCase):
         self.assertIn(text,seen[1]["content"])
         self.assertIn("I need the hospital list",seen[1]["content"])
 
+    async def test_alternate_address_confirmation_is_explicitly_scoped(self):
+        seen=[]
+        async def stream(messages, **kwargs):
+            seen.extend(messages)
+            yield "confirmed"
+        result=await email.confirmation_decision(SimpleNamespace(stream=stream),"yes, that is correct",
+            "Send the hospital list to other@example.test instead of your saved email?",
+            action="alternate_email")
+        self.assertEqual(result,"confirmed")
+        self.assertIn("different address",seen[0]["content"])
+        self.assertIn("exact address",seen[0]["content"])
+        self.assertIn("alternate_email",seen[1]["content"])
+
     async def test_invalid_output_and_failure_do_not_send(self):
         for output in ["", "yes", "confirmed because I agree", "rejected", "unclear"]:
             result=await email.confirmation_decision(SimpleNamespace(stream=semantic_reply(output)),"yes","Email?")
@@ -27,10 +40,13 @@ class Confirmation(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await email.confirmation_decision(SimpleNamespace(stream=fail),"yes","Email?"),"unclear")
 
 class ConfirmationFlow(PipelineChecks):
-    async def setup_email(self,text,decision):
+    async def setup_email(self,text,decision,alternate=False):
         self.p.final_text=text
         self.p.llm.stream=semantic_reply(decision)
-        self.p.pending_action=PendingAction(ActionToolCall('mail',email.TOOL_NAME,{}),'Send to your saved email?')
+        args={"recipient_email":"other@example.test"} if alternate else {}
+        self.p.pending_action=PendingAction(ActionToolCall('mail',email.TOOL_NAME,args),
+            'Send to other@example.test instead of your saved email?' if alternate else 'Send to your saved email?')
+        self.p.directory_email.prepared={"alternate":alternate}
         self.p.directory_email.send=AsyncMock(return_value={'status':'success','message':'Submitted for sending.','data':{}})
         self.p._finish_speech=AsyncMock();self.p._commit_attempt_text=AsyncMock()
 
@@ -41,6 +57,12 @@ class ConfirmationFlow(PipelineChecks):
         self.assertIsNone(self.p.pending_action)
         await self.p._handle_pending_action(self.attempt)
         self.p.directory_email.send.assert_awaited_once()
+
+    async def test_confirmed_alternate_passes_one_shot_confirmation_to_sender(self):
+        await self.setup_email("Yes, that is the right email. Send it there.","confirmed",alternate=True)
+        await self.p._handle_pending_action(self.attempt)
+        self.p.directory_email.send.assert_awaited_once_with(self.p.http, confirmed_alternate=True)
+        self.assertIsNone(self.p.pending_action)
 
     async def test_withdrawal_does_not_send(self):
         await self.setup_email("Let's leave that for another time.","rejected")

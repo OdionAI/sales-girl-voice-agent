@@ -186,6 +186,15 @@ the spoken response. This ranking is not a geographic distance calculation.
 When the caller requests the list by email, the worker refreshes those same
 filters and sends no more than the seven highest-ranked matches, even when many
 rows qualify. A directory match is not confirmation of individual coverage.
+On the configured, verified Leadway SIP route, an operator-managed phone
+directory can identify a caller by name and select their saved default email.
+The known name is used in the proactive opening and subsequent conversation.
+The runtime never resolves a caller profile from browser identity or a number
+spoken during the conversation. An explicitly requested alternate recipient is
+read back and requires a separate clear caller confirmation before sending;
+only the requested provider list can be emailed. Contact email addresses are
+redacted from tool-activity events. A mapped caller without a saved email can
+still provide an alternate address for that one confirmed send.
 
 With the dashboard running on port 3000, start the transport worker:
 

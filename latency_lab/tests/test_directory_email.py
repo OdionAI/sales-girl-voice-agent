@@ -48,6 +48,22 @@ class EmailTests(unittest.IsolatedAsyncioTestCase):
     def tearDown(self):
         self.env.stop(); self.tmp.cleanup()
 
+    def test_known_verified_caller_is_named_in_the_proactive_opening(self):
+        from latency_lab.pipeline import ConversationPipeline
+
+        fake = SimpleNamespace(
+            agent_context=SimpleNamespace(
+                instructions="SPOKEN_OPENING: Hello, I'm Amaka calling from Leadway Health.",
+                name="Amaka",
+            ),
+            config=SimpleNamespace(opening_greeting_text="", tts_language="en"),
+            directory_email=SimpleNamespace(caller_name=lambda: "Woron"),
+        )
+        self.assertEqual(
+            ConversationPipeline.opening_greeting_text(fake),
+            "Hello Woron, I'm Amaka calling from Leadway Health.",
+        )
+
     def test_number_formats_and_invalid_inputs(self):
         for raw in ["08112812216", "2348112812216", "+2348112812216", "002348112812216", "+234 811 281 2216"]:
             self.assertEqual(m.normalize_phone(raw), "+2348112812216")
@@ -56,10 +72,27 @@ class EmailTests(unittest.IsolatedAsyncioTestCase):
 
     def test_web_unmapped_and_cross_business_rejected(self):
         self.assertEqual(self.mail.recipient()[1], "caller@example.test")
+        self.assertEqual(self.mail.caller_name(), "")
         for change in [{"entry_surface": "public_web"}, {"sip_caller_verified": False},
                        {"business_id": "other"}, {"config_agent_id": "other"}, {"caller_phone": "08000000000"}]:
             mail = m.DirectoryEmail(self.context, {**self.identity, **change}, "x", self.path)
             self.assertIsNone(mail.recipient())
+            self.assertEqual(mail.caller_name(), "")
+
+    def test_verified_caller_profile_can_be_named_without_saved_email(self):
+        m.save_contact(self.path, "biz", "+2349040760651", full_name="Ife")
+        identity = {**self.identity, "caller_phone": "+2349040760651"}
+        mail = m.DirectoryEmail(self.context, identity, "x", self.path)
+        self.assertEqual(mail.caller_name(), "Ife")
+        self.assertIsNone(mail.recipient())
+
+    def test_name_only_contact_update_preserves_existing_email(self):
+        m.save_contact(self.path, "biz", "08112812216", "caller@example.test", full_name="Woron")
+        m.save_contact(self.path, "biz", "08112812216", full_name="Woron A.")
+        with m.connect(self.path) as db:
+            row = db.execute("SELECT email,full_name FROM caller_contacts WHERE phone_e164=?",
+                             ("+2348112812216",)).fetchone()
+        self.assertEqual(tuple(row), ("caller@example.test", "Woron A."))
 
     async def test_no_send_without_preparation_or_reassigned_recipient(self):
         http = HTTP()
@@ -85,6 +118,38 @@ class EmailTests(unittest.IsolatedAsyncioTestCase):
             self.mail.prepare({})
             self.assertTrue((await self.mail.send(http))["data"]["deduplicated"])
             self.assertEqual(len(http.calls), 1)
+
+    async def test_alternate_email_is_read_back_and_requires_confirmation(self):
+        http = HTTP()
+        self.mail.filters = None
+        self.assertEqual(self.mail.prepare({"recipient_email": "other@example.test"})["status"], "needs_input")
+        self.mail.remember(source())
+        prepared = self.mail.prepare({"recipient_email": "other@example.test"})
+        self.assertEqual(prepared["status"], "needs_confirmation")
+        self.assertIn("other at example dot test", prepared["message"])
+        self.assertEqual((await self.mail.send(http))["status"], "failed")
+        self.assertEqual(http.calls, [])
+        self.mail.prepare({"recipient_email": "other@example.test"})
+        with patch.object(m.provider_directory, "lookup", AsyncMock(return_value=source())):
+            sent = await self.mail.send(http, confirmed_alternate=True)
+        self.assertEqual(sent["status"], "success")
+        self.assertEqual(http.calls[0][1]["json"]["to"], [{"email_address": {"address": "other@example.test"}}])
+
+    async def test_alternate_email_can_be_used_when_contact_has_no_default(self):
+        m.save_contact(self.path, "biz", "08112812216", full_name="Woron")
+        self.mail.remember(source())
+        prepared = self.mail.prepare({"recipient_email": "other@example.test"})
+        self.assertEqual(prepared["status"], "needs_confirmation")
+        self.assertEqual(self.mail.prepared["full_name"], "Woron")
+
+    async def test_saved_email_default_needs_no_alternate_confirmation(self):
+        http = HTTP()
+        self.mail.remember(source())
+        self.assertEqual(self.mail.prepare({})["status"], "ready")
+        with patch.object(m.provider_directory, "lookup", AsyncMock(return_value=source())):
+            sent = await self.mail.send(http)
+        self.assertEqual(sent["status"], "success")
+        self.assertEqual(http.calls[0][1]["json"]["to"], [{"email_address": {"address": "caller@example.test"}}])
 
     async def test_source_failure_and_empty_results_prevent_send(self):
         http = HTTP()
