@@ -93,6 +93,13 @@ Current stable contract:
 - configured agent names are pinned into the first-turn instruction, and
   generic/custom voice responses are kept concise and free of Markdown syntax
   before they reach TTS
+- SAWW's configured mutating prepare/transaction HTTP tools send an immediate
+  spoken progress update while the request runs in LiveKit's async toolset;
+  read-only tools and the separate SAW agent retain their existing behavior.
+  A server-injected Wema demo profile can supply the configured customer ID,
+  phone number, and valid account number to SAWW's matching mutation tools;
+  those values are not logged, exposed as model arguments, or used by other
+  agents
 - NG TTS is the default non-Deepgram TTS path for configured English sessions
 - deployed environments can switch the default direct-call STT/TTS path to
   Odion STT and NG TTS with `VOICE_AGENT_STT_PROVIDER`, `VOICE_AGENT_STT_MODEL`,
