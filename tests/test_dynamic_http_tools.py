@@ -87,10 +87,7 @@ class DynamicHttpToolsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["status"], "success")
         ctx.update.assert_awaited_once_with("One moment, I'm preparing that request now.")
         self.assertTrue(tools[0]._saww_async_progress)
-        async_toolset = AsyncToolset(
-            id="test-saww-progress", tools=tools, on_duplicate_call="reject"
-        )
-        self.assertEqual(async_toolset._on_duplicate_call, "reject")
+        async_toolset = AsyncToolset(id="test-saww-progress", tools=tools)
         self.assertGreaterEqual(len(async_toolset._tools), 1)
         invoke.assert_awaited_once()
 

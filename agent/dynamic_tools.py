@@ -9,7 +9,6 @@ from urllib.parse import urlsplit
 import httpx
 
 from livekit.agents import RunContext, function_tool
-from livekit.agents.llm.async_toolset import AsyncRunContext
 
 from .latency_trace import elapsed_ms, emit as emit_latency_trace, monotonic_ms
 from .tool_schema_compat import strictify_schema_for_groq
@@ -626,10 +625,13 @@ def build_dynamic_http_tools(
                     session_userdata.pop("_saww_mutating_tool_in_flight", None)
 
         if progress is not None:
-            # AsyncToolset recognizes this annotation and runs the tool in
-            # the background when its first ctx.update() is called.
-            _call_dynamic_http_tool.__annotations__["ctx"] = AsyncRunContext
-        dynamic_tool = function_tool(raw_schema=raw_schema)(_call_dynamic_http_tool)
+            # LiveKit promotes this function tool to async mode when its first
+            # ctx.update() is called.
+            _call_dynamic_http_tool.__annotations__["ctx"] = RunContext
+        dynamic_tool = function_tool(
+            raw_schema=raw_schema,
+            **({"on_duplicate": "reject"} if progress is not None else {}),
+        )(_call_dynamic_http_tool)
         dynamic_tool._saww_async_progress = progress is not None
         dynamic_tools.append(dynamic_tool)
 

@@ -4419,7 +4419,6 @@ async def _build_configured_salon_agent(
             AsyncToolset(
                 id="saww-prepare-transaction",
                 tools=saww_progress_tools,
-                on_duplicate_call="reject",
             )
         )
     await agent.update_tools(regular_tools)
