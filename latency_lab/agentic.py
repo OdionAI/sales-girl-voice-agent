@@ -133,6 +133,8 @@ class AgentRuntimeContext:
     knowledge_base_ids: tuple[str, ...] = ()
     tools: tuple[dict[str, Any], ...] = ()
     loaded: bool = False
+    tts_provider: str = ""
+    tts_voice_id: str = ""
 
     def _capability_rules(self) -> str:
         enabled = {
@@ -320,6 +322,8 @@ async def load_agent_runtime_context(
         name=str(payload.get("name") or room_context.configured_name).strip(),
         end_user_id=room_context.end_user_id,
         instructions=str(payload.get("instructions") or "").strip(),
+        tts_provider=str(payload.get("tts_provider") or "").strip(),
+        tts_voice_id=str(payload.get("tts_voice_id") or "").strip(),
         knowledge_base_ids=knowledge_base_ids,
         tools=tools,
         loaded=True,
