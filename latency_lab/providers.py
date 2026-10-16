@@ -722,14 +722,17 @@ class RTTSClient:
             "stream": True,
             "stream_format": "audio",
             "initial_codec_chunk_frames": self.config.tts_initial_codec_chunk_frames,
-            "max_new_tokens": tts_token_budget(text),
+            "max_new_tokens": self.config.tts_max_new_tokens or tts_token_budget(text),
         }
+        if self.config.tts_seed is not None:
+            payload["seed"] = self.config.tts_seed
+        if self.config.uses_yinka_v7:
+            # Text-streaming prompt layout avoids premature EOS for this checkpoint.
+            payload.update(language="Auto", non_streaming_mode=False)
         if self.config.tts_voice:
-            payload.update(
-                task_type="Base",
-                voice=self.config.tts_voice,
-                x_vector_only_mode=False,
-            )
+            payload.update(task_type=self.config.tts_task_type, voice=self.config.tts_voice)
+            if self.config.tts_task_type == "Base":
+                payload["x_vector_only_mode"] = False
         elif self._ref_audio:
             payload.update(
                 task_type="Base",

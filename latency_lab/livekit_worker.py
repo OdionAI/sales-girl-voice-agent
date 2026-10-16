@@ -16,7 +16,12 @@ from livekit import rtc
 from livekit.agents import AutoSubscribe, JobContext, WorkerOptions, cli
 
 from .agentic import load_agent_runtime_context, session_routing_context
-from .config import apply_runtime_overrides, lab_config_from_environ, load_platform_env
+from .config import (
+    apply_runtime_overrides,
+    apply_saved_agent_voice,
+    lab_config_from_environ,
+    load_platform_env,
+)
 from .pipeline import ConversationPipeline
 from .report import generate_report
 from .session_identity import verify_session_token
@@ -359,6 +364,10 @@ async def entrypoint(ctx: JobContext) -> None:
         )
         if not agent_context.loaded:
             raise RuntimeError("Configured agent could not be loaded; refusing an unconfigured call.")
+        config = apply_saved_agent_voice(
+            config, agent_context.tts_provider, agent_context.tts_voice_id,
+            identity.get("runtime_overrides"),
+        )
 
         async def end_call_handler(reason: str) -> None:
             trace.record(

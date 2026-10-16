@@ -77,7 +77,7 @@ class PhraseTokenizer:
                     phrases.append(phrase)
                 continue
             words = self.buffer.split()
-            if len(words) >= self.max_words:
+            if self.max_words and len(words) >= self.max_words:
                 phrase = " ".join(words[: self.max_words]).strip()
                 self.buffer = self.buffer[len(phrase) :]
                 phrases.append(phrase)
@@ -1359,7 +1359,7 @@ class ConversationPipeline:
         phase: str,
         tools: list[dict[str, Any]] | None = None,
     ) -> list[ActionToolCall]:
-        tokenizer = PhraseTokenizer()
+        tokenizer = PhraseTokenizer(max_words=0 if self.config.uses_yinka_v7 else 24)
         tool_calls: list[ActionToolCall] = []
         phrase_queue: asyncio.Queue[str | None] = asyncio.Queue()
         tts_task = asyncio.create_task(
@@ -1468,7 +1468,7 @@ class ConversationPipeline:
                 model_text=model_phrase if phrase != model_phrase else None,
                 held=not attempt.authorized,
                 initial_codec_chunk_frames=self.config.tts_initial_codec_chunk_frames,
-                max_new_tokens=tts_token_budget(phrase),
+                max_new_tokens=self.config.tts_max_new_tokens or tts_token_budget(phrase),
                 tts_voice=self.config.tts_voice or None,
                 phase=phase,
             )

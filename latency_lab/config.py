@@ -5,6 +5,8 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
+from .tts_profiles import TTS_MODEL_PROFILES
+
 _PLATFORM_ENV_KEYS = (
     "AGENT_CONFIG_API_BASE_URL",
     "AGENT_CONFIG_SERVICE_BASE_URL",
@@ -124,6 +126,9 @@ class LabConfig:
     )
     tts_model: str = os.getenv("RVC_LAB_TTS_MODEL", "Qwen3-TTS")
     tts_voice: str = os.getenv("RVC_LAB_TTS_VOICE", "helen-mavino-0030")
+    tts_task_type: str = "Base"
+    tts_seed: int | None = None
+    tts_max_new_tokens: int | None = None
     tts_ref_audio: str = os.getenv("RVC_LAB_TTS_REF_AUDIO", "")
     tts_ref_text: str = os.getenv("RVC_LAB_TTS_REF_TEXT", "")
     tts_language: str = os.getenv("RVC_LAB_TTS_LANGUAGE", "English")
@@ -157,6 +162,14 @@ This test agent can provide guidance only. It cannot see accounts, verify identi
     report_dir: Path = Path(
         os.getenv("RVC_LAB_REPORT_DIR", str(Path(__file__).parent / "artifacts" / "reports"))
     )
+
+    @property
+    def uses_yinka_v7(self) -> bool:
+        return (
+            self.tts_model == "yinka-v7-test"
+            and self.tts_task_type == "CustomVoice"
+            and self.tts_voice == "yinka"
+        )
 
 
 def normalize_llm_base_url(value: str) -> str:
@@ -234,6 +247,10 @@ def apply_runtime_overrides(
     tts_frames = str(payload.get("tts_initial_codec_chunk_frames") or "").strip()
     thinking = str(payload.get("llm_disable_thinking") or "").strip().lower()
 
+    if tts_model in TTS_MODEL_PROFILES and tts_model != config.tts_model:
+        updates.update(TTS_MODEL_PROFILES[tts_model])
+        updates.update(tts_ref_audio="", tts_ref_text="")
+
     if stt_model:
         updates["stt_model"] = stt_model
     if stt_base_url:
@@ -254,6 +271,11 @@ def apply_runtime_overrides(
         updates["llm_enable_thinking"] = True
     if tts_model:
         updates["tts_model"] = tts_model
+    if payload.get("tts_task_type") in {"Base", "CustomVoice"}:
+        updates["tts_task_type"] = payload["tts_task_type"]
+    seed = str(payload.get("tts_seed", "")).strip()
+    if seed.isdigit():
+        updates["tts_seed"] = int(seed)
     if tts_base_url:
         updates["tts_url"] = tts_base_url
     if tts_voice:
@@ -264,6 +286,30 @@ def apply_runtime_overrides(
         updates["tts_language"] = normalize_tts_language(language)
 
     return replace(config, **updates) if updates else config
+
+
+def apply_saved_agent_voice(
+    config: LabConfig,
+    provider: str,
+    voice_id: str,
+    overrides: dict[str, Any] | None = None,
+) -> LabConfig:
+    """Resolve saved Yinka configuration; explicit session selections still win."""
+    if provider != "odion_tts" or voice_id != "yinka-v7-test":
+        return config
+    payload = overrides if isinstance(overrides, dict) else {}
+    if str(payload.get("tts_provider") or "").strip() not in {"", "current", "odion_tts"}:
+        return config
+    if any(payload.get(key) for key in ("tts_model", "tts_base_url", "tts_voice_id", "tts_voice")):
+        return config
+    selected = replace(
+        config,
+        tts_model=voice_id,
+        tts_ref_audio="",
+        tts_ref_text="",
+        **TTS_MODEL_PROFILES[voice_id],
+    )
+    return apply_runtime_overrides(selected, payload)
 
 
 def lab_config_from_environ() -> LabConfig:
