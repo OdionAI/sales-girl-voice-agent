@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import os
+import asyncio
 from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, patch
 
 import httpx
+from livekit.agents.llm.async_toolset import AsyncToolset
 
-from agent.dynamic_tools import build_dynamic_http_tools
+from agent.dynamic_tools import _saww_progress_messages, build_dynamic_http_tools
 
 
 class DynamicHttpToolsTests(unittest.IsolatedAsyncioTestCase):
@@ -26,6 +28,193 @@ class DynamicHttpToolsTests(unittest.IsolatedAsyncioTestCase):
             ),
             room=SimpleNamespace(name="room-123"),
         )
+
+    def test_saww_progress_is_limited_to_mutating_prepare_and_transaction_tools(self) -> None:
+        saww = {"name": "SAWW"}
+        self.assertIsNotNone(
+            _saww_progress_messages(
+                saww,
+                {"name": "prepare_airtime", "method": "POST"},
+            )
+        )
+        self.assertIsNotNone(
+            _saww_progress_messages(
+                saww,
+                {"name": "airtime_transaction", "method": "POST"},
+            )
+        )
+        self.assertIsNone(
+            _saww_progress_messages(
+                {"name": "SAW"},
+                {"name": "prepare_airtime", "method": "POST"},
+            )
+        )
+        self.assertIsNone(
+            _saww_progress_messages(
+                saww,
+                {"name": "transaction_history", "method": "GET"},
+            )
+        )
+        self.assertIsNone(
+            _saww_progress_messages(
+                saww,
+                {"name": "lookup_customer", "method": "POST"},
+            )
+        )
+
+    async def test_saww_prepare_tool_announces_async_progress(self) -> None:
+        tools = build_dynamic_http_tools(
+            {
+                "name": "SAWW",
+                "tools": [
+                    {
+                        "name": "prepare_airtime",
+                        "description": "Prepare an airtime purchase.",
+                        "method": "POST",
+                        "url": "https://vendor.example.com/prepare-airtime",
+                    }
+                ],
+            }
+        )
+        ctx = self._run_context(["prepare_airtime"])
+        ctx.update = AsyncMock()
+        with patch(
+            "agent.dynamic_tools.invoke_dynamic_http_tool",
+            new=AsyncMock(return_value={"status": "success", "prepared": True}),
+        ) as invoke:
+            result = await tools[0](ctx=ctx, raw_arguments={})
+
+        self.assertEqual(result["status"], "success")
+        ctx.update.assert_awaited_once_with("One moment, I'm preparing that request now.")
+        self.assertTrue(tools[0]._saww_async_progress)
+        async_toolset = AsyncToolset(
+            id="test-saww-progress", tools=tools, on_duplicate_call="reject"
+        )
+        self.assertEqual(async_toolset._on_duplicate_call, "reject")
+        self.assertGreaterEqual(len(async_toolset._tools), 1)
+        invoke.assert_awaited_once()
+
+    async def test_same_prepare_tool_on_saw_remains_non_progress_tool(self) -> None:
+        tools = build_dynamic_http_tools(
+            {
+                "name": "SAW",
+                "tools": [
+                    {
+                        "name": "prepare_airtime",
+                        "description": "Prepare an airtime purchase.",
+                        "method": "POST",
+                        "url": "https://vendor.example.com/prepare-airtime",
+                    }
+                ],
+            }
+        )
+        ctx = self._run_context(["prepare_airtime"])
+        with patch(
+            "agent.dynamic_tools.invoke_dynamic_http_tool",
+            new=AsyncMock(return_value={"status": "success"}),
+        ) as invoke:
+            result = await tools[0](ctx=ctx, raw_arguments={})
+
+        self.assertEqual(result["status"], "success")
+        invoke.assert_awaited_once()
+
+    async def test_saww_profile_fields_are_injected_and_hidden_from_tool_schema(self) -> None:
+        profile = {
+            "customer_id": "demo-customer-01",
+            "phone_number": "08012345678",
+            "account_number": "1234567890",
+        }
+        tools = build_dynamic_http_tools(
+            {
+                "name": "SAWW",
+                "tools": [
+                    {
+                        "name": "prepare_airtime",
+                        "description": "Prepare an airtime transaction.",
+                        "method": "POST",
+                        "url": "https://vendor.example.com/prepare-airtime",
+                        "request_schema": {
+                            "type": "object",
+                            "properties": {
+                                "customerId": {"type": "string"},
+                                "phoneNumber": {"type": "string"},
+                                "accountNo": {"type": "string"},
+                                "amount": {"type": "integer"},
+                            },
+                            "required": [
+                                "customerId",
+                                "phoneNumber",
+                                "accountNo",
+                                "amount",
+                            ],
+                        },
+                    }
+                ],
+            },
+            runtime_context={"wema_context": profile},
+        )
+        ctx = self._run_context(["prepare_airtime"])
+        ctx.update = AsyncMock()
+        with patch(
+            "agent.dynamic_tools.invoke_dynamic_http_tool",
+            new=AsyncMock(return_value={"status": "success"}),
+        ) as invoke:
+            await tools[0](ctx=ctx, raw_arguments={"amount": 500})
+
+        forwarded = invoke.await_args.kwargs["raw_arguments"]
+        self.assertEqual(forwarded["customerId"], profile["customer_id"])
+        self.assertEqual(forwarded["phoneNumber"], profile["phone_number"])
+        self.assertEqual(forwarded["accountNo"], profile["account_number"])
+        self.assertEqual(forwarded["amount"], 500)
+        parameters = tools[0].info.raw_schema["parameters"]
+        self.assertEqual(set(parameters["properties"]), {"amount"})
+        self.assertEqual(parameters["required"], ["amount"])
+
+    async def test_saww_serializes_different_mutation_tools_in_one_call(self) -> None:
+        tools = build_dynamic_http_tools(
+            {
+                "name": "SAWW",
+                "tools": [
+                    {
+                        "name": "prepare_airtime",
+                        "description": "Prepare an airtime request.",
+                        "method": "POST",
+                        "url": "https://vendor.example.com/prepare",
+                    },
+                    {
+                        "name": "airtime_transaction",
+                        "description": "Submit an airtime transaction.",
+                        "method": "POST",
+                        "url": "https://vendor.example.com/transaction",
+                    },
+                ],
+            }
+        )
+        ctx = self._run_context(["prepare_airtime", "airtime_transaction"])
+        ctx.update = AsyncMock()
+        started = asyncio.Event()
+        finish = asyncio.Event()
+
+        async def invoke(**_kwargs):
+            started.set()
+            await finish.wait()
+            return {"status": "success"}
+
+        self.assertTrue(tools[0]._saww_async_progress)
+        self.assertTrue(tools[1]._saww_async_progress)
+        call = AsyncMock(side_effect=invoke)
+        with patch("agent.dynamic_tools.invoke_dynamic_http_tool", new=call):
+            first = asyncio.create_task(
+                tools[0](ctx=ctx, raw_arguments={})
+            )
+            await started.wait()
+            second = await tools[1](ctx=ctx, raw_arguments={})
+            finish.set()
+            await first
+
+        self.assertEqual(second["status"], "failed")
+        self.assertIn("Another request is still being processed", second["message"])
+        call.assert_called_once()
 
     async def test_dynamic_post_tool_executes_and_returns_json_payload(self) -> None:
         tools = build_dynamic_http_tools(

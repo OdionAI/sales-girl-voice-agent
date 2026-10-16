@@ -24,6 +24,7 @@ from livekit.agents import (
     room_io,
 )
 from livekit.agents import llm, stt
+from livekit.agents.llm.async_toolset import AsyncToolset
 from livekit.agents._exceptions import APIConnectionError, APIStatusError
 from livekit.agents.llm import LLMStream
 from livekit.agents.llm.tool_context import find_function_tools
@@ -2331,6 +2332,31 @@ def _extract_session_extras_from_ctx(ctx: JobContext) -> dict[str, Any]:
         session_kind = str(payload.get("session_kind") or "").strip().lower()
         if session_kind:
             extras["session_kind"] = session_kind
+        if (
+            str(payload.get("agent_public_id") or "").strip() == "agt_bedb4b6498"
+            and str(payload.get("configured_agent_name") or "").strip().casefold()
+            == "saww"
+        ):
+            raw_wema_context = payload.get("wema_context")
+            if isinstance(raw_wema_context, dict):
+                customer_id = str(raw_wema_context.get("customer_id") or "").strip()
+                phone_number = str(raw_wema_context.get("phone_number") or "").strip()
+                account_number = str(
+                    raw_wema_context.get("account_number") or ""
+                ).strip()
+                valid_phone = bool(
+                    re.fullmatch(r"0\d{10}|\+234\d{10}", phone_number)
+                )
+                if customer_id and valid_phone:
+                    extras["wema_context"] = {
+                        "customer_id": customer_id[:120],
+                        "phone_number": phone_number,
+                        **(
+                            {"account_number": account_number}
+                            if re.fullmatch(r"\d{10}", account_number)
+                            else {}
+                        ),
+                    }
         if extras:
             return extras
     return {}
@@ -2598,6 +2624,7 @@ async def _init_session_userdata(ctx: JobContext, language: str) -> dict[str, An
         "last_assistant_message": "",
         "guest_context": "",
         "session_kind": "",
+        "wema_context": {},
         "usage_meter": UsageMeter(),
     } | participant_overrides | _extract_session_extras_from_ctx(ctx)
 
@@ -4381,17 +4408,35 @@ async def _build_configured_salon_agent(
         agent.tools,
         list(userdata.get("enabled_tool_names") or []),
     )
-    await agent.update_tools(selected_tools)
+    saww_progress_tools = [
+        tool for tool in selected_tools if getattr(tool, "_saww_async_progress", False)
+    ]
+    regular_tools = [
+        tool for tool in selected_tools if not getattr(tool, "_saww_async_progress", False)
+    ]
+    if saww_progress_tools:
+        regular_tools.append(
+            AsyncToolset(
+                id="saww-prepare-transaction",
+                tools=saww_progress_tools,
+                on_duplicate_call="reject",
+            )
+        )
+    await agent.update_tools(regular_tools)
     logger.info(
         "Exposing configured runtime tools only: %s",
         [
             tool_name
             for tool in agent.tools
-            if (
-                tool_name := str(
-                    getattr(getattr(tool, "info", None), "name", "") or ""
-                ).strip()
+            for tool_name in (
+                [str(getattr(getattr(tool, "info", None), "name", "") or "").strip()]
+                if not isinstance(tool, AsyncToolset)
+                else [
+                    str(getattr(getattr(inner, "info", None), "name", "") or "").strip()
+                    for inner in getattr(tool, "_tools", [])
+                ]
             )
+            if tool_name
         ],
     )
     return agent
@@ -5008,6 +5053,7 @@ async def entrypoint(ctx: JobContext):
             active_agent_config,
             excluded_tool_names=set(BUILTIN_RUNTIME_TOOL_NAMES)
             | set(POST_CALL_ONLY_TOOL_NAMES),
+            runtime_context=userdata,
         )
         if dynamic_tools:
             logger.info(
@@ -5203,6 +5249,7 @@ async def entrypoint(ctx: JobContext):
             active_agent_config,
             excluded_tool_names=set(BUILTIN_RUNTIME_TOOL_NAMES)
             | set(POST_CALL_ONLY_TOOL_NAMES),
+            runtime_context=userdata,
         )
         if dynamic_tools:
             logger.info(

@@ -9,6 +9,7 @@ from urllib.parse import urlsplit
 import httpx
 
 from livekit.agents import RunContext, function_tool
+from livekit.agents.llm.async_toolset import AsyncRunContext
 
 from .latency_trace import elapsed_ms, emit as emit_latency_trace, monotonic_ms
 from .tool_schema_compat import strictify_schema_for_groq
@@ -28,6 +29,82 @@ HTTP_TOOL_ALLOWED_METHODS = {
     "DELETE",
     "HEAD",
 }
+
+_SAWW_MUTATING_TOOL_MARKERS = (
+    "prepare",
+    "transaction",
+    "transact",
+    "purchase",
+    "airtime",
+    "top_up",
+    "topup",
+    "transfer",
+)
+_SAWW_MUTATING_HTTP_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+_SAWW_PROFILE_FIELD_ALIASES = {
+    "customer_id": {"customerid", "customeridentifier", "custid"},
+    "phone_number": {"phone", "phonenumber", "mobile", "mobilenumber"},
+    "account_number": {"accountnumber", "accountno", "acctnumber", "acctno"},
+}
+
+
+def _saww_profile_overrides(
+    active_agent_config: dict[str, Any] | None,
+    tool: dict[str, Any],
+    runtime_context: dict[str, Any] | None,
+) -> dict[str, Any]:
+    if _saww_progress_messages(active_agent_config, tool) is None:
+        return {}
+    context = runtime_context or {}
+    profile = context.get("wema_context")
+    if not isinstance(profile, dict):
+        return {}
+
+    configured_properties = _normalize_schema(tool.get("request_schema")).get(
+        "properties", {}
+    )
+    if not isinstance(configured_properties, dict):
+        return {}
+
+    normalized_values = {
+        "customer_id": str(profile.get("customer_id") or "").strip(),
+        "phone_number": str(profile.get("phone_number") or "").strip(),
+        "account_number": str(profile.get("account_number") or "").strip(),
+    }
+    overrides: dict[str, Any] = {}
+    for property_name in configured_properties:
+        normalized_property = "".join(
+            character
+            for character in str(property_name).casefold()
+            if character.isalnum()
+        )
+        for canonical_name, aliases in _SAWW_PROFILE_FIELD_ALIASES.items():
+            if normalized_property in aliases and normalized_values[canonical_name]:
+                overrides[str(property_name)] = normalized_values[canonical_name]
+                break
+    return overrides
+
+
+def _saww_progress_messages(
+    active_agent_config: dict[str, Any] | None,
+    tool: dict[str, Any],
+) -> str | None:
+    """Return progress copy only for SAWW's mutating prepare/transaction tools."""
+    config = active_agent_config or {}
+    if str(config.get("name") or "").strip().casefold() != "saww":
+        return None
+
+    method = str(tool.get("method") or "POST").strip().upper()
+    if method not in _SAWW_MUTATING_HTTP_METHODS:
+        return None
+
+    tool_name = str(tool.get("name") or "").strip().casefold()
+    if not any(marker in tool_name for marker in _SAWW_MUTATING_TOOL_MARKERS):
+        return None
+
+    if "prepare" in tool_name:
+        return "One moment, I'm preparing that request now."
+    return "One moment, I'm processing that transaction now. I'll confirm the result shortly."
 
 
 def _emit_dynamic_tool_latency(
@@ -447,6 +524,7 @@ def build_dynamic_http_tools(
     active_agent_config: dict[str, Any] | None,
     *,
     excluded_tool_names: set[str] | None = None,
+    runtime_context: dict[str, Any] | None = None,
 ) -> list[Any]:
     excluded = {str(name or "").strip() for name in (excluded_tool_names or set())}
     dynamic_tools: list[Any] = []
@@ -463,16 +541,41 @@ def build_dynamic_http_tools(
         ):
             continue
 
+        progress = _saww_progress_messages(active_agent_config, tool)
+        profile_overrides = _saww_profile_overrides(
+            active_agent_config, tool, runtime_context
+        )
+        parameters = _normalize_schema(tool.get("request_schema"))
+        if profile_overrides:
+            properties = parameters.get("properties")
+            if isinstance(properties, dict):
+                parameters["properties"] = {
+                    name: definition
+                    for name, definition in properties.items()
+                    if name not in profile_overrides
+                }
+            parameters["required"] = [
+                name
+                for name in parameters.get("required", [])
+                if name not in profile_overrides
+            ]
+
         raw_schema = {
             "name": tool_name,
             "description": (
                 f"{description} When you call this tool, send the relevant request fields as top-level JSON keys."
             ),
-            "parameters": _normalize_schema(tool.get("request_schema")),
+            "parameters": parameters,
         }
 
         async def _call_dynamic_http_tool(
-            ctx: RunContext, raw_arguments: dict[str, Any], _tool: dict[str, Any] = tool
+            ctx: RunContext | AsyncRunContext,
+            raw_arguments: dict[str, Any],
+            _tool: dict[str, Any] = tool,
+            _active_agent_config: dict[str, Any] = active_agent_config or {},
+            _runtime_context: dict[str, Any] = runtime_context or {},
+            _profile_overrides: dict[str, Any] = profile_overrides,
+            _progress: str | None = progress,
         ) -> dict[str, Any]:
             current_name = str(_tool.get("name") or "").strip()
             if not _is_tool_enabled(ctx, current_name):
@@ -480,12 +583,54 @@ def build_dynamic_http_tools(
                     current_name,
                     "I can't use that tool from this agent right now.",
                 )
-            return await invoke_dynamic_http_tool(
-                tool=_tool,
-                raw_arguments=raw_arguments if isinstance(raw_arguments, dict) else {},
-                metadata=_tool_metadata(ctx),
+            arguments = (
+                raw_arguments if isinstance(raw_arguments, dict) else {}
             )
+            if _profile_overrides:
+                arguments = {**arguments, **_profile_overrides}
 
-        dynamic_tools.append(function_tool(raw_schema=raw_schema)(_call_dynamic_http_tool))
+            if _progress is None:
+                return await invoke_dynamic_http_tool(
+                    tool=_tool,
+                    raw_arguments=arguments,
+                    metadata=_tool_metadata(ctx),
+                )
+
+            session_userdata = getattr(ctx, "userdata", None)
+            if not isinstance(session_userdata, dict):
+                session_userdata = getattr(
+                    getattr(ctx, "session", None), "userdata", None
+                )
+            if isinstance(session_userdata, dict) and session_userdata.get(
+                "_saww_mutating_tool_in_flight"
+            ):
+                return _failure_payload(
+                    current_name,
+                    "Another request is still being processed. Wait for its result before starting another transaction.",
+                )
+
+            if isinstance(session_userdata, dict):
+                session_userdata["_saww_mutating_tool_in_flight"] = True
+            # The first update switches this function tool to LiveKit's async
+            # progress mode: the agent can acknowledge immediately while the
+            # HTTP request continues, then speak again with the real result.
+            try:
+                await ctx.update(_progress)
+                return await invoke_dynamic_http_tool(
+                    tool=_tool,
+                    raw_arguments=arguments,
+                    metadata=_tool_metadata(ctx),
+                )
+            finally:
+                if isinstance(session_userdata, dict):
+                    session_userdata.pop("_saww_mutating_tool_in_flight", None)
+
+        if progress is not None:
+            # AsyncToolset recognizes this annotation and runs the tool in
+            # the background when its first ctx.update() is called.
+            _call_dynamic_http_tool.__annotations__["ctx"] = AsyncRunContext
+        dynamic_tool = function_tool(raw_schema=raw_schema)(_call_dynamic_http_tool)
+        dynamic_tool._saww_async_progress = progress is not None
+        dynamic_tools.append(dynamic_tool)
 
     return dynamic_tools
