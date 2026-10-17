@@ -119,6 +119,9 @@ export RVC_LAB_SPEEXDSP_LIBRARY="$(brew --prefix speexdsp)/lib/libspeexdsp.dylib
 The library path is optional when the system library loader finds SpeexDSP.
 Missing opt-in dependencies reject the requested settings rather than claiming
 they were applied. Standard + Balanced does not load these processors.
+Start the RVC worker with `python -m latency_lab.livekit_worker start` using its
+existing environment and dispatch name. The repository Docker image's default
+`main.py start` command starts the legacy worker; an RVC deployment must override it.
 
 The worker advertises `attentive.listening.version=1` after initialization and
 registers the reliable LiveKit RPC `attentive.listening.configure`. Only the
@@ -141,7 +144,7 @@ From `sdks/ios`, run `swift test` and `swift build`. From the repository root,
 run the Python regression tests and the local transport check:
 
 ```sh
-.venv/bin/python -m pytest latency_lab/tests
+.venv/bin/python -m unittest discover -s latency_lab/tests -p 'test_*.py'
 .venv/bin/python sdks/ios/script/verify_listening_controls.py
 ```
 

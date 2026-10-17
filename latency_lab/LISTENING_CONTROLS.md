@@ -27,6 +27,11 @@ variable is available for hosts whose loader does not search its install locatio
 A missing dependency rejects the requested configuration and keeps the previous
 settings. It never claims noise reduction was enabled when it was not.
 
+Launch with `python -m latency_lab.livekit_worker start` and the existing RVC
+environment/dispatch configuration. Override the repository Docker image's default
+`main.py start` command when deploying this worker; that default starts the legacy
+agent. The legacy Huawei deployment workflow is not the current RVC rollout route.
+
 ## Protocol and authorization
 
 Once initialized, the agent publishes participant attribute
