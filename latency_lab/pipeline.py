@@ -38,6 +38,7 @@ from .banking_tools import BankingTools, BANK_TOOLS
 from .memory import ConversationMemory, CONVERSATION_RULES
 from .conversation_persist import ConversationStore, caller_from_identity
 from .usage import UsageCollector, UsageReporter
+from .listening import ListeningBusy, ListeningConfiguration, ListeningInput
 
 
 class Outbound(Protocol):
@@ -181,6 +182,10 @@ class ConversationPipeline:
         self.final_timeout_task: asyncio.Task[None] | None = None
         self.turn_pcm16 = bytearray()
         self._opening_task: asyncio.Task[None] | None = None
+        self.listening = ListeningInput()
+        self._listening_preroll = bytearray()
+        self._candidate_confirmation_ms = self.config.min_speech_ms
+        self._candidate_silence_ms = 0.0
 
     @property
     def history(self) -> list[dict]:
@@ -414,6 +419,17 @@ class ConversationPipeline:
             **data,
         )
 
+    def configure_listening(self, configuration: ListeningConfiguration) -> None:
+        """Called by the authorized RPC handler under the per-call input lock."""
+        if configuration != self.listening.configuration and (
+            self.speech_candidate_active or self.state in {"speaking", "speculating"}
+        ):
+            # Do not reset a stateful filter or detector halfway through a word.
+            raise ListeningBusy("Pause speaking and try again.")
+        self.listening.configure(configuration)
+        self.trace.record("listening_configuration_changed", reason="caller_requested",
+                          **configuration.payload())
+
     async def audio(
         self,
         pcm: bytes,
@@ -424,16 +440,38 @@ class ConversationPipeline:
         self.banking.ingest_pcm(pcm)
         if self.state == "recovering_stt":
             return
+        for frame in self.listening.process(pcm):
+            await self._audio_frame(frame.pcm, speech=frame.speech,
+                                    client_sent_ms=client_sent_ms,
+                                    client_network_ms=client_network_ms)
+
+    async def _audio_frame(
+        self, pcm: bytes, *, speech: bool | None,
+        client_sent_ms: float | None, client_network_ms: float | None,
+    ) -> None:
+        # Enhancement happens before both streaming ASR and authoritative batch ASR.
+        # No frame is removed or zeroed by VAD: silence still advances end-of-turn.
         await self.stt.append(pcm)
         self.last_client_network_ms = client_network_ms
         duration_ms = len(pcm) / 2 / 16000 * 1000
         level = rms_pcm16(pcm)
-        speaking = level >= self.config.speech_rms
+        speaking = level >= self.config.speech_rms if speech is None else speech
+        prior_audio = bytes(self._listening_preroll) if speech is not None else b""
+        if speech is not None:
+            self._listening_preroll.extend(pcm)
+            del self._listening_preroll[:-6400]  # 200 ms for soft consonants before VAD onset.
+        else:
+            self._listening_preroll.clear()
         if speaking:
             self._pause_compaction()
             if self.state in {"idle", "playing", "releasing"}:
                 if not self.speech_candidate_active:
                     self.turn_pcm16.clear()
+                    self.turn_pcm16.extend(prior_audio)
+                    self._candidate_confirmation_ms = self.listening.configuration.confirmation_ms(
+                        self.config.min_speech_ms, interrupting=self.state in {"playing", "releasing"}
+                    )
+                    self._candidate_silence_ms = 0.0
                     self.speech_candidate_active = True
                     self.candidate_turn_id = f"turn-{self.turn_number + 1:04d}"
                     self.candidate_client_sent_ms = client_sent_ms
@@ -449,7 +487,8 @@ class ConversationPipeline:
                     )
                 self.turn_pcm16.extend(pcm)
                 self.speech_ms += duration_ms
-                if self.speech_ms >= self.config.min_speech_ms:
+                self._candidate_silence_ms = 0.0
+                if self.speech_ms >= self._candidate_confirmation_ms:
                     await self._speech_started(level, client_sent_ms, client_network_ms)
                 return
             self.turn_pcm16.extend(pcm)
@@ -466,12 +505,16 @@ class ConversationPipeline:
             return
         if self.speech_candidate_active and self.state in {"idle", "playing", "releasing"}:
             self.turn_pcm16.extend(pcm)
+            self._candidate_silence_ms += duration_ms
+            if speech is not None and self._candidate_silence_ms < 60.0:
+                # Brief unvoiced consonants are part of the candidate, not a reset.
+                return
             self.trace.record(
                 "user_speech_candidate_cancel",
                 turn_id=self.candidate_turn_id,
                 reason="voiced_audio_ended_before_minimum_speech_duration",
                 voiced_ms=round(self.speech_ms, 2),
-                required_ms=self.config.min_speech_ms,
+                required_ms=self._candidate_confirmation_ms,
             )
             self.turn_pcm16.clear()
             self._clear_speech_candidate()
@@ -540,6 +583,7 @@ class ConversationPipeline:
         self.candidate_client_network_ms = None
         self.preconfirm_partial = None
         self.speech_ms = 0.0
+        self._candidate_silence_ms = 0.0
 
     async def _speech_ended(self) -> None:
         if self.state not in {"speaking", "speculating"}:
@@ -555,6 +599,7 @@ class ConversationPipeline:
         self.silence_ms = 0.0
         self.silence_candidate = False
         committed_audio = bytes(self.turn_pcm16)
+        self._listening_preroll.clear()
         self.banking.utterance(committed_audio)
         self.turn_pcm16.clear()
         self.trace.record(
@@ -1665,6 +1710,7 @@ class ConversationPipeline:
             self.trace.record("history_cleared", reason="browser_request")
 
     async def close(self) -> None:
+        self.listening.close()
         self.conversations.mark_disconnected()
         tasks = [task for task in (self._memory_loop_task, self._compaction_task) if task]
         for task in tasks:

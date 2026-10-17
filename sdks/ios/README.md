@@ -12,6 +12,10 @@ the pinned transport's WebRTC media, WebSocket signaling, audio capture/playback
 and reconnection. See [transport provenance and packaging](Vendor/AttentiveRTC/README.md).
 Requires iOS 16+ (macOS 13+ for the diagnostic executable) and Swift 6.1+ tooling.
 
+This source revision adds [noise control and response sensitivity](LISTENING_CONTROLS.md)
+to the headless API and supplied caller, with acknowledgement from the matching
+`rvc-livekit-comparison` worker. These controls require an updated SDK build and worker.
+
 Start with the [customer integration quickstart](GETTING_STARTED.md) for complete
 Swift snippets using your own UI or the supplied caller screen. See
 [distribution and release steps](DISTRIBUTION.md) for the public
