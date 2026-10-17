@@ -20,6 +20,7 @@ class SavedVoiceTest(unittest.TestCase):
         self.assertTrue(selected.uses_yinka_v7)
         self.assertEqual(selected.tts_seed, 1)
         self.assertEqual(selected.tts_initial_codec_chunk_frames, 6)
+        self.assertEqual(selected.tts_language, "English")
         self.assertIn("/tts-yinka-v7/", selected.tts_url)
         self.assertEqual(base.tts_model, "Qwen3-TTS")
         self.assertIsNone(base.tts_seed)
@@ -101,7 +102,7 @@ class VoiceRequestTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(payload["model"], "yinka-v7-test")
             self.assertEqual(payload["voice"], "yinka")
             self.assertEqual(payload["task_type"], "CustomVoice")
-            self.assertEqual(payload["language"], "Auto")
+            self.assertEqual(payload["language"], "English")
             self.assertEqual(payload["seed"], 1)
             self.assertEqual(payload["initial_codec_chunk_frames"], 6)
             self.assertEqual(payload["max_new_tokens"], 4096)
@@ -110,6 +111,16 @@ class VoiceRequestTest(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn("x_vector_only_mode", payload)
             self.assertNotIn("ref_audio", payload)
         self.assertEqual(response.release.call_count, 2)
+
+    async def test_yinka_respects_explicit_language(self):
+        for language in ("English", "Auto", "French"):
+            with self.subTest(language=language):
+                session, _ = self.session()
+                config = apply_saved_agent_voice(LabConfig(), "odion_tts", "yinka-v7-test")
+                config = apply_runtime_overrides(config, language=language)
+                _, audio = await RTTSClient(config, session).stream("Hello.")
+                _ = [chunk async for chunk in audio]
+                self.assertEqual(session.post.call_args.kwargs["json"]["language"], language)
 
     async def test_existing_default_request_stays_unchanged(self):
         session, _ = self.session()

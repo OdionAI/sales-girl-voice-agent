@@ -728,7 +728,8 @@ class RTTSClient:
             payload["seed"] = self.config.tts_seed
         if self.config.uses_yinka_v7:
             # Text-streaming prompt layout avoids premature EOS for this checkpoint.
-            payload.update(language="Auto", non_streaming_mode=False)
+            # Keep the configured language: forcing Auto makes long English lists repeat.
+            payload["non_streaming_mode"] = False
         if self.config.tts_voice:
             payload.update(task_type=self.config.tts_task_type, voice=self.config.tts_voice)
             if self.config.tts_task_type == "Base":
