@@ -10,10 +10,14 @@ protocol CallTransport: AnyObject {
     func disconnect() async
     func setMicrophone(enabled: Bool) async throws
     func sendText(_ text: String) async throws -> String
+    func setAudioInputConfiguration(_ configuration: AttentiveAudioInputConfiguration) async throws
 }
 
 extension CallTransport {
     var microphoneEnabled: Bool? { nil }
+    func setAudioInputConfiguration(_ configuration: AttentiveAudioInputConfiguration) async throws {
+        throw AttentiveAudioInputError.unsupported
+    }
 }
 
 /// One active call per instance. Retain it while the call is active, then call end().
@@ -28,6 +32,8 @@ public final class AttentiveCall: ObservableObject {
     @Published public private(set) var toolActivity: [ToolActivity] = []
     @Published public private(set) var lastError: CallError?
     @Published public private(set) var configuration: AgentConfiguration?
+    @Published public private(set) var audioInputConfiguration: AttentiveAudioInputConfiguration
+    @Published public private(set) var audioInputState: AttentiveAudioInputState
     public let agentAudioLevel = AgentAudioLevel()
 
     /// Called on the main actor. Treat payloads as private caller data.
@@ -46,13 +52,13 @@ public final class AttentiveCall: ObservableObject {
     private var changingMicrophone = false
 
     /// Uses your dashboard calling key and agent. No endpoint or transport setup is required.
-    public convenience init(apiKey: String, agentID: String) {
-        self.init(apiKey: apiKey, agentID: agentID, customerID: nil)
+    public convenience init(apiKey: String, agentID: String, audioInput: AttentiveAudioInputConfiguration = .standard) {
+        self.init(apiKey: apiKey, agentID: agentID, customerID: nil, audioInput: audioInput)
     }
 
     /// Customer selection must match the identity in a backend-issued caller token.
-    public convenience init(apiKey: String, agentID: String, customerID: String?) {
-        self.init(credentialProvider: nil, allowsInsecureDevelopmentConnections: false)
+    public convenience init(apiKey: String, agentID: String, customerID: String?, audioInput: AttentiveAudioInputConfiguration = .standard) {
+        self.init(credentialProvider: nil, allowsInsecureDevelopmentConnections: false, audioInput: audioInput)
         sdkClient = SDKClient(apiKey: apiKey, agentID: agentID, customerID: customerID)
     }
 
@@ -73,20 +79,23 @@ public final class AttentiveCall: ObservableObject {
         }
     }
 
-    public convenience init(endpoint: URL, allowsInsecureDevelopmentConnections: Bool = false) throws {
+    public convenience init(endpoint: URL, allowsInsecureDevelopmentConnections: Bool = false,
+                            audioInput: AttentiveAudioInputConfiguration = .standard) throws {
         let provider = try HTTPCallCredentialProvider(endpoint: endpoint,
             allowsInsecureDevelopmentConnections: allowsInsecureDevelopmentConnections)
-        self.init(credentialProvider: provider, allowsInsecureDevelopmentConnections: allowsInsecureDevelopmentConnections)
+        self.init(credentialProvider: provider, allowsInsecureDevelopmentConnections: allowsInsecureDevelopmentConnections, audioInput: audioInput)
     }
 
     public convenience init(credentialProvider: any CallCredentialProvider,
-                            allowsInsecureDevelopmentConnections: Bool = false) {
+                            allowsInsecureDevelopmentConnections: Bool = false,
+                            audioInput: AttentiveAudioInputConfiguration = .standard) {
         self.init(credentialProvider: Optional(credentialProvider),
-                  allowsInsecureDevelopmentConnections: allowsInsecureDevelopmentConnections)
+                  allowsInsecureDevelopmentConnections: allowsInsecureDevelopmentConnections, audioInput: audioInput)
     }
 
     private convenience init(credentialProvider: (any CallCredentialProvider)?,
-                             allowsInsecureDevelopmentConnections: Bool) {
+                             allowsInsecureDevelopmentConnections: Bool,
+                             audioInput: AttentiveAudioInputConfiguration) {
         self.init(provider: credentialProvider, allowInsecure: allowsInsecureDevelopmentConnections,
                   makeTransport: { RealtimeCallTransport() }, microphonePermission: {
             switch AVCaptureDevice.authorizationStatus(for: .audio) {
@@ -94,20 +103,25 @@ public final class AttentiveCall: ObservableObject {
             case .notDetermined: return await AVCaptureDevice.requestAccess(for: .audio)
             default: return false
             }
-        })
+        }, audioInput: audioInput)
     }
 
     init(provider: (any CallCredentialProvider)?, allowInsecure: Bool = false,
          makeTransport: @escaping () -> any CallTransport,
-         microphonePermission: @escaping () async -> Bool, agentTimeout: Duration = .seconds(30)) {
+         microphonePermission: @escaping () async -> Bool, agentTimeout: Duration = .seconds(30),
+         audioInput: AttentiveAudioInputConfiguration = .standard) {
         self.provider = provider
         self.allowInsecure = allowInsecure
         self.makeTransport = makeTransport
         self.microphonePermission = microphonePermission
         self.agentTimeout = agentTimeout
+        audioInputConfiguration = audioInput
+        audioInputState = .init(status: .idle, requested: audioInput)
     }
 
     /// Returns after joining and publishing audio, not after the agent's greeting.
+    /// Non-default listening preferences wait up to ten seconds for worker negotiation
+    /// before enabling the microphone. Unsupported settings leave the call usable.
     /// microphoneEnabled=false is useful for chat-only diagnostics, not voice auth.
     public func start(_ request: CallRequest, microphoneEnabled: Bool = true) async throws {
         guard operation == nil, [.idle, .ended, .failed].contains(state) else { throw CallError.alreadyActive }
@@ -126,6 +140,7 @@ public final class AttentiveCall: ObservableObject {
         actionAuthentication = .pending
         agentState = .waiting
         agentAudioLevel.reset()
+        audioInputState = .init(status: .pending, requested: audioInputConfiguration)
         let id = UUID()
         attempt = id
         let connection = makeTransport()
@@ -143,6 +158,8 @@ public final class AttentiveCall: ObservableObject {
                 try Task.checkCancellation()
                 guard !credentials.participantToken.isEmpty, !credentials.roomName.isEmpty else { throw CallError.invalidResponse }
                 try validateURL(credentials.serverUrl, schemes: ["wss", "ws"], allowInsecure: allowInsecure)
+                // Store preferences before connecting. Capability negotiation never prevents a call.
+                try? await connection.setAudioInputConfiguration(audioInputConfiguration)
                 try await connection.connect(credentials, microphoneEnabled: microphoneEnabled)
                 try Task.checkCancellation()
                 guard attempt == id else { throw CancellationError() }
@@ -157,6 +174,7 @@ public final class AttentiveCall: ObservableObject {
                     attempt = nil
                     transport = nil
                     self.microphoneEnabled = false
+                    audioInputState = .init(status: .idle, requested: audioInputConfiguration)
                     lastError = error as? CallError ?? .connectionFailed
                     setState(.failed)
                     onEvent?(.failure(lastError!))
@@ -189,6 +207,7 @@ public final class AttentiveCall: ObservableObject {
         agentState = .disconnected
         sessionAuthentication = .pending
         actionAuthentication = .pending
+        audioInputState = .init(status: .idle, requested: audioInputConfiguration)
         setState(.ended)
     }
 
@@ -216,6 +235,41 @@ public final class AttentiveCall: ObservableObject {
             guard attempt == id else { throw CallError.notConnected }
             receive(.transcript(.init(id: "caller:\(messageID)", speaker: .caller, text: text, isFinal: true)))
         } catch { throw error as? CallError ?? CallError.messageFailed }
+    }
+
+    /// Saves preferences for the next call, or waits for a compatible connected worker's
+    /// acknowledgement. Settings failures do not end the call or change microphone mute.
+    /// Cancellation stops waiting; an already sent request may still be acknowledged.
+    public func setAudioInputConfiguration(_ value: AttentiveAudioInputConfiguration) async throws {
+        try Task.checkCancellation()
+        audioInputConfiguration = value
+        guard let connection = transport, let id = attempt else {
+            audioInputState = .init(status: .idle, requested: value)
+            onEvent?(.audioInputChanged(audioInputState))
+            return
+        }
+        audioInputState = .init(status: .pending, requested: value, applied: audioInputState.applied)
+        onEvent?(.audioInputChanged(audioInputState))
+        do {
+            try await connection.setAudioInputConfiguration(value)
+            guard attempt == id else { throw CancellationError() }
+        } catch {
+            if error is CancellationError, attempt == id, audioInputConfiguration == value,
+               audioInputState.status == .pending {
+                // Cancellation can happen before the transport accepts this request, or
+                // after sending. Neither case confirms the worker's effective settings.
+                audioInputState = .init(status: .failed, requested: value, applied: audioInputState.applied,
+                                       message: "Stopped waiting for listening settings. An update already sent may still be applied.")
+                onEvent?(.audioInputChanged(audioInputState))
+            }
+            guard attempt == id, audioInputConfiguration == value,
+                  !(error is CancellationError), error as? AttentiveAudioInputError != .superseded else { throw error }
+            let failure = error as? AttentiveAudioInputError ?? .updateFailed
+            audioInputState = .init(status: failure == .unsupported ? .unsupported : .failed,
+                                   requested: value, applied: audioInputState.applied, message: failure.errorDescription)
+            onEvent?(.audioInputChanged(audioInputState))
+            throw failure
+        }
     }
 
     private func setState(_ value: CallState) {
@@ -253,6 +307,7 @@ public final class AttentiveCall: ObservableObject {
         agentState = .disconnected
         sessionAuthentication = .pending
         actionAuthentication = .pending
+        audioInputState = .init(status: .idle, requested: audioInputConfiguration)
         lastError = error
         changingMicrophone = false
         setState(.failed)
@@ -261,6 +316,10 @@ public final class AttentiveCall: ObservableObject {
 
     private func receive(_ event: CallEvent) {
         switch event {
+        case .audioInputChanged(let value):
+            // Only current requested settings may update UI, even if an old RPC finishes late.
+            guard value.requested == audioInputConfiguration else { return }
+            audioInputState = value
         case .microphoneChanged(let enabled):
             microphoneEnabled = enabled
         case .stateChanged(let value):

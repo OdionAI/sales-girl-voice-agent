@@ -3,6 +3,32 @@ import XCTest
 final class SampleUITests: XCTestCase {
     override func setUpWithError() throws { continueAfterFailure = false }
 
+    func testListeningSettingsCanBeConfiguredBeforeCalling() {
+        let app = XCUIApplication()
+        app.launchArguments = ["--generic-ui", "--chat-only"]
+        app.launchEnvironment["ATTENTIVE_LOCAL_DEVICE"] = "0"
+        app.launch()
+        XCTAssertTrue(app.buttons["startCall"].waitForExistence(timeout: 10))
+        app.buttons["audioInputSettings"].tap()
+        XCTAssertTrue(app.segmentedControls["noiseControl"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Standard"].isSelected)
+        XCTAssertTrue(app.buttons["Balanced"].isSelected)
+        app.buttons["Noisy environment"].tap()
+        app.buttons["Strict"].tap()
+        XCTAssertTrue(app.buttons["Noisy environment"].isSelected)
+        XCTAssertTrue(app.buttons["Strict"].isSelected)
+        XCTAssertEqual(app.staticTexts["audioInputStatus"].label, "Saved for your next call.")
+        XCTAssertTrue(app.staticTexts["responseSensitivityDescription"].label.contains("Quiet words"))
+        attachScreen("Listening settings before a call")
+        app.buttons["closePanel"].tap()
+        XCTAssertTrue(app.buttons["startCall"].isHittable)
+        app.buttons["audioInputSettings"].tap()
+        XCTAssertTrue(app.buttons["Noisy environment"].isSelected)
+        XCTAssertTrue(app.buttons["Strict"].isSelected)
+        app.buttons["Responsive"].tap()
+        XCTAssertTrue(app.staticTexts["responseSensitivityDescription"].label.contains("shorter, quieter"))
+    }
+
     func testInsufficientCreditAlert() throws {
         guard let endpoint = ProcessInfo.processInfo.environment["ATTENTIVE_CREDIT_TEST_ENDPOINT"] else {
             throw XCTSkip("Requires a local fixture returning HTTP 402 with code no_airtime.")

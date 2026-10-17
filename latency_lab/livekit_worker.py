@@ -23,6 +23,9 @@ from .config import (
     load_platform_env,
 )
 from .pipeline import ConversationPipeline
+from .listening import (
+    CAPABILITY_ATTRIBUTE, RPC_METHOD, ListeningBusy, ListeningConfiguration, ListeningUnavailable,
+)
 from .report import generate_report
 from .session_identity import verify_session_token
 from .trace import TraceRecorder
@@ -324,6 +327,40 @@ def _microphone_track_sid(participant: rtc.RemoteParticipant) -> str:
     return ""
 
 
+def register_listening_rpc(
+    local_participant: Any,
+    pipeline: ConversationPipeline,
+    *,
+    caller_identity: str,
+    ready: asyncio.Event,
+    input_lock: asyncio.Lock,
+) -> Any:
+    """Share the worker's input lock: settings change between PCM blocks only."""
+    async def configure(data: rtc.RpcInvocationData) -> str:
+        if data.caller_identity != caller_identity:
+            raise rtc.RpcError(403, "Only this call's participant can change listening settings")
+        if not ready.is_set():
+            raise rtc.RpcError(503, "The agent is still initializing")
+        try:
+            configuration = ListeningConfiguration.parse(data.payload)
+        except ValueError as exc:
+            raise rtc.RpcError(400, str(exc)) from exc
+        async with input_lock:
+            # Shutdown may begin while this request waits behind an audio block.
+            if not ready.is_set():
+                raise rtc.RpcError(503, "The agent is no longer available")
+            try:
+                pipeline.configure_listening(configuration)
+            except ListeningBusy as exc:
+                raise rtc.RpcError(409, str(exc)) from exc
+            except ListeningUnavailable as exc:
+                raise rtc.RpcError(503, str(exc)) from exc
+        return json.dumps(configuration.payload(), separators=(",", ":"))
+
+    local_participant.register_rpc_method(RPC_METHOD, configure)
+    return configure
+
+
 async def entrypoint(ctx: JobContext) -> None:
     load_platform_env()
     config = lab_config_from_environ()
@@ -419,6 +456,9 @@ async def entrypoint(ctx: JobContext) -> None:
         transport.user_participant = participant
         transport.user_track_sid = _microphone_track_sid(participant)
         transport.start_metrics()
+        register_listening_rpc(ctx.room.local_participant, pipeline,
+                               caller_identity=participant.identity, ready=ready,
+                               input_lock=input_lock)
         await transport.set_state("initializing")
 
         async def receive_text(reader: rtc.TextStreamReader, sender: str) -> None:
@@ -465,6 +505,7 @@ async def entrypoint(ctx: JobContext) -> None:
         ctx.room.on("data_received", data_handler)
         await pipeline.start()
         ready.set()
+        await ctx.room.local_participant.set_attributes({CAPABILITY_ATTRIBUTE: "1"})
         await pipeline.client_event(
             "client_ready",
             {
@@ -517,6 +558,7 @@ async def entrypoint(ctx: JobContext) -> None:
         )
         logger.exception("RVC LiveKit transport failed")
     finally:
+        ready.clear()
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
@@ -530,6 +572,8 @@ async def entrypoint(ctx: JobContext) -> None:
         if participant_handler is not None:
             ctx.room.off("participant_disconnected", participant_handler)
         ctx.room.unregister_text_stream_handler("lk.chat")
+        if pipeline is not None:
+            ctx.room.local_participant.unregister_rpc_method(RPC_METHOD)
         if pipeline is not None:
             await pipeline.close()
         else:
