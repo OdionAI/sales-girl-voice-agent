@@ -15,21 +15,25 @@ public struct AttentiveAgentView: View {
     private let startsAutomatically: Bool
 
     /// For protected calls, obtain a fresh caller token from your signed-in app backend.
-    public init(apiKey: String, agentID: String, callerToken: (() async throws -> String)? = nil) {
-        self.init(apiKey: apiKey, agentID: agentID, customerID: nil, callerToken: callerToken)
+    public init(apiKey: String, agentID: String, audioInput: AttentiveAudioInputConfiguration = .standard,
+                callerToken: (() async throws -> String)? = nil) {
+        self.init(apiKey: apiKey, agentID: agentID, customerID: nil, audioInput: audioInput, callerToken: callerToken)
     }
 
     /// Pass the signed-in customer's ID. The backend verifies it against callerToken before using it for tools.
     public init(apiKey: String, agentID: String, customerID: String?,
+                audioInput: AttentiveAudioInputConfiguration = .standard,
                 callerToken: (() async throws -> String)? = nil) {
         self.init(apiKey: apiKey, agentID: agentID, customerID: customerID,
-                  startsAutomatically: true, callerToken: callerToken)
+                  startsAutomatically: true, audioInput: audioInput, callerToken: callerToken)
     }
 
     /// Present from a host-owned button. Set false to retain the built-in Start call button.
     public init(apiKey: String, agentID: String, customerID: String? = nil,
-                startsAutomatically: Bool, callerToken: (() async throws -> String)? = nil) {
-        _call = StateObject(wrappedValue: AttentiveCall(apiKey: apiKey, agentID: agentID, customerID: customerID))
+                startsAutomatically: Bool, audioInput: AttentiveAudioInputConfiguration = .standard,
+                callerToken: (() async throws -> String)? = nil) {
+        _call = StateObject(wrappedValue: AttentiveCall(apiKey: apiKey, agentID: agentID,
+                                                      customerID: customerID, audioInput: audioInput))
         self.callerToken = callerToken
         self.startsAutomatically = startsAutomatically
     }

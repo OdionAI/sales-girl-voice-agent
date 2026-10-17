@@ -50,6 +50,10 @@ test customer ID, room creation or transport setup is required for general calls
 Prompts, model choices and tools remain dashboard/worker configuration. Runtime
 override switches are not part of this integration.
 
+The caller exposes [Listening settings](LISTENING_CONTROLS.md) for noise control
+and response sensitivity on compatible workers. Pass `audioInput` to choose an
+initial profile, or use the built-in controls during the call.
+
 Keep the key/agent pair stable while the view is presented. To change agents,
 dismiss the caller first, then present a new view (or change its SwiftUI identity
 with `.id(agentID)`). Never switch tenants mid-call.

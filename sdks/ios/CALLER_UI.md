@@ -2,8 +2,9 @@
 
 `AttentiveVoice` is the headless SDK (iOS 16+).
 `AttentiveVoiceUI` is the optional SwiftUI library (iOS 17+).
-The latter depends on the former, never the reverse. Neither product changes the
-backend's model, turn-taking, authentication or tool settings.
+The latter depends on the former, never the reverse. Model, authentication and
+tool settings remain server-owned. The optional [listening controls](LISTENING_CONTROLS.md)
+adjust supported per-call audio processing and response sensitivity after worker acknowledgement.
 
 For a complete host-owned session and presentation button, start with
 [GETTING_STARTED.md](GETTING_STARTED.md). This file is the detailed UI reference.

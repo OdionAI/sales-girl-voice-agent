@@ -66,6 +66,7 @@ public enum CallEvent: Equatable, Sendable {
     case stateChanged(CallState)
     case agentStateChanged(AgentState)
     case microphoneChanged(Bool)
+    case audioInputChanged(AttentiveAudioInputState)
     case transcript(Transcript)
     case toolActivity(ToolActivity)
     case authentication(AuthenticationStatus)
