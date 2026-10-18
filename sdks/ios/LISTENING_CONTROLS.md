@@ -114,6 +114,12 @@ audio out of the stream. A 200 ms history preserves leading consonants for batch
 recognition. Presets do not raise the existing RMS threshold. Setting
 `minimumSpeechLevelDBFS` explicitly adds the chosen input-level threshold.
 
+The level is measured on PCM arriving at the worker, before worker denoising;
+iOS microphone processing remains enabled. Deployments with an operator RNNoise
+filter bypass that filter for Noisy environment or an explicit minimum speech
+level, so suppression does not distort the threshold. Standard mode with only
+timing overrides retains the operator filter.
+
 Noisy environment additionally applies SpeexDSP noise reduction in the worker
 **before both streaming and batch speech recognition**. This leaves the iOS
 capture engine and its echo cancellation intact and avoids a second microphone
