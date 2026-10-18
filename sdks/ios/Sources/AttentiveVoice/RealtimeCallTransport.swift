@@ -107,7 +107,8 @@ final class RealtimeCallTransport: NSObject, CallTransport {
         guard !closing, participant.kind == .agent else { return }
         sawAgent = true
         listening.updatePeer(identity: participant.identity?.stringValue,
-                             version: participant.attributes["attentive.listening.version"])
+                             version: participant.attributes["attentive.listening.version"],
+                             numericVersion: participant.attributes["attentive.listening.numericVersion"])
         let value = AgentState(rawValue: participant.attributes["lk.agent.state"] ?? "") ?? .initializing
         onEvent?(.agentStateChanged(value))
     }

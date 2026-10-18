@@ -16,10 +16,53 @@ public struct AttentiveAudioInputConfiguration: Codable, Equatable, Sendable {
 
     public var noiseControl: NoiseControl
     public var responseSensitivity: ResponseSensitivity
+    /// Noise attenuation in decibels (-30...0). Requires noisyEnvironment; nil uses its preset.
+    public var noiseSuppressionDB: Int?
+    /// Minimum original-input RMS level in dBFS (-80...-10), alongside speech detection.
+    /// Nil adds no level floor. This controls speech detection, not voice pitch.
+    public var minimumSpeechLevelDBFS: Double?
+    /// Sustained speech before starting a turn (40...500 ms, in 20 ms steps).
+    public var speechConfirmationMilliseconds: Int?
+    /// Sustained speech before interrupting agent audio (80...1000 ms, in 20 ms steps).
+    public var interruptionConfirmationMilliseconds: Int?
 
     public init(noiseControl: NoiseControl = .standard, responseSensitivity: ResponseSensitivity = .balanced) {
+        self.init(noiseControl: noiseControl, responseSensitivity: responseSensitivity, noiseSuppressionDB: nil)
+    }
+
+    /// Nil numeric values retain preset behavior. Numeric overrides require a worker that
+    /// supports listening protocol v2; unsupported overrides are never reported as applied.
+    public init(noiseControl: NoiseControl = .standard, responseSensitivity: ResponseSensitivity = .balanced,
+                noiseSuppressionDB: Int? = nil, minimumSpeechLevelDBFS: Double? = nil,
+                speechConfirmationMilliseconds: Int? = nil, interruptionConfirmationMilliseconds: Int? = nil) {
         self.noiseControl = noiseControl
         self.responseSensitivity = responseSensitivity
+        self.noiseSuppressionDB = noiseSuppressionDB
+        self.minimumSpeechLevelDBFS = minimumSpeechLevelDBFS
+        self.speechConfirmationMilliseconds = speechConfirmationMilliseconds
+        self.interruptionConfirmationMilliseconds = interruptionConfirmationMilliseconds
+    }
+
+    /// Invalid values throw before starting a call or replacing an existing configuration.
+    public func validate() throws {
+        if let value = noiseSuppressionDB,
+           noiseControl != .noisyEnvironment || !(-30...0).contains(value) {
+            throw AttentiveAudioInputError.invalidConfiguration("noiseSuppressionDB requires noisyEnvironment and a value from -30 to 0.")
+        }
+        if let value = minimumSpeechLevelDBFS, !value.isFinite || !(-80 ... -10).contains(value) {
+            throw AttentiveAudioInputError.invalidConfiguration("minimumSpeechLevelDBFS must be finite and between -80 and -10.")
+        }
+        if let value = speechConfirmationMilliseconds, !(40...500).contains(value) || value % 20 != 0 {
+            throw AttentiveAudioInputError.invalidConfiguration("speechConfirmationMilliseconds must be 40 to 500 in steps of 20.")
+        }
+        if let value = interruptionConfirmationMilliseconds, !(80...1000).contains(value) || value % 20 != 0 {
+            throw AttentiveAudioInputError.invalidConfiguration("interruptionConfirmationMilliseconds must be 80 to 1000 in steps of 20.")
+        }
+    }
+
+    var hasNumericOverrides: Bool {
+        noiseSuppressionDB != nil || minimumSpeechLevelDBFS != nil ||
+        speechConfirmationMilliseconds != nil || interruptionConfirmationMilliseconds != nil
     }
 
     public static let standard = Self()
@@ -45,10 +88,12 @@ public struct AttentiveAudioInputState: Equatable, Sendable {
 }
 
 public enum AttentiveAudioInputError: Error, Equatable, LocalizedError, Sendable {
+    case invalidConfiguration(String)
     case unsupported, timedOut, invalidAcknowledgement, updateFailed, superseded, callerSpeaking, processingUnavailable
 
     public var errorDescription: String? {
         switch self {
+        case .invalidConfiguration(let message): message
         case .unsupported: "This agent does not support listening settings. Standard microphone processing remains active."
         case .timedOut: "The agent did not confirm the listening settings. Try again."
         case .invalidAcknowledgement: "The agent returned an invalid listening settings confirmation."
@@ -62,24 +107,63 @@ public enum AttentiveAudioInputError: Error, Equatable, LocalizedError, Sendable
 
 /// Deliberately separate from the public configuration so its wire version cannot be changed by callers.
 struct ListeningConfigurationMessage: Codable, Equatable {
+    struct Tuning: Codable, Equatable {
+        let noiseSuppressionDB: Int?
+        let minimumSpeechLevelDBFS: Double?
+        let speechConfirmationMilliseconds: Int?
+        let interruptionConfirmationMilliseconds: Int?
+    }
+
     let version: Int
     let noiseControl: AttentiveAudioInputConfiguration.NoiseControl
     let responseSensitivity: AttentiveAudioInputConfiguration.ResponseSensitivity
+    let tuning: Tuning?
 
     init(_ configuration: AttentiveAudioInputConfiguration) {
-        version = 1
+        version = configuration.hasNumericOverrides ? 2 : 1
         noiseControl = configuration.noiseControl
         responseSensitivity = configuration.responseSensitivity
+        tuning = configuration.hasNumericOverrides ? Tuning(
+            noiseSuppressionDB: configuration.noiseSuppressionDB,
+            minimumSpeechLevelDBFS: configuration.minimumSpeechLevelDBFS,
+            speechConfirmationMilliseconds: configuration.speechConfirmationMilliseconds,
+            interruptionConfirmationMilliseconds: configuration.interruptionConfirmationMilliseconds) : nil
     }
 
     var configuration: AttentiveAudioInputConfiguration {
-        .init(noiseControl: noiseControl, responseSensitivity: responseSensitivity)
+        .init(noiseControl: noiseControl, responseSensitivity: responseSensitivity,
+              noiseSuppressionDB: tuning?.noiseSuppressionDB,
+              minimumSpeechLevelDBFS: tuning?.minimumSpeechLevelDBFS,
+              speechConfirmationMilliseconds: tuning?.speechConfirmationMilliseconds,
+              interruptionConfirmationMilliseconds: tuning?.interruptionConfirmationMilliseconds)
     }
 
     static func acknowledgement(_ payload: String) throws -> AttentiveAudioInputConfiguration {
-        guard payload.utf8.count <= 4_096,
-              let message = try? JSONDecoder().decode(Self.self, from: Data(payload.utf8)),
-              message.version == 1 else { throw AttentiveAudioInputError.invalidAcknowledgement }
+        let data = Data(payload.utf8)
+        guard data.count <= 4_096,
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let message = try? JSONDecoder().decode(Self.self, from: data) else {
+            throw AttentiveAudioInputError.invalidAcknowledgement
+        }
+        let base: Set<String> = ["version", "noiseControl", "responseSensitivity"]
+        switch message.version {
+        case 1:
+            guard Set(object.keys) == base, message.tuning == nil else {
+                throw AttentiveAudioInputError.invalidAcknowledgement
+            }
+        case 2:
+            let allowed: Set<String> = ["noiseSuppressionDB", "minimumSpeechLevelDBFS",
+                                       "speechConfirmationMilliseconds", "interruptionConfirmationMilliseconds"]
+            guard Set(object.keys) == base.union(["tuning"]),
+                  let fields = object["tuning"] as? [String: Any], !fields.isEmpty,
+                  Set(fields.keys).isSubset(of: allowed), !fields.values.contains(where: { $0 is NSNull }),
+                  message.configuration.hasNumericOverrides else {
+                throw AttentiveAudioInputError.invalidAcknowledgement
+            }
+        default: throw AttentiveAudioInputError.invalidAcknowledgement
+        }
+        do { try message.configuration.validate() }
+        catch { throw AttentiveAudioInputError.invalidAcknowledgement }
         return message.configuration
     }
 }
@@ -88,7 +172,7 @@ struct ListeningConfigurationMessage: Codable, Equatable {
 /// Audio continues on its existing track throughout negotiation, including while muted.
 @MainActor
 final class AudioInputNegotiator {
-    struct Peer: Equatable { let identity: String; let version: String? }
+    struct Peer: Equatable { let identity: String; let version: String?; let numericVersion: String? }
     var onChange: ((AttentiveAudioInputState) -> Void)?
     private(set) var state: AttentiveAudioInputState
     private var peer: Peer?
@@ -121,8 +205,8 @@ final class AudioInputNegotiator {
         if value { schedule() }
     }
 
-    func updatePeer(identity: String?, version: String?) {
-        let value = identity.map { Peer(identity: $0, version: version) }
+    func updatePeer(identity: String?, version: String?, numericVersion: String? = nil) {
+        let value = identity.map { Peer(identity: $0, version: version, numericVersion: numericVersion) }
         guard !closed, value != peer else { return }
         peer = value
         epoch += 1
@@ -134,6 +218,7 @@ final class AudioInputNegotiator {
     func configure(_ value: AttentiveAudioInputConfiguration) async throws {
         try Task.checkCancellation()
         guard !closed else { throw CancellationError() }
+        try value.validate()
         finishWaiters(.failure(AttentiveAudioInputError.superseded))
         revision += 1
         state = .init(status: connected || state.status != .idle ? .pending : .idle,
@@ -199,14 +284,19 @@ final class AudioInputNegotiator {
         publish(.idle, applied: nil)
     }
 
+    private var supportsRequestedConfiguration: Bool {
+        peer?.version == "1" && (!state.requested.hasNumericOverrides || peer?.numericVersion == "2")
+    }
+
     private func schedule() {
         guard connected, !closed else { return }
-        guard let peer, peer.version == "1" else {
+        guard supportsRequestedConfiguration else {
             guard discovery == nil else { return }
             discovery = Task { [weak self, timeout] in
                 do { try await Task.sleep(for: timeout) } catch { return }
-                guard let self, self.connected, !self.closed, self.peer?.version != "1" else { return }
-                self.publish(.unsupported, applied: nil, error: .unsupported)
+                guard let self, self.connected, !self.closed, !self.supportsRequestedConfiguration else { return }
+                self.discovery = nil
+                self.publish(.unsupported, applied: self.state.applied, error: .unsupported)
                 self.finishWaiters(.failure(AttentiveAudioInputError.unsupported))
             }
             return
@@ -219,12 +309,13 @@ final class AudioInputNegotiator {
 
     private func applyPending() async {
         defer { pump = nil }
-        while connected, !closed, let peer, peer.version == "1" {
+        while connected, !closed, let peer, supportsRequestedConfiguration {
             let sentRevision = revision
             let sentEpoch = epoch
             let requested = state.requested
             let result: Result<AttentiveAudioInputConfiguration, Error>
             do {
+                try requested.validate()
                 let data = try JSONEncoder().encode(ListeningConfigurationMessage(requested))
                 let payload = String(decoding: data, as: UTF8.self)
                 let reply = try await send(peer.identity, payload)

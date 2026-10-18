@@ -24,7 +24,7 @@ from .config import (
 )
 from .pipeline import ConversationPipeline
 from .listening import (
-    CAPABILITY_ATTRIBUTE, RPC_METHOD, ListeningBusy, ListeningConfiguration, ListeningUnavailable,
+    CAPABILITY_ATTRIBUTE, NUMERIC_CAPABILITY_ATTRIBUTE, RPC_METHOD, ListeningBusy, ListeningConfiguration, ListeningUnavailable,
 )
 from .report import generate_report
 from .session_identity import verify_session_token
@@ -505,7 +505,7 @@ async def entrypoint(ctx: JobContext) -> None:
         ctx.room.on("data_received", data_handler)
         await pipeline.start()
         ready.set()
-        await ctx.room.local_participant.set_attributes({CAPABILITY_ATTRIBUTE: "1"})
+        await ctx.room.local_participant.set_attributes({CAPABILITY_ATTRIBUTE: "1", NUMERIC_CAPABILITY_ATTRIBUTE: "2"})
         await pipeline.client_event(
             "client_ready",
             {

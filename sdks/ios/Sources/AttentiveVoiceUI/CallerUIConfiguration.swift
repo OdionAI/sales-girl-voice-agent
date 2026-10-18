@@ -14,7 +14,8 @@ public struct CallerUIConfiguration {
     public var showsToolWaitSelection: Bool
     public var showsAccountMenu: Bool = false
     public var showsCallOptions: Bool = false
-    /// Show listening controls before and during calls.
+    /// Retained for source compatibility. Audio input is configured in code only.
+    @available(*, deprecated, message: "This property has no effect. Set audioInput on AttentiveAgentView or AttentiveCall instead.")
     public var showsAudioInputSettings: Bool
     public var toolDisplayNames: [String: String]
     public var accentColor: Color
@@ -31,7 +32,7 @@ public struct CallerUIConfiguration {
                 toolDisplayNames: [String: String] = [:],
                 accentColor: Color = Color(red: 132.0 / 255, green: 39.0 / 255, blue: 35.0 / 255),
                 avatar: Image? = nil, themeKey: String? = nil, endsCallOnDisappear: Bool = true,
-                showsAudioInputSettings: Bool = true) {
+                showsAudioInputSettings: Bool = false) {
         self.title = title
         self.agentName = agentName
         self.profileTitle = profileTitle

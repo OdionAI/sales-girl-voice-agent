@@ -132,6 +132,7 @@ public final class AttentiveCall: ObservableObject {
 
     private func connect(microphoneEnabled: Bool, credentials: @escaping () async throws -> CallCredentials) async throws {
         guard operation == nil, [.idle, .ended, .failed].contains(state) else { throw CallError.alreadyActive }
+        try audioInputConfiguration.validate()
         transcripts = []
         toolActivity = []
         lastError = nil
@@ -242,6 +243,7 @@ public final class AttentiveCall: ObservableObject {
     /// Cancellation stops waiting; an already sent request may still be acknowledged.
     public func setAudioInputConfiguration(_ value: AttentiveAudioInputConfiguration) async throws {
         try Task.checkCancellation()
+        try value.validate()
         audioInputConfiguration = value
         guard let connection = transport, let id = attempt else {
             audioInputState = .init(status: .idle, requested: value)

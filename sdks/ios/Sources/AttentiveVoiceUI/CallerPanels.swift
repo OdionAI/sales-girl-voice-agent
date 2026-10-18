@@ -9,7 +9,6 @@ struct CallerProfilePanel: View {
     @Binding var request: CallRequest
     let configuration: CallerUIConfiguration
     var openSettings: (() -> Void)?
-    var openAudioInput: (() -> Void)?
     var openTranscript: () -> Void
 
     var body: some View {
@@ -27,14 +26,6 @@ struct CallerProfilePanel: View {
                     }
                 }.padding(18)
                 divider
-                if let openAudioInput {
-                    Button(action: openAudioInput) {
-                        Label("Listening settings", systemImage: "slider.horizontal.3")
-                            .font(.system(size: 14)).frame(maxWidth: .infinity, minHeight: 48)
-                    }
-                    .buttonStyle(.plain).accessibilityIdentifier("audioInputSettings")
-                    divider
-                }
                 if configuration.showsProfile || configuration.showsToolWaitSelection {
                     VStack(alignment: .leading, spacing: 18) {
                         if configuration.showsProfile {
