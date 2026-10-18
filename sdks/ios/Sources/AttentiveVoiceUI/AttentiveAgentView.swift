@@ -3,6 +3,7 @@ import AttentiveVoice
 import SwiftUI
 
 /// A complete dashboard-configured caller. No host model or call lifecycle code is needed.
+/// Configure audio input with `audioInput`; the caller never displays audio settings.
 @available(iOS 17, *)
 @MainActor
 public struct AttentiveAgentView: View {

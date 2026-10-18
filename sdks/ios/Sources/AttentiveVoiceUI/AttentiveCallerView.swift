@@ -57,7 +57,7 @@ struct CallerContent: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
 
-    private enum Panel { case bank, transcript, audioInput }
+    private enum Panel { case bank, transcript }
 
     init(call: AttentiveCall, request: Binding<CallRequest>, configuration: CallerUIConfiguration,
          enrollment: VoiceEnrollment?, microphoneOnStart: Bool, onSettings: (() -> Void)?,
@@ -144,10 +144,7 @@ struct CallerContent: View {
                             CallerProfilePanel(controls: controls, call: call, request: $request,
                                 configuration: configuration,
                                 openSettings: onSettings.map { action in { closePanel(); action() } },
-                                openAudioInput: configuration.showsAudioInputSettings ? { togglePanel(.audioInput) } : nil,
                                 openTranscript: { togglePanel(.transcript) })
-                        } else if panel == .audioInput {
-                            CallerAudioInputPanel(controls: controls, call: call)
                         } else {
                             CallerTranscriptPanel(controls: controls, call: call, status: status,
                                                   agentName: configuration.agentName, draft: $draft)
@@ -155,7 +152,7 @@ struct CallerContent: View {
                     }
                     .frame(width: min(390, max(0, geometry.size.width - 24)))
                     .frame(height: min(max(0, geometry.size.height - 68),
-                                       panel == .audioInput ? 500 : panel == .bank && call.toolActivity.isEmpty ? 550 : 760), alignment: .top)
+                                       panel == .bank && call.toolActivity.isEmpty ? 550 : 760), alignment: .top)
                     .background(.white).clipShape(RoundedRectangle(cornerRadius: 14))
                     .overlay(RoundedRectangle(cornerRadius: 14).stroke(CallerTheme.border, lineWidth: 1))
                     .shadow(color: CallerTheme.ink.opacity(0.14), radius: 20, x: 0, y: 18)
@@ -163,14 +160,13 @@ struct CallerContent: View {
                     .transition(.opacity.combined(with: .offset(y: -8)))
                 }
 
-                if configuration.showsAccountMenu || configuration.showsAudioInputSettings || panel != nil {
+                if configuration.showsAccountMenu || panel != nil {
                     Button {
                         withAnimation(reduceMotion ? nil : .easeOut(duration: 0.18)) {
-                            panel = panel == nil ? (configuration.showsAccountMenu ? .bank : .audioInput) : nil
+                            panel = panel == nil ? .bank : nil
                         }
                     } label: {
-                        Image(systemName: panel == nil
-                              ? (configuration.showsAccountMenu ? "line.3.horizontal" : "slider.horizontal.3") : "xmark")
+                        Image(systemName: panel == nil ? "line.3.horizontal" : "xmark")
                             .font(.system(size: 18)).contentTransition(.symbolEffect(.replace))
                             .frame(width: 44, height: 44).background(.white, in: Circle())
                             .overlay(Circle().stroke(CallerTheme.border, lineWidth: 1))
@@ -178,10 +174,10 @@ struct CallerContent: View {
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel(panel == nil
-                        ? (configuration.showsAccountMenu ? "Open \(configuration.profileTitle)" : "Listening settings")
+                        ? "Open \(configuration.profileTitle)"
                         : "Close floating panel")
                     .accessibilityIdentifier(panel == nil
-                        ? (configuration.showsAccountMenu ? "bankMenu" : "audioInputSettings") : "closePanel")
+                        ? "bankMenu" : "closePanel")
                     .padding(.top, 8).padding(.trailing, 16)
                 }
             }
@@ -228,9 +224,6 @@ struct CallerContent: View {
             if configuration.showsCallOptions {
                 Menu {
                     Button(configuration.profileTitle, systemImage: "person.crop.circle") { togglePanel(.bank) }
-                    if configuration.showsAudioInputSettings {
-                        Button("Listening settings", systemImage: "slider.horizontal.3") { togglePanel(.audioInput) }
-                    }
                     if let onSettings {
                         Button("Call settings", systemImage: "slider.horizontal.3", action: onSettings)
                     }

@@ -13,8 +13,6 @@ final class CallerControls: ObservableObject {
     @Published private(set) var sending = false
     @Published private(set) var enrollmentBusy = false
     @Published private(set) var starting = false
-    @Published private(set) var updatingAudioInput = false
-    @Published private(set) var audioInputError: String?
     private var subscriptions: Set<AnyCancellable> = []
     private var visible = true
     private var startTask: Task<Void, Error>?
@@ -29,11 +27,6 @@ final class CallerControls: ObservableObject {
         }.store(in: &subscriptions)
         call.$state.removeDuplicates().sink { [weak self] state in
             if state == .connecting { self?.receivedAudio = false }
-        }.store(in: &subscriptions)
-        call.$audioInputState.sink { [weak self] state in
-            if [.idle, .pending, .applied].contains(state.status), self?.audioInputError != nil {
-                self?.audioInputError = nil
-            }
         }.store(in: &subscriptions)
         call.agentAudioLevel.$energy.map { $0 > 0 }.removeDuplicates().sink { [weak self] audible in
             guard let self, audible, !self.receivedAudio else { return }
@@ -80,22 +73,6 @@ final class CallerControls: ObservableObject {
     func toggleMicrophone() async {
         do { try await call.setMicrophone(enabled: !call.microphoneEnabled) }
         catch { presentError(error) }
-    }
-
-    /// A settings failure stays in its panel; it must not dismiss or end the call.
-    func setAudioInputConfiguration(_ configuration: AttentiveAudioInputConfiguration) async {
-        guard !updatingAudioInput else { return }
-        updatingAudioInput = true
-        audioInputError = nil
-        defer { updatingAudioInput = false }
-        do { try await call.setAudioInputConfiguration(configuration) }
-        catch is CancellationError {}
-        catch {
-            if call.audioInputState.status != .unsupported {
-                audioInputError = (error as? AttentiveAudioInputError)?.localizedDescription
-                    ?? "Couldn't update listening settings. Try again."
-            }
-        }
     }
 
     func send(_ text: String) async -> Bool {

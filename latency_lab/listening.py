@@ -9,12 +9,21 @@ from __future__ import annotations
 import ctypes
 import ctypes.util
 import json
+import math
+import struct
 from dataclasses import dataclass
 from typing import Any
 
 RPC_METHOD = "attentive.listening.configure"
 CAPABILITY_ATTRIBUTE = "attentive.listening.version"
+NUMERIC_CAPABILITY_ATTRIBUTE = "attentive.listening.numericVersion"
 FRAME_BYTES = 640  # 20 ms, mono PCM16, 16 kHz
+_TUNING_FIELDS = {
+    "noiseSuppressionDB": "noise_suppression_db",
+    "minimumSpeechLevelDBFS": "minimum_speech_level_dbfs",
+    "speechConfirmationMilliseconds": "speech_confirmation_milliseconds",
+    "interruptionConfirmationMilliseconds": "interruption_confirmation_milliseconds",
+}
 
 
 class ListeningBusy(RuntimeError):
@@ -29,6 +38,31 @@ class ListeningUnavailable(RuntimeError):
 class ListeningConfiguration:
     noise_control: str = "standard"
     response_sensitivity: str = "balanced"
+    noise_suppression_db: int | None = None
+    minimum_speech_level_dbfs: float | None = None
+    speech_confirmation_milliseconds: int | None = None
+    interruption_confirmation_milliseconds: int | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.noise_control, str) or self.noise_control not in {"standard", "noisyEnvironment"}:
+            raise ValueError("Unknown noiseControl")
+        if not isinstance(self.response_sensitivity, str) or self.response_sensitivity not in {"responsive", "balanced", "strict"}:
+            raise ValueError("Unknown responseSensitivity")
+        if self.noise_suppression_db is not None:
+            if type(self.noise_suppression_db) is not int or not -30 <= self.noise_suppression_db <= 0:
+                raise ValueError("noiseSuppressionDB must be an integer from -30 through 0")
+            if self.noise_control != "noisyEnvironment":
+                raise ValueError("noiseSuppressionDB requires noisyEnvironment")
+        if self.minimum_speech_level_dbfs is not None:
+            level = self.minimum_speech_level_dbfs
+            if type(level) not in (int, float) or not -80 <= level <= -10 or not math.isfinite(level):
+                raise ValueError("minimumSpeechLevelDBFS must be a finite number from -80 through -10")
+        for name, value, minimum, maximum in (
+            ("speechConfirmationMilliseconds", self.speech_confirmation_milliseconds, 40, 500),
+            ("interruptionConfirmationMilliseconds", self.interruption_confirmation_milliseconds, 80, 1000),
+        ):
+            if value is not None and (type(value) is not int or not minimum <= value <= maximum or value % 20):
+                raise ValueError(f"{name} must be an integer from {minimum} through {maximum} in 20 ms steps")
 
     @classmethod
     def parse(cls, payload: str) -> "ListeningConfiguration":
@@ -45,29 +79,44 @@ class ListeningConfiguration:
             value = json.loads(payload, object_pairs_hook=unique_keys)
         except (json.JSONDecodeError, RecursionError) as exc:
             raise ValueError("Listening configuration must be a JSON object") from exc
-        if not isinstance(value, dict) or set(value) != {
-            "version", "noiseControl", "responseSensitivity"
-        }:
-            raise ValueError("Expected version, noiseControl, and responseSensitivity only")
-        if type(value["version"]) is not int or value["version"] != 1:
+        if not isinstance(value, dict):
+            raise ValueError("Listening configuration must be a JSON object")
+        version = value.get("version")
+        if type(version) is not int or version not in (1, 2):
             raise ValueError("Unsupported listening configuration version")
-        noise, sensitivity = value["noiseControl"], value["responseSensitivity"]
-        if not isinstance(noise, str) or noise not in {"standard", "noisyEnvironment"}:
-            raise ValueError("Unknown noiseControl")
-        if not isinstance(sensitivity, str) or sensitivity not in {"responsive", "balanced", "strict"}:
-            raise ValueError("Unknown responseSensitivity")
-        return cls(noise, sensitivity)
+        expected = {"version", "noiseControl", "responseSensitivity"}
+        if version == 2:
+            expected.add("tuning")
+        if set(value) != expected:
+            raise ValueError("Unexpected or missing listening configuration fields")
+        tuning = value.get("tuning", {})
+        if version == 2 and (
+            not isinstance(tuning, dict) or not tuning or set(tuning) - _TUNING_FIELDS.keys()
+            or any(setting is None for setting in tuning.values())
+        ):
+            raise ValueError("tuning must contain supported numeric fields only")
+        return cls(value["noiseControl"], value["responseSensitivity"],
+                   **{_TUNING_FIELDS[name]: setting for name, setting in tuning.items()})
 
     def payload(self) -> dict[str, Any]:
-        return {"version": 1, "noiseControl": self.noise_control,
-                "responseSensitivity": self.response_sensitivity}
+        tuning = {name: getattr(self, attribute) for name, attribute in _TUNING_FIELDS.items()
+                  if getattr(self, attribute) is not None}
+        value = {"version": 2 if tuning else 1, "noiseControl": self.noise_control,
+                 "responseSensitivity": self.response_sensitivity}
+        if tuning:
+            value["tuning"] = tuning
+        return value
 
     @property
     def is_baseline(self) -> bool:
         return self == ListeningConfiguration()
 
     def confirmation_ms(self, baseline_ms: float, *, interrupting: bool) -> float:
-        if self.is_baseline:
+        override = (self.interruption_confirmation_milliseconds if interrupting
+                    else self.speech_confirmation_milliseconds)
+        if override is not None:
+            return float(override)
+        if self.noise_control == "standard" and self.response_sensitivity == "balanced":
             return baseline_ms
         if interrupting:
             return {"responsive": 120.0, "balanced": baseline_ms,
@@ -79,7 +128,7 @@ class ListeningConfiguration:
 class SpeexNoiseSuppressor:
     """One native state per call; owner serializes all calls on its input lock."""
 
-    def __init__(self) -> None:
+    def __init__(self, suppression_db: int = -12) -> None:
         import os
         path = os.getenv("RVC_LAB_SPEEXDSP_LIBRARY") or ctypes.util.find_library("speexdsp")
         if not path:
@@ -103,7 +152,7 @@ class SpeexNoiseSuppressor:
             # speex_preprocess.h: denoise=0, AGC=2, dereverb=8, suppression=18.
             # Speex VAD defaults off; leave it off (its deprecated setter warns).
             # Keep AEC/AGC owned by the client and speech detection in WebRTC VAD.
-            for request, setting in ((0, 1), (2, 0), (8, 0), (18, -12)):
+            for request, setting in ((0, 1), (2, 0), (8, 0), (18, suppression_db)):
                 value = ctypes.c_int(setting)
                 if self.lib.speex_preprocess_ctl(self.state, request, ctypes.byref(value)) != 0:
                     raise ListeningUnavailable("The worker rejected noise reduction settings")
@@ -156,16 +205,19 @@ class ListeningInput:
                         raw_vad = webrtcvad.Vad(mode)
                 except (ImportError, OSError) as exc:
                     raise ListeningUnavailable("Listening sensitivity requires webrtcvad-wheels on the worker") from exc
-            if configuration.noise_control == "noisyEnvironment" and denoiser is None:
-                denoiser = SpeexNoiseSuppressor()
+            if configuration.noise_control == "noisyEnvironment":
+                suppression = configuration.noise_suppression_db
+                previous_suppression = self.configuration.noise_suppression_db
+                if denoiser is None or suppression != previous_suppression:
+                    denoiser = SpeexNoiseSuppressor(-12 if suppression is None else suppression)
         except Exception:
             if denoiser is not None and denoiser is not self._denoiser:
                 denoiser.close()
             raise
         if configuration.noise_control == "standard":
-            if denoiser is not None:
-                denoiser.close()
             denoiser = None
+        if self._denoiser is not None and denoiser is not self._denoiser:
+            self._denoiser.close()
         self._denoiser, self._vad = denoiser, vad
         self._raw_vad, self.configuration = raw_vad, configuration
 
@@ -190,6 +242,13 @@ class ListeningInput:
                 # independent detectors must advance on every frame and agree.
                 raw_speech = self._raw_vad.is_speech(frame, 16000)
                 speech = speech and raw_speech
+            if self.configuration.minimum_speech_level_dbfs is not None:
+                # Measure the original level so denoising does not make a quiet
+                # voice fail the floor twice. Advance both VADs even below it.
+                samples = struct.unpack("<320h", frame)
+                mean_square = sum(sample * sample for sample in samples) / len(samples)
+                minimum_rms = 32768 * 10 ** (self.configuration.minimum_speech_level_dbfs / 20)
+                speech = speech and mean_square >= minimum_rms * minimum_rms
             frames.append(ListeningFrame(processed, speech))
         return frames
 

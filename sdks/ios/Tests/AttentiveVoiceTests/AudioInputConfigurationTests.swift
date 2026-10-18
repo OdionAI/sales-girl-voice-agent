@@ -25,6 +25,166 @@ struct AudioInputConfigurationTests {
         }
     }
 
+    @Test
+    func numericOverridesUseExactVersionTwoAndRoundTrip() throws {
+        let value = AttentiveAudioInputConfiguration(noiseControl: .noisyEnvironment,
+            noiseSuppressionDB: -12, minimumSpeechLevelDBFS: -50,
+            speechConfirmationMilliseconds: 120, interruptionConfirmationMilliseconds: 240)
+        try value.validate()
+        let data = try JSONEncoder().encode(ListeningConfigurationMessage(value))
+        let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect(Set(object.keys) == ["version", "noiseControl", "responseSensitivity", "tuning"])
+        #expect(object["version"] as? Int == 2)
+        let tuning = try #require(object["tuning"] as? [String: Any])
+        #expect(Set(tuning.keys) == ["noiseSuppressionDB", "minimumSpeechLevelDBFS",
+                                   "speechConfirmationMilliseconds", "interruptionConfirmationMilliseconds"])
+        #expect(try ListeningConfigurationMessage.acknowledgement(String(decoding: data, as: UTF8.self)) == value)
+        let partial = AttentiveAudioInputConfiguration(minimumSpeechLevelDBFS: -45.5)
+        let partialData = try JSONEncoder().encode(ListeningConfigurationMessage(partial))
+        #expect(try ListeningConfigurationMessage.acknowledgement(String(decoding: partialData, as: UTF8.self)) == partial)
+    }
+
+    @Test(arguments: [
+        AttentiveAudioInputConfiguration(noiseSuppressionDB: -12),
+        .init(noiseControl: .noisyEnvironment, noiseSuppressionDB: -31),
+        .init(noiseControl: .noisyEnvironment, noiseSuppressionDB: 1),
+        .init(minimumSpeechLevelDBFS: -.infinity), .init(minimumSpeechLevelDBFS: .nan),
+        .init(minimumSpeechLevelDBFS: -81), .init(minimumSpeechLevelDBFS: -9),
+        .init(speechConfirmationMilliseconds: 0), .init(speechConfirmationMilliseconds: 61),
+        .init(speechConfirmationMilliseconds: 520), .init(interruptionConfirmationMilliseconds: 60),
+        .init(interruptionConfirmationMilliseconds: 101), .init(interruptionConfirmationMilliseconds: 1020)
+    ])
+    func invalidNumericValuesAreRejected(_ value: AttentiveAudioInputConfiguration) {
+        #expect(throws: (any Error).self) { try value.validate() }
+    }
+
+    @Test(arguments: [
+        #"{"version":2,"noiseControl":"standard","responseSensitivity":"balanced","tuning":{}}"#,
+        #"{"version":2,"noiseControl":"standard","responseSensitivity":"balanced","tuning":{"pitch":2}}"#,
+        #"{"version":2,"noiseControl":"standard","responseSensitivity":"balanced","tuning":{"minimumSpeechLevelDBFS":null}}"#,
+        #"{"version":2,"noiseControl":"standard","responseSensitivity":"balanced","tuning":{"minimumSpeechLevelDBFS":true}}"#,
+        #"{"version":2,"noiseControl":"standard","responseSensitivity":"balanced","tuning":{"noiseSuppressionDB":-12}}"#,
+        #"{"version":2,"noiseControl":"standard","responseSensitivity":"balanced","tuning":{"speechConfirmationMilliseconds":121}}"#,
+        #"{"version":1,"noiseControl":"standard","responseSensitivity":"balanced","tuning":{"minimumSpeechLevelDBFS":-50}}"#
+    ])
+    func invalidNumericAcknowledgementsAreRejected(_ reply: String) {
+        #expect(throws: AttentiveAudioInputError.invalidAcknowledgement) {
+            try ListeningConfigurationMessage.acknowledgement(reply)
+        }
+    }
+
+    @Test @MainActor
+    func numericRequestWaitsForSeparateCapabilityAndCanUpgradeLater() async throws {
+        let rpc = ListeningRPCStub()
+        let value = AttentiveAudioInputConfiguration(minimumSpeechLevelDBFS: -50)
+        let negotiator = AudioInputNegotiator(configuration: value, timeout: .milliseconds(20), send: rpc.send)
+        defer { negotiator.close() }
+        negotiator.updatePeer(identity: "agent", version: "1")
+        negotiator.setConnected(true)
+        await eventually { negotiator.state.status == .unsupported }
+        #expect(rpc.requests.isEmpty)
+        #expect(negotiator.state.applied == nil)
+        negotiator.updatePeer(identity: "agent", version: "1", numericVersion: "2")
+        await eventually { rpc.requests.count == 1 }
+        rpc.acknowledge(0)
+        await eventually { negotiator.state.status == .applied }
+        #expect(negotiator.state.applied == value)
+    }
+
+    @Test @MainActor
+    func unsupportedNumericUpdateRetainsAcknowledgedPresetAndCanReturnToVersionOne() async throws {
+        let rpc = ListeningRPCStub()
+        let negotiator = AudioInputNegotiator(timeout: .milliseconds(30), send: rpc.send)
+        defer { negotiator.close() }
+        negotiator.updatePeer(identity: "agent", version: "1")
+        negotiator.setConnected(true)
+        await eventually { rpc.requests.count == 1 }
+        rpc.acknowledge(0)
+        await eventually { negotiator.state.status == .applied }
+        for level in [-50.0, -40.0] {
+            do {
+                try await negotiator.configure(.init(minimumSpeechLevelDBFS: level))
+                Issue.record("Expected unsupported numeric configuration")
+            } catch { #expect(error as? AttentiveAudioInputError == .unsupported) }
+            #expect(negotiator.state.applied == .standard)
+            #expect(rpc.requests.count == 1)
+        }
+        let update = Task { try await negotiator.configure(.noisyEnvironment) }
+        await eventually { rpc.requests.count == 2 }
+        rpc.acknowledge(1)
+        try await update.value
+        #expect(negotiator.state.applied == .noisyEnvironment)
+    }
+
+    @Test @MainActor
+    func numericRequestCannotBeAcknowledgedAsPreset() async throws {
+        let rpc = ListeningRPCStub()
+        let value = AttentiveAudioInputConfiguration(noiseControl: .noisyEnvironment, noiseSuppressionDB: -18)
+        let negotiator = AudioInputNegotiator(configuration: value, send: rpc.send)
+        defer { negotiator.close() }
+        negotiator.updatePeer(identity: "agent", version: "1", numericVersion: "2")
+        negotiator.setConnected(true)
+        await eventually { rpc.requests.count == 1 }
+        rpc.acknowledge(0, payload: #"{"version":1,"noiseControl":"noisyEnvironment","responseSensitivity":"balanced"}"#)
+        await eventually { negotiator.state.status == .failed }
+        #expect(negotiator.state.applied == nil)
+        #expect(negotiator.state.requested == value)
+    }
+
+    @Test @MainActor
+    func invalidUpdateDoesNotSupersedePendingValidRequest() async throws {
+        let rpc = ListeningRPCStub()
+        let negotiator = AudioInputNegotiator(configuration: .noisyEnvironment, send: rpc.send)
+        defer { negotiator.close() }
+        negotiator.updatePeer(identity: "agent", version: "1")
+        negotiator.setConnected(true)
+        await eventually { rpc.requests.count == 1 }
+        do {
+            try await negotiator.configure(.init(speechConfirmationMilliseconds: 1))
+            Issue.record("Expected invalid configuration")
+        } catch { #expect(error is AttentiveAudioInputError) }
+        #expect(negotiator.state.requested == .noisyEnvironment)
+        #expect(rpc.requests.count == 1)
+        rpc.acknowledge(0)
+        await eventually { negotiator.state.applied == .noisyEnvironment }
+    }
+
+    @Test @MainActor
+    func invalidInitialSettingsDoNotRequestMicrophoneOrCreateTransport() async throws {
+        var requestedPermission = false
+        var createdTransport = false
+        let call = AttentiveCall(provider: ListeningCredentials(), makeTransport: {
+            createdTransport = true
+            return ListeningCallTransport()
+        }, microphonePermission: { requestedPermission = true; return true },
+        audioInput: .init(minimumSpeechLevelDBFS: -90))
+        do {
+            try await call.start(.init(businessSlug: "test", agentPublicId: "agt_test", endUserContact: "test@example.com"))
+            Issue.record("Expected invalid initial configuration")
+        } catch { #expect(error is AttentiveAudioInputError) }
+        #expect(!requestedPermission)
+        #expect(!createdTransport)
+        #expect(call.state == .idle)
+    }
+
+    @Test @MainActor
+    func invalidCallUpdatePreservesActiveConfigurationAndMute() async throws {
+        let transport = ListeningCallTransport()
+        let call = AttentiveCall(provider: ListeningCredentials(), makeTransport: { transport }, microphonePermission: { true })
+        try await call.start(.init(businessSlug: "test", agentPublicId: "agt_test", endUserContact: "test@example.com"), microphoneEnabled: false)
+        let previous = call.audioInputState
+        do {
+            try await call.setAudioInputConfiguration(.init(noiseSuppressionDB: -12))
+            Issue.record("Expected invalid update")
+        } catch { #expect(error is AttentiveAudioInputError) }
+        #expect(call.audioInputState == previous)
+        #expect(call.audioInputConfiguration == .standard)
+        #expect(call.state == .connected)
+        #expect(!call.microphoneEnabled)
+        #expect(transport.microphoneUpdates == 0)
+        await call.end()
+    }
+
     @Test @MainActor
     func lateAgentAndCapabilityDoNotClaimAppliedBeforeAcknowledgement() async throws {
         let rpc = ListeningRPCStub()

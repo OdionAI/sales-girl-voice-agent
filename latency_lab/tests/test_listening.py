@@ -46,6 +46,57 @@ class ListeningConfigurationTests(unittest.TestCase):
                 configuration = ListeningConfiguration(noise, sensitivity)
                 self.assertEqual(ListeningConfiguration.parse(json.dumps(configuration.payload())), configuration)
 
+    def test_numeric_protocol_round_trip_keeps_only_supplied_overrides(self):
+        configurations = [
+            ListeningConfiguration("noisyEnvironment", "strict", -18, -48.5, 160, 400),
+            ListeningConfiguration(minimum_speech_level_dbfs=-60),
+            ListeningConfiguration(speech_confirmation_milliseconds=80),
+            ListeningConfiguration(interruption_confirmation_milliseconds=600),
+        ]
+        for configuration in configurations:
+            with self.subTest(configuration=configuration):
+                payload = configuration.payload()
+                self.assertEqual(payload["version"], 2)
+                self.assertEqual(ListeningConfiguration.parse(json.dumps(payload)), configuration)
+        self.assertEqual(configurations[1].payload()["tuning"], {"minimumSpeechLevelDBFS": -60})
+        self.assertEqual(ListeningConfiguration().payload(), {
+            "version": 1, "noiseControl": "standard", "responseSensitivity": "balanced",
+        })
+
+    def test_numeric_protocol_rejects_unsupported_null_and_out_of_range_values(self):
+        base = {"version": 2, "noiseControl": "noisyEnvironment", "responseSensitivity": "balanced"}
+        invalid_tuning = [None, [], {}, {"unknown": 12}, {"pitch": 100}]
+        for field, invalid_values in {
+            "noiseSuppressionDB": [-31, 1, -12.0, True, None, "-12"],
+            "minimumSpeechLevelDBFS": [-81, -9, math.nan, math.inf, -math.inf, True, None, "-50"],
+            "speechConfirmationMilliseconds": [0, 39, 501, 100.0, 101, True, None, "100"],
+            "interruptionConfirmationMilliseconds": [0, 79, 1001, 200.0, 201, True, None, "200"],
+        }.items():
+            invalid_tuning.extend({field: value} for value in invalid_values)
+        invalid = [json.dumps({**base, "tuning": tuning}) for tuning in invalid_tuning]
+        invalid += [
+            json.dumps({**base, "tuning": {"noiseSuppressionDB": -12}, "noiseControl": "standard"}),
+            json.dumps({**base, "tuning": {"minimumSpeechLevelDBFS": -50}, "version": 1}),
+            json.dumps({**base, "tuning": {"minimumSpeechLevelDBFS": -50}, "extra": 1}),
+            '{"version":2,"noiseControl":"noisyEnvironment","responseSensitivity":"balanced",'
+            '"tuning":{"noiseSuppressionDB":-12,"noiseSuppressionDB":-18}}',
+        ]
+        for payload in invalid:
+            with self.subTest(payload=payload), self.assertRaises(ValueError):
+                ListeningConfiguration.parse(payload)
+
+    def test_numeric_bounds_are_inclusive(self):
+        for suppression, level, speech, interruption in ((-30, -80, 40, 80), (0, -10, 500, 1000)):
+            configuration = ListeningConfiguration("noisyEnvironment", "balanced", suppression, level, speech, interruption)
+            self.assertEqual(ListeningConfiguration.parse(json.dumps(configuration.payload())), configuration)
+
+    def test_numeric_overrides_do_not_change_unspecified_baseline_timing(self):
+        config = ListeningConfiguration(minimum_speech_level_dbfs=-50, speech_confirmation_milliseconds=80)
+        self.assertFalse(config.is_baseline)
+        self.assertEqual(config.confirmation_ms(260, interrupting=False), 80)
+        self.assertEqual(config.confirmation_ms(260, interrupting=True), 260)
+        self.assertEqual(replace(config, interruption_confirmation_milliseconds=400).confirmation_ms(260, interrupting=True), 400)
+
     def test_rejects_malformed_unknown_and_ambiguous_configurations(self):
         valid = ListeningConfiguration().payload()
         invalid = ["[]", "null", "{", "{}", "x" * 1025,
@@ -87,6 +138,60 @@ class ListeningConfigurationTests(unittest.TestCase):
 
 
 class NoiseProcessingTests(unittest.TestCase):
+    def test_level_floor_uses_original_pcm_and_never_drops_audio_or_skips_vad(self):
+        listening = ListeningInput()
+        listening.configure(ListeningConfiguration("noisyEnvironment", minimum_speech_level_dbfs=-40))
+        quiet_processed = pcm_samples([1] * 320)
+        denoiser = listening._denoiser
+        denoiser.process = Mock(return_value=quiet_processed)
+        listening._vad = SimpleNamespace(is_speech=Mock(return_value=True))
+        listening._raw_vad = SimpleNamespace(is_speech=Mock(return_value=True))
+        try:
+            frames = listening.process(pcm_samples([100] * 320 + [400] * 320))
+            self.assertEqual([frame.speech for frame in frames], [False, True])
+            self.assertEqual(b"".join(frame.pcm for frame in frames), quiet_processed * 2)
+            self.assertEqual(listening._vad.is_speech.call_count, 2)
+            self.assertEqual(listening._raw_vad.is_speech.call_count, 2)
+        finally:
+            listening.close()
+
+    def test_suppression_change_replaces_native_state_only_after_success(self):
+        first, replacement = Mock(), Mock()
+        config = ListeningConfiguration("noisyEnvironment", noise_suppression_db=-12)
+        listening = ListeningInput()
+        with patch("latency_lab.listening.SpeexNoiseSuppressor", return_value=first) as factory:
+            listening.configure(config)
+            factory.assert_called_once_with(-12)
+        with patch("latency_lab.listening.SpeexNoiseSuppressor", side_effect=ListeningUnavailable("unavailable")):
+            with self.assertRaises(ListeningUnavailable):
+                listening.configure(replace(config, noise_suppression_db=-24))
+        self.assertIs(listening._denoiser, first)
+        self.assertEqual(listening.configuration, config)
+        first.close.assert_not_called()
+        with patch("latency_lab.listening.SpeexNoiseSuppressor", return_value=replacement) as factory:
+            listening.configure(replace(config, noise_suppression_db=0))
+            factory.assert_called_once_with(0)
+        self.assertIs(listening._denoiser, replacement)
+        first.close.assert_called_once()
+        replacement.close.assert_not_called()
+        listening.close()
+        replacement.close.assert_called_once()
+
+    def test_custom_suppression_changes_native_stationary_noise_attenuation(self):
+        randomizer = random.Random(41)
+        pcm = pcm_samples([round(randomizer.gauss(0, 900)) for _ in range(16000 * 4)])
+        output_levels = []
+        for suppression in (-6, -24):
+            reducer = SpeexNoiseSuppressor(suppression)
+            try:
+                output = b"".join(reducer.process(pcm[offset:offset + FRAME_BYTES])
+                                  for offset in range(0, len(pcm), FRAME_BYTES))
+                self.assertEqual(len(output), len(pcm))
+                output_levels.append(rms_pcm16(output[-32000:]))
+            finally:
+                reducer.close()
+        self.assertLess(20 * math.log10(output_levels[1] / output_levels[0]), -6)
+
     def test_real_speech_and_quiet_short_answers_are_classified(self):
         original = fixture()
         values = struct.unpack(f"<{len(original) // 2}h", original)
@@ -206,6 +311,34 @@ class ListeningPipelineTests(unittest.IsolatedAsyncioTestCase):
         self.pipeline.stt.commit.assert_awaited_once_with(b"".join(frames) + silence * 15)
         self.assertEqual(self.pipeline.state, "awaiting_final")
 
+    async def test_custom_speech_confirmation_preserves_preroll_and_all_candidate_frames(self):
+        self.pipeline.configure_listening(ListeningConfiguration(speech_confirmation_milliseconds=200))
+        frames = [pcm_samples([index + 1] * 320) for index in range(13)]
+        for frame in frames[:3]:
+            await self.frame(frame, False)
+        for frame in frames[3:-1]:
+            await self.frame(frame, True)
+        self.assertEqual(self.pipeline.state, "idle")
+        await self.frame(frames[-1], True)
+        self.assertEqual(self.pipeline.state, "speaking")
+        silence = b"\0" * FRAME_BYTES
+        for _ in range(15):
+            await self.frame(silence, False)
+        self.pipeline.stt.commit.assert_awaited_once_with(b"".join(frames) + silence * 15)
+
+    async def test_custom_interruption_confirmation_is_independent_of_new_turn_timing(self):
+        self.pipeline.configure_listening(ListeningConfiguration(
+            speech_confirmation_milliseconds=40, interruption_confirmation_milliseconds=400))
+        self.pipeline.state = "playing"
+        self.pipeline._cancel_attempt = AsyncMock()
+        voiced = pcm_samples([200] * 320)
+        for _ in range(19):
+            await self.frame(voiced, True)
+        self.pipeline._cancel_attempt.assert_not_awaited()
+        await self.frame(voiced, True)
+        self.pipeline._cancel_attempt.assert_awaited_once_with("user_barge_in")
+        self.assertEqual(bytes(self.pipeline.turn_pcm16), voiced * 20)
+
     async def test_completed_turn_does_not_leave_old_speech_in_next_preroll(self):
         self.pipeline.configure_listening(ListeningConfiguration("standard", "responsive"))
         self.pipeline.config = replace(self.pipeline.config, end_silence_ms=60)
@@ -312,6 +445,19 @@ class ListeningRPCTests(unittest.IsolatedAsyncioTestCase):
         config = ListeningConfiguration("noisyEnvironment", "strict")
         self.assertEqual(json.loads(await self.handler(self.request(json.dumps(config.payload())))), config.payload())
         self.pipeline.configure_listening.assert_called_once_with(config)
+
+    async def test_numeric_acknowledgement_preserves_exact_requested_overrides(self):
+        config = ListeningConfiguration("noisyEnvironment", "strict", -18, -48.5, 160, 400)
+        self.assertEqual(json.loads(await self.handler(self.request(json.dumps(config.payload())))), config.payload())
+        self.pipeline.configure_listening.assert_called_once_with(config)
+
+    async def test_invalid_numeric_configuration_never_reaches_pipeline(self):
+        payload = {"version": 2, "noiseControl": "noisyEnvironment", "responseSensitivity": "strict",
+                   "tuning": {"noiseSuppressionDB": -31}}
+        with self.assertRaises(rtc.RpcError) as result:
+            await self.handler(self.request(json.dumps(payload)))
+        self.assertEqual(result.exception.code, 400)
+        self.pipeline.configure_listening.assert_not_called()
 
     async def test_rejects_other_participant_readiness_and_malformed(self):
         for request, code in ((self.request(identity="intruder"), 403), (self.request("[]"), 400)):
