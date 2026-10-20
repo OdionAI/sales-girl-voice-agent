@@ -931,11 +931,8 @@ class ConversationPipeline:
             else:
                 attempt.task = asyncio.create_task(self._handle_directory_confirmation(attempt), name=attempt.id)
                 return
-        if self.pending_action and (not self.config.engagement_enabled or (
-                self.engagement.speech_enabled and (
-                    self._bank_confirmation(text) if self.pending_action.call.name == "wema_execute_prepared"
-                    else "semantic_pending" if self.pending_action.call.name == directory_email.TOOL_NAME
-                    else confirmation_decision(text)) != "unclear")):
+        if self.pending_action and (not self.config.engagement_enabled or
+                                    self.engagement.speech_enabled):
             self.trace.record(
                 "tool_confirmation_evidence_start",
                 turn_id=self.turn_id,
@@ -1117,27 +1114,48 @@ class ConversationPipeline:
                             phase="end_call_goodbye",
                         )
                 else:
-                    prompt = confirmation_prompt(
-                        call, language_hint=self.agent_context.tts_language_hint
+                    prompt = await confirmation_prompt(
+                        self.llm, call,
+                        instructions=self.agent_context.instructions,
+                        language_hint=self.agent_context.tts_language_hint,
                     )
-                    self.pending_action = PendingAction(
-                        call=call, confirmation_prompt=prompt
-                    )
-                    await self.banking.activity(call, "completed", {
-                        "status": "needs_confirmation", "message": prompt, "data": {},
-                    })
-                    attempt.held_audio.clear()
-                    attempt.answer = ""
-                    self.trace.record(
-                        "tool_confirmation_requested",
-                        turn_id=self.turn_id,
-                        attempt_id=attempt.id,
-                        reason="separate_confirmation_required_before_side_effect",
-                        tool_name=call.name,
-                    )
-                    await self._speak_text(
-                        attempt, prompt, phase="tool_confirmation"
-                    )
+                    if not prompt:
+                        self.trace.record(
+                            "tool_confirmation_unavailable",
+                            turn_id=self.turn_id,
+                            attempt_id=attempt.id,
+                            tool_name=call.name,
+                        )
+                        attempt.held_audio.clear()
+                        attempt.answer = ""
+                        await self._speak_text(
+                            attempt,
+                            localized_action_text(
+                                "I can't prepare that request right now. Please try again in a moment.",
+                                "Je ne peux pas préparer cette demande pour le moment. Veuillez réessayer dans un instant.",
+                                self.agent_context.tts_language_hint,
+                            ),
+                            phase="tool_confirmation_unavailable",
+                        )
+                    else:
+                        self.pending_action = PendingAction(
+                            call=call, confirmation_prompt=prompt
+                        )
+                        await self.banking.activity(call, "completed", {
+                            "status": "needs_confirmation", "message": prompt, "data": {},
+                        })
+                        attempt.held_audio.clear()
+                        attempt.answer = ""
+                        self.trace.record(
+                            "tool_confirmation_requested",
+                            turn_id=self.turn_id,
+                            attempt_id=attempt.id,
+                            reason="separate_confirmation_required_before_side_effect",
+                            tool_name=call.name,
+                        )
+                        await self._speak_text(
+                            attempt, prompt, phase="tool_confirmation"
+                        )
             elif (self.engagement.speech_enabled and not attempt.speech_control
                   and not self.pending_action and requests_knowledge_lookup(attempt.initial_answer)):
                 if not self.config.engagement_enabled or attempt.authorized:
@@ -1345,7 +1363,6 @@ class ConversationPipeline:
             if attempt.cancelled:
                 return
             evidence = self.final_text or attempt.hypothesis
-            decision = confirmation_decision(evidence)
             if pending.call.name == "wema_execute_prepared":
                 decision = self._bank_confirmation(evidence)
             elif pending.call.name == directory_email.TOOL_NAME:
@@ -1354,6 +1371,10 @@ class ConversationPipeline:
                     history=self.memory.context(exclude_turn_id=attempt.turn_id),
                     action=("alternate_email" if self.directory_email.prepared
                             and self.directory_email.prepared.get("alternate") else "email"))
+            else:
+                decision = await confirmation_decision(
+                    self.llm, evidence, pending.call, pending.confirmation_prompt
+                )
             if attempt.cancelled or self.pending_action is not pending:
                 return
             self.trace.record(
@@ -1365,6 +1386,12 @@ class ConversationPipeline:
                 decision=decision,
             )
             attempt.answer = ""
+            if decision == "revised":
+                self.pending_action = None
+                self.banking.prepared = None
+                attempt.held_audio.clear()
+                await self._generate(attempt)
+                return
             if decision == "rejected":
                 self.pending_action = None
                 self.banking.prepared = None
@@ -1380,11 +1407,37 @@ class ConversationPipeline:
                     phase="tool_confirmation_rejected",
                 )
             elif decision == "unclear":
-                await self._speak_text(
-                    attempt,
-                    pending.confirmation_prompt,
-                    phase="tool_confirmation_repeated",
-                )
+                if pending.call.name in {"create_ticket", "send_email"}:
+                    followup = await confirmation_prompt(
+                        self.llm, pending.call,
+                        instructions=self.agent_context.instructions,
+                        language_hint=self.agent_context.tts_language_hint,
+                        previous_prompt=pending.confirmation_prompt,
+                        caller_reply=evidence,
+                    )
+                    if followup:
+                        self.pending_action = PendingAction(
+                            call=pending.call, confirmation_prompt=followup
+                        )
+                        await self._speak_text(
+                            attempt, followup, phase="tool_confirmation_clarification"
+                        )
+                    else:
+                        self.pending_action = None
+                        await self._speak_text(
+                            attempt,
+                            localized_action_text(
+                                "I couldn't confirm that request. Please ask me again in a moment.",
+                                "Je n’ai pas pu confirmer cette demande. Veuillez me la redemander dans un instant.",
+                                self.agent_context.tts_language_hint,
+                            ),
+                            phase="tool_confirmation_unavailable",
+                        )
+                else:
+                    await self._speak_text(
+                        attempt, pending.confirmation_prompt,
+                        phase="tool_confirmation_repeated",
+                    )
             else:
                 self.pending_action = None
                 if pending.call.name in BANK_TOOLS:

@@ -57,22 +57,6 @@ class ActionDefinitionTest(unittest.TestCase):
             ["create_ticket", "send_email", "end_call"],
         )
 
-    def test_confirmation_classifier_is_conservative(self) -> None:
-        self.assertEqual(confirmation_decision("Yes, go ahead"), "confirmed")
-        self.assertEqual(confirmation_decision("No, cancel that"), "rejected")
-        self.assertEqual(confirmation_decision("What did you say?"), "unclear")
-
-    def test_ticket_confirmation_uses_agent_language_and_accepts_clear_yes(self) -> None:
-        call = ActionToolCall(
-            id="call-1",
-            name="create_ticket",
-            arguments={"title": "Demande d'informations", "description": "Question."},
-        )
-        self.assertTrue(confirmation_prompt(call, language_hint="French").startswith("Pour confirmer"))
-        self.assertEqual(confirmation_decision("Oui, créez le ticket."), "confirmed")
-        self.assertEqual(confirmation_decision("Non, merci."), "rejected")
-        self.assertEqual(confirmation_decision("Okay, create the ticket."), "confirmed")
-
     def test_end_call_intent_requires_an_explicit_closing_utterance(self) -> None:
         accepted = (
             "Goodbye",
@@ -118,13 +102,21 @@ class ActionDefinitionTest(unittest.TestCase):
 
 class ActionConfirmationLifecycleTest(unittest.IsolatedAsyncioTestCase):
     class ToolLLM:
-        async def stream(self, _messages, *, tools=None):
-            assert tools
-            yield ActionToolCall(
-                id="call-1",
-                name="create_ticket",
-                arguments={"title": "Delayed transfer", "description": "Transfer is delayed."},
-            )
+        async def stream(self, messages, *, tools=None, **_kwargs):
+            if tools:
+                yield ActionToolCall(
+                    id="call-1",
+                    name="create_ticket",
+                    arguments={"title": "Delayed transfer", "description": "Transfer is delayed."},
+                )
+            elif messages[0]["content"].startswith("Decide what the caller"):
+                reply = json.loads(messages[1]["content"])["current_caller_reply"]
+                yield ("confirmed" if reply in {"Yes, go ahead", "Oui, allez-y pour le ticket."}
+                       else "rejected" if reply == "Non, laissez tomber."
+                       else "revised" if reply == "Changez le sujet du ticket."
+                       else "unclear")
+            else:
+                yield "Souhaitez-vous que je crée un ticket pour ce retard de virement ?"
 
     class SilentTTS:
         async def stream(self, _text):
@@ -143,6 +135,28 @@ class ActionConfirmationLifecycleTest(unittest.IsolatedAsyncioTestCase):
             return ActionResult(
                 "success", "The support ticket has been created. The reference is T-1.", {}, 5.0
             )
+
+    async def test_semantic_confirmation_uses_french_question_and_full_reply(self) -> None:
+        llm = self.ToolLLM()
+        call = ActionToolCall("call-1", "create_ticket", {"title": "Virement retardé"})
+        question = await confirmation_prompt(llm, call, language_hint="French")
+        self.assertEqual(question, "Souhaitez-vous que je crée un ticket pour ce retard de virement ?")
+        self.assertEqual(
+            await confirmation_decision(llm, "Oui, allez-y pour le ticket.", call, question),
+            "confirmed",
+        )
+        self.assertEqual(
+            await confirmation_decision(llm, "Non, laissez tomber.", call, question),
+            "rejected",
+        )
+        self.assertEqual(
+            await confirmation_decision(llm, "Changez le sujet du ticket.", call, question),
+            "revised",
+        )
+        self.assertEqual(
+            await confirmation_decision(llm, "Qu'avez-vous dit ?", call, question),
+            "unclear",
+        )
 
     async def test_side_effect_waits_for_separate_committed_confirmation(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

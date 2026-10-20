@@ -46,12 +46,12 @@ sequenceDiagram
     opt LLM selects a configured action
         C->>C: prepare validated action arguments
         C->>B: ask for explicit confirmation after final authority
-        B->>C: separate committed yes/no turn
+        B->>C: separate committed reply in natural language
         alt caller confirms
             C->>C: call conversation-service API once
             C->>B: speak success only after API success
-        else caller rejects or is unclear
-            C->>B: cancel or repeat confirmation
+        else caller rejects, changes the request, or is unclear
+            C->>B: cancel, handle the new request, or ask naturally for clarification
         end
     end
     opt committed caller turn clearly closes a SIP call
