@@ -31,6 +31,7 @@ from .action_tools import (
     confirmation_decision,
     confirmation_prompt,
     explicit_end_call_intent,
+    localized_action_text,
 )
 from .providers import RLLMClient, RSTTClient, RTTSClient, tts_token_budget
 from .trace import TraceRecorder
@@ -1116,7 +1117,9 @@ class ConversationPipeline:
                             phase="end_call_goodbye",
                         )
                 else:
-                    prompt = confirmation_prompt(call)
+                    prompt = confirmation_prompt(
+                        call, language_hint=self.agent_context.tts_language_hint
+                    )
                     self.pending_action = PendingAction(
                         call=call, confirmation_prompt=prompt
                     )
@@ -1369,7 +1372,11 @@ class ConversationPipeline:
                     self.directory_email.prepared = None
                 await self._speak_text(
                     attempt,
-                    "No problem. I won't carry out that action.",
+                    localized_action_text(
+                        "No problem. I won't carry out that action.",
+                        "D’accord. Je ne vais pas effectuer cette action.",
+                        self.agent_context.tts_language_hint,
+                    ),
                     phase="tool_confirmation_rejected",
                 )
             elif decision == "unclear":
@@ -1380,11 +1387,24 @@ class ConversationPipeline:
                 )
             else:
                 self.pending_action = None
-                acknowledgement = "Okay, I'll submit the confirmed request." if pending.call.name in BANK_TOOLS else (
-                    "Okay, one moment while I create that ticket."
-                    if pending.call.name == "create_ticket"
-                    else "Okay, one moment while I send that email."
-                )
+                if pending.call.name in BANK_TOOLS:
+                    acknowledgement = localized_action_text(
+                        "Okay, I'll submit the confirmed request.",
+                        "D’accord, je vais envoyer la demande confirmée.",
+                        self.agent_context.tts_language_hint,
+                    )
+                elif pending.call.name == "create_ticket":
+                    acknowledgement = localized_action_text(
+                        "Okay, one moment while I create that ticket.",
+                        "D’accord, un instant pendant que je crée le ticket.",
+                        self.agent_context.tts_language_hint,
+                    )
+                else:
+                    acknowledgement = localized_action_text(
+                        "Okay, one moment while I send that email.",
+                        "D’accord, un instant pendant que j’envoie cet e-mail.",
+                        self.agent_context.tts_language_hint,
+                    )
                 if not self.config.engagement_enabled:
                     await self._speak_text(
                         attempt, acknowledgement, phase="tool_execution_acknowledgement"

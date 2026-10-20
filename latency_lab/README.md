@@ -132,6 +132,12 @@ caller turn authorizes one request to the conversation service. Rejection
 cancels the pending action, unclear evidence repeats the confirmation, and
 spoken success is generated only from a successful API result.
 
+Confirmation questions, acknowledgements, and ticket/email results use the
+agent's saved `tts_language_hint` for French agents. The confirmation matcher
+accepts clear French approvals and refusals as well as common English replies,
+including “Okay, create the ticket,” so a caller's language does not cause the
+action prompt to switch languages or repeat after an explicit approval.
+
 Generic HTTP tools, transfers, and transactional banking actions remain outside
 this increment. Trace events record tool preparation, final-authority waiting,
 confirmation classification, API start/completion, elapsed time, and result

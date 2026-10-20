@@ -13,6 +13,7 @@ from latency_lab.action_tools import (
     ActionToolCall,
     action_tool_definitions,
     confirmation_decision,
+    confirmation_prompt,
     explicit_end_call_intent,
 )
 from latency_lab.agentic import AgentRuntimeContext
@@ -60,6 +61,17 @@ class ActionDefinitionTest(unittest.TestCase):
         self.assertEqual(confirmation_decision("Yes, go ahead"), "confirmed")
         self.assertEqual(confirmation_decision("No, cancel that"), "rejected")
         self.assertEqual(confirmation_decision("What did you say?"), "unclear")
+
+    def test_ticket_confirmation_uses_agent_language_and_accepts_clear_yes(self) -> None:
+        call = ActionToolCall(
+            id="call-1",
+            name="create_ticket",
+            arguments={"title": "Demande d'informations", "description": "Question."},
+        )
+        self.assertTrue(confirmation_prompt(call, language_hint="French").startswith("Pour confirmer"))
+        self.assertEqual(confirmation_decision("Oui, créez le ticket."), "confirmed")
+        self.assertEqual(confirmation_decision("Non, merci."), "rejected")
+        self.assertEqual(confirmation_decision("Okay, create the ticket."), "confirmed")
 
     def test_end_call_intent_requires_an_explicit_closing_utterance(self) -> None:
         accepted = (

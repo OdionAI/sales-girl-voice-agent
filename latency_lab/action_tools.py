@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import time
+import unicodedata
 from dataclasses import dataclass
 from typing import Any
 
@@ -207,7 +208,23 @@ def parse_tool_arguments(raw: str) -> dict[str, Any]:
     return parsed if isinstance(parsed, dict) else {}
 
 
-def confirmation_prompt(call: ActionToolCall) -> str:
+def uses_french(language_hint: str) -> bool:
+    normalized = str(language_hint or "").strip().lower()
+    return normalized.startswith(("fr", "french", "français", "francais"))
+
+
+def localized_action_text(english: str, french: str, language_hint: str) -> str:
+    return french if uses_french(language_hint) else english
+
+
+def confirmation_prompt(call: ActionToolCall, *, language_hint: str = "") -> str:
+    if uses_french(language_hint):
+        if call.name == "create_ticket":
+            title = str(call.arguments.get("title") or "ce problème").strip()
+            return f"Pour confirmer, souhaitez-vous que je crée un ticket d’assistance au sujet de {title} ?"
+        recipient = str(call.arguments.get("to_email") or "l’adresse e-mail indiquée").strip()
+        subject = str(call.arguments.get("subject") or "les informations demandées").strip()
+        return f"Pour confirmer, souhaitez-vous que j’envoie un e-mail à {recipient} avec pour objet : {subject} ?"
     if call.name == "create_ticket":
         title = str(call.arguments.get("title") or "this issue").strip()
         return f"Just to confirm, would you like me to create a support ticket about {title}?"
@@ -217,7 +234,10 @@ def confirmation_prompt(call: ActionToolCall) -> str:
 
 
 def confirmation_decision(text: str) -> str:
-    normalized = re.sub(r"[^a-z0-9' ]+", " ", str(text or "").lower())
+    raw = str(text or "").lower().replace("’", "'")
+    normalized = unicodedata.normalize("NFKD", raw)
+    normalized = "".join(char for char in normalized if not unicodedata.combining(char))
+    normalized = re.sub(r"[^a-z0-9' ]+", " ", normalized)
     normalized = " ".join(normalized.split())
     negative = (
         "no",
@@ -228,6 +248,13 @@ def confirmation_decision(text: str) -> str:
         "never mind",
         "nevermind",
         "not anymore",
+        "non",
+        "non merci",
+        "annule",
+        "annulez",
+        "pas maintenant",
+        "je ne confirme pas",
+        "je ne valide pas",
     )
     if any(normalized == item or normalized.startswith(f"{item} ") for item in negative):
         return "rejected"
@@ -243,6 +270,25 @@ def confirmation_decision(text: str) -> str:
         "send it",
         "create it",
         "confirm",
+        "okay create the ticket",
+        "okay create ticket",
+        "ok create the ticket",
+        "ok create ticket",
+        "create the ticket",
+        "please create the ticket",
+        "create a ticket",
+        "oui",
+        "d'accord",
+        "allez y",
+        "je confirme",
+        "je valide",
+        "fais le",
+        "faites le",
+        "creez le ticket",
+        "cree le ticket",
+        "oui creez le ticket",
+        "oui allez y",
+        "bien sur",
     )
     if any(normalized == item or normalized.startswith(f"{item} ") for item in affirmative):
         return "confirmed"
@@ -282,7 +328,11 @@ class ActionToolExecutor:
         if not self.available(call.name):
             return ActionResult(
                 status="failed",
-                message="That action is not available from this agent right now.",
+                message=localized_action_text(
+                    "That action is not available from this agent right now.",
+                    "Cette action n’est pas disponible pour le moment.",
+                    self.context.tts_language_hint,
+                ),
                 data={},
                 elapsed_ms=0.0,
             )
@@ -290,7 +340,16 @@ class ActionToolExecutor:
             return await self._create_ticket(call, started_ns)
         if call.name == "send_email":
             return await self._send_email(call, started_ns)
-        return ActionResult("failed", "That action is not supported.", {}, 0.0)
+        return ActionResult(
+            "failed",
+            localized_action_text(
+                "That action is not supported.",
+                "Cette action n’est pas prise en charge.",
+                self.context.tts_language_hint,
+            ),
+            {},
+            0.0,
+        )
 
     async def _post(self, path: str, payload: dict[str, Any]) -> tuple[int, dict[str, Any]]:
         timeout = aiohttp.ClientTimeout(total=self.config.action_tool_timeout_seconds)
@@ -307,7 +366,16 @@ class ActionToolExecutor:
         title = str(call.arguments.get("title") or "").strip()
         description = str(call.arguments.get("description") or "").strip()
         if not title or not description:
-            return ActionResult("failed", "I still need the ticket details before I can create it.", {}, 0.0)
+            return ActionResult(
+                "failed",
+                localized_action_text(
+                    "I still need the ticket details before I can create it.",
+                    "Il me manque encore des détails pour créer le ticket.",
+                    self.context.tts_language_hint,
+                ),
+                {},
+                0.0,
+            )
         payload: dict[str, Any] = {
             "agent_id": self.context.agent_id,
             "customer_contact": self.context.end_user_id or None,
@@ -322,11 +390,28 @@ class ActionToolExecutor:
             return self._failed(exc, started_ns)
         elapsed = (time.perf_counter_ns() - started_ns) / 1_000_000
         if status >= 400:
-            return ActionResult("failed", "I couldn't create the ticket right now.", body, elapsed)
+            return ActionResult(
+                "failed",
+                localized_action_text(
+                    "I couldn't create the ticket right now.",
+                    "Je n’ai pas pu créer le ticket pour le moment.",
+                    self.context.tts_language_hint,
+                ),
+                body,
+                elapsed,
+            )
         code = str(body.get("ticket_code") or body.get("id") or "").strip()
-        message = "The support ticket has been created."
+        message = localized_action_text(
+            "The support ticket has been created.",
+            "Le ticket d’assistance a été créé.",
+            self.context.tts_language_hint,
+        )
         if code:
-            message += f" The reference is {code}."
+            message += localized_action_text(
+                f" The reference is {code}.",
+                f" La référence est {code}.",
+                self.context.tts_language_hint,
+            )
         return ActionResult("success", message, body, elapsed)
 
     async def _send_email(self, call: ActionToolCall, started_ns: int) -> ActionResult:
@@ -336,7 +421,16 @@ class ActionToolExecutor:
         subject = str(call.arguments.get("subject") or "").strip()
         body_text = str(call.arguments.get("body") or "").strip()
         if not recipient or "@" not in recipient or not subject or not body_text:
-            return ActionResult("failed", "I still need a valid email address and message details.", {}, 0.0)
+            return ActionResult(
+                "failed",
+                localized_action_text(
+                    "I still need a valid email address and message details.",
+                    "Il me faut une adresse e-mail valide et le contenu du message.",
+                    self.context.tts_language_hint,
+                ),
+                {},
+                0.0,
+            )
         try:
             status, body = await self._post(
                 "/v1/tools/send-email",
@@ -348,17 +442,33 @@ class ActionToolExecutor:
         if status >= 400 or bool(body.get("mocked")) or not bool(body.get("sent")):
             return ActionResult(
                 "failed",
-                str(body.get("message") or "I couldn't send the email right now."),
+                localized_action_text(
+                    str(body.get("message") or "I couldn't send the email right now."),
+                    "Je n’ai pas pu envoyer l’e-mail pour le moment.",
+                    self.context.tts_language_hint,
+                ),
                 body,
                 elapsed,
             )
-        return ActionResult("success", f"The email has been sent to {recipient}.", body, elapsed)
+        return ActionResult(
+            "success",
+            localized_action_text(
+                f"The email has been sent to {recipient}.",
+                f"L’e-mail a été envoyé à {recipient}.",
+                self.context.tts_language_hint,
+            ),
+            body,
+            elapsed,
+        )
 
-    @staticmethod
-    def _failed(exc: Exception, started_ns: int) -> ActionResult:
+    def _failed(self, exc: Exception, started_ns: int) -> ActionResult:
         return ActionResult(
             "failed",
-            "I couldn't complete that action right now.",
+            localized_action_text(
+                "I couldn't complete that action right now.",
+                "Je n’ai pas pu effectuer cette action pour le moment.",
+                self.context.tts_language_hint,
+            ),
             {"error": str(exc), "error_type": type(exc).__name__},
             (time.perf_counter_ns() - started_ns) / 1_000_000,
         )
