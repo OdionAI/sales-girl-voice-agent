@@ -1,8 +1,9 @@
-"""Nigerian Pidgin's batch speech stack; the LLM and call transport stay unchanged."""
+"""Nigerian Pidgin speech adapters; the LLM and call transport stay unchanged."""
 from __future__ import annotations
 
 import asyncio
 import io
+import json
 import wave
 from dataclasses import replace
 
@@ -13,6 +14,7 @@ EJIRO_MODEL = "mms-pcm-ejiro-3h"
 EJIRO_URL = "http://102.88.137.124:8080/tts-ejiro/v1/audio/speech"
 SBPN_MODEL = "ogunlao/SBPN_multilingual_base"
 SBPN_URL = "http://102.88.137.124:8080/asr-sbpn/v1/audio/transcriptions"
+SBPN_WS_URL = "ws://102.88.137.124:8080/asr-sbpn/v1/realtime"
 LANGUAGE_RULES = """
 
 CALL LANGUAGE: Nigerian Pidgin (pcm). Speak natural Nigerian Pidgin throughout
@@ -39,7 +41,7 @@ def apply_pidgin_stack(config, context=None, identity=None):
         return config
     return replace(config, tts_language="Nigerian Pidgin", tts_model=EJIRO_MODEL,
                    tts_voice="ejiro", tts_url=EJIRO_URL, tts_ref_audio="",
-                   stt_model=SBPN_MODEL, stt_ws_url="", stt_batch_url=SBPN_URL,
+                   stt_model=SBPN_MODEL, stt_ws_url=SBPN_WS_URL, stt_batch_url=SBPN_URL,
                    stt_batch_timeout_seconds=120.0)
 
 
@@ -86,51 +88,163 @@ class EjiroTTSClient:
                     continue
                 async with self.session.post(self.config.tts_url, json={
                     "model": EJIRO_MODEL, "voice": "ejiro", "input": part,
-                    "response_format": "wav",
+                    "response_format": "pcm", "stream": True,
                 }, timeout=aiohttp.ClientTimeout(total=60)) as response:
                     response.raise_for_status()
-                    # Batch WAV is decoded before playback, never treated as raw PCM.
-                    body = bytearray()
-                    async for block in response.content.iter_chunked(65536):
-                        body.extend(block)
-                        if len(body) > 2 * 1024 * 1024:
+                    if (response.content_type != "audio/pcm" or
+                        response.headers.get("x-sample-rate") != "16000" or
+                        response.headers.get("x-channels") != "1" or
+                        response.headers.get("x-audio-format") != "pcm_s16le"):
+                        raise ValueError("Ejiro must stream 16 kHz mono PCM16")
+                    resampler = rtc.AudioResampler(input_rate=16000, output_rate=24000, num_channels=1)
+                    pending = b""
+                    received = 0
+                    async for block in response.content.iter_chunked(10240):
+                        received += len(block)
+                        if received > 30 * 16000 * 2:
                             raise ValueError("Ejiro audio exceeds the 30-second response budget")
-                    pcm = wav_to_call_pcm(bytes(body))
-                if self.usage is not None:
-                    self.usage.tts_accepted(part)
-                for offset in range(0, len(pcm), 4800):
-                    yield pcm[offset:offset + 4800]
+                        pending += block
+                        length = len(pending) // 2 * 2
+                        if length:
+                            frame = rtc.AudioFrame(pending[:length], 16000, 1, length // 2)
+                            pending = pending[length:]
+                            for output in resampler.push(frame):
+                                yield bytes(output.data)
+                    if not received or pending:
+                        raise ValueError("Ejiro returned empty or truncated PCM16")
+                    for output in resampler.flush():
+                        yield bytes(output.data)
+                    if self.usage is not None:
+                        self.usage.tts_accepted(part)
         return 24000, chunks()
 
 
 class SBPNClient:
-    """VAD supplies complete turns; no realtime socket or English-only cleanup."""
+    """Revisable live prefixes, with bounded batch recovery for a complete turn."""
     def __init__(self, config, on_partial, on_final, on_provider_event):
         self.config, self.on_final = config, on_final
+        self.on_partial = on_partial
         self.event = on_provider_event
         self.session = None
         self.usage = None
         self.tasks = set()
+        self.ws = None
+        self.receiver = None
+        self.final_result = None
+        self.streamed_bytes = 0
+        self.degraded = False
+        self.pending_final = False
 
     @property
     def ready(self):
         return self.session is not None and not self.session.closed
 
     async def connect(self):
-        self.session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30))
-        self.event("stt_batch_ready", {"model": SBPN_MODEL, "transport": "http_batch"})
+        if not self.ready:
+            self.session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30))
+        try:
+            await self._open_socket()
+        except (aiohttp.ClientError, TimeoutError, ValueError) as exc:
+            self.degraded = True
+            self.event("stt_realtime_connect_degraded", {"error": str(exc), "batch_final_available": True})
+
+    async def _open_socket(self):
+        if self.ws and not self.ws.closed:
+            return
+        ws = await self.session.ws_connect(self.config.stt_ws_url, heartbeat=20)
+        try:
+            hello = await asyncio.wait_for(ws.receive_json(), 8)
+            if hello.get("type") != "session.created":
+                raise ValueError("SBPN did not create a realtime session")
+            await ws.send_json({"type": "session.update", "model": SBPN_MODEL})
+        except BaseException:
+            await ws.close()
+            raise
+        self.ws = ws
+        self.receiver = asyncio.create_task(self._receive(ws), name="sbpn-receive")
+        self.event("stt_session_created", {"model": SBPN_MODEL, "transport": "websocket"})
+
+    async def _receive(self, ws):
+        try:
+            async for message in ws:
+                if message.type != aiohttp.WSMsgType.TEXT:
+                    continue
+                payload = json.loads(message.data)
+                if payload.get("type") == "error":
+                    raise ValueError(str(payload.get("error") or "SBPN stream error"))
+                text = str(payload.get("text") or "").strip()
+                if payload.get("type") == "transcription.delta" and not self.pending_final:
+                    # text is the entire revised prefix, not an append-only delta.
+                    await self.on_partial(text, text)
+                elif payload.get("type") == "transcription.done":
+                    if self.final_result and not self.final_result.done():
+                        self.final_result.set_result(text)
+        except (aiohttp.ClientError, ValueError) as exc:
+            self.event("stt_realtime_error", {"error": str(exc)})
+        finally:
+            if self.ws is ws:
+                self.ws = None
+            if self.final_result and not self.final_result.done():
+                self.final_result.set_exception(ConnectionError("SBPN socket closed before final"))
+            await ws.close()
 
     async def warmup(self, duration_ms=0):
         return self.ready
 
     async def append(self, pcm):
-        pass  # The pipeline already owns the VAD turn buffer.
+        if self.pending_final or self.degraded or not pcm:
+            return
+        if self.streamed_bytes + len(pcm) > 29 * 16000 * 2:
+            self.degraded = True
+            await self._close_socket()
+            self.event("stt_stream_limit_fallback", {"model": SBPN_MODEL, "batch_final_available": True})
+            return
+        try:
+            if not self.ws or self.ws.closed:
+                if self.streamed_bytes:
+                    raise ConnectionError("SBPN disconnected during a turn")
+                await self._open_socket()
+            for offset in range(0, len(pcm), 6400):
+                await self.ws.send_bytes(pcm[offset:offset + 6400])
+            self.streamed_bytes += len(pcm)
+            if self.usage is not None:
+                self.usage.stt_submitted(len(pcm))
+        except (aiohttp.ClientError, ConnectionError, TimeoutError, ValueError) as exc:
+            self.degraded = True
+            self.event("stt_realtime_audio_send_failed", {"error": str(exc), "batch_final_available": True})
 
     async def commit(self, pcm):
-        await self.recover("new_turn")
-        task = asyncio.create_task(self._transcribe(bytes(pcm)), name="sbpn-final")
+        if self.pending_final:
+            await self.recover("new_turn")
+        self.pending_final = True
+        task = asyncio.create_task(self._finalize(bytes(pcm)), name="sbpn-final")
         self.tasks.add(task)
         task.add_done_callback(self.tasks.discard)
+
+    async def _finalize(self, pcm):
+        text = None
+        try:
+            if self.ws and not self.ws.closed and self.streamed_bytes and not self.degraded:
+                self.final_result = asyncio.get_running_loop().create_future()
+                try:
+                    await self.ws.send_json({"type": "input_audio_buffer.commit", "final": True})
+                    text = await asyncio.wait_for(self.final_result, 30)
+                    if not text:
+                        raise ValueError("SBPN returned an empty transcript")
+                except (aiohttp.ClientError, ConnectionError, TimeoutError, ValueError) as exc:
+                    self.event("stt_realtime_final_fallback", {"error": str(exc)})
+                else:
+                    self.event("stt_realtime_final", {"text": text, "model": SBPN_MODEL, "authoritative": True})
+            if not text:
+                await self._close_socket()
+                text = await self._transcribe(pcm)
+        finally:
+            self.final_result = None
+            self.streamed_bytes = 0
+            self.pending_final = False
+            self.degraded = False
+        if text:
+            await self.on_final(text)
 
     async def _transcribe(self, pcm):
         from .providers import pcm16_wav
@@ -157,7 +271,7 @@ class SBPNClient:
             if not text:
                 raise ValueError("SBPN returned an empty transcript")
             self.event("stt_batch_final", {"text": text, "model": SBPN_MODEL, "authoritative": True})
-            await self.on_final(text)
+            return text
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -170,6 +284,18 @@ class SBPNClient:
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
         self.tasks.clear()
+        await self._close_socket()
+        self.streamed_bytes = 0
+        self.pending_final = self.degraded = False
+
+    async def _close_socket(self):
+        ws, receiver = self.ws, self.receiver
+        self.ws = self.receiver = None
+        if receiver and receiver is not asyncio.current_task():
+            receiver.cancel()
+            await asyncio.gather(receiver, return_exceptions=True)
+        if ws:
+            await ws.close()
 
     async def close(self):
         await self.recover("closed")

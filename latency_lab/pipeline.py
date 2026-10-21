@@ -505,11 +505,12 @@ class ConversationPipeline:
         self.banking.ingest_pcm(pcm)
         if self.state == "recovering_stt":
             return
-        await self.stt.append(pcm)
         self.last_client_network_ms = client_network_ms
         duration_ms = len(pcm) / 2 / 16000 * 1000
         level = rms_pcm16(pcm)
         speaking = level >= self.config.speech_rms
+        if not is_pidgin(self.config.tts_language) or speaking or self.speech_candidate_active or self.state in {"speaking", "speculating"}:
+            await self.stt.append(pcm)
         if speaking:
             self._pause_compaction()
             if self.state in {"idle", "playing", "releasing"}:
@@ -558,6 +559,8 @@ class ConversationPipeline:
             )
             self.turn_pcm16.clear()
             self._clear_speech_candidate()
+            if is_pidgin(self.config.tts_language):
+                await self.stt.recover("speech_candidate_cancel")
             return
         if self.state in {"speaking", "speculating"}:
             self.turn_pcm16.extend(pcm)
