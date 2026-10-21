@@ -1,8 +1,7 @@
-# Native passkey confirmation (unreleased)
+# Native passkey confirmation (0.1.4)
 
-This feature is implemented in SDK source after 0.1.3. It is **not in the published
-0.1.3 binary**. A compatible Attentive backend and bank-approved associated domains
-are also required before an end-to-end transaction can work.
+Available in SDK 0.1.4. A compatible Attentive backend and bank-approved
+associated domains are required before an end-to-end transaction can work.
 
 Configure everything in code. There are no settings menus, sliders, enrollment
 buttons or custom authentication screens. The native system sheet appears over
@@ -123,6 +122,15 @@ Unsupported credential preferences fail explicitly. Host-supplied prompt limits
 and bank expiry bound the WebAuthn timeout; the SDK does not retry prompts or
 reuse proofs after reconnect. Transaction completion remains a separate outcome.
 
-The integration notes and simulated tests are available in source. Publishing a
-new SDK release, real-iPhone credential testing and Wema acceptance remain release
-gates; a simulated approval does not satisfy them.
+The integration notes and simulated tests are available in source. Real-iPhone
+credential testing and Wema acceptance remain integration gates; a simulated approval does not satisfy them.
+
+## Minimal sample
+
+The QuickStart example sets `passkeys:` beside `audioInput:` without adding app
+controls. `auth.bank.example` and `DEMO-DEVICE-ID` are demo placeholders. Replace
+them with the approved relying-party domain and bank-issued identifier (or nil
+if unavailable). The placeholder domain cannot complete a native ceremony. The
+sample never fabricates backend acceptance. Use `.disabled` to omit passkeys.
+Simulated-bank verification remains isolated in tests, outside the shipped SDK
+and customer app.

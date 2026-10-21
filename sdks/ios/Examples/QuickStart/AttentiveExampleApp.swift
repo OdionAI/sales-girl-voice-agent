@@ -28,6 +28,12 @@ struct AttentiveExampleApp: App {
                             speechConfirmationMilliseconds: 120,
                             interruptionConfirmationMilliseconds: 240
                         ),
+                        // Demo placeholders; replace with your bank-approved values.
+                        // Native verification requires the bank's app/domain association and backend.
+                        passkeys: .init(
+                            relyingPartyIdentifiers: ["auth.bank.example"],
+                            deviceIdentifier: "DEMO-DEVICE-ID"
+                        ),
                         callerToken: environment["ATTENTIVE_CALLER_TOKEN"].map { token in { token } }
                     )
                 }
