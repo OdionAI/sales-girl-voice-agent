@@ -1,12 +1,12 @@
 # Private iOS passkey protocol v1 — backend implementation required
 
 Internal contract only; exclude from public SDK documentation/distribution. The
-current rvc-livekit-comparison worker has no handlers for this contract. Do not
+current comparison worker has no handlers for this contract. Do not
 advertise its capability until the handlers and banking authorization gate exist.
 
 ## Readiness and transport
 
-Use the existing LiveKit room, reliable destination-targeted data packets on
+Use the existing agent connection, reliable destination-targeted data packets on
 `odion.auth.passkey`, never `lk.chat`, transcripts, tool activity or LLM arguments.
 Each complete envelope is limited to 14,000 UTF-8 bytes. The SDK accepts only the
 single agent-kind participant advertising `attentive.passkeys.version=1`. Multiple

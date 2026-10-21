@@ -75,4 +75,6 @@ for (const relative of fs.readdirSync(path.join(sdk, 'Sources'), { recursive: tr
   }
 }
 assert(!fs.existsSync(path.join(sdk, 'Sources/AttentiveVoice/LiveKitCallTransport.swift')));
+assert(!/LiveKit|AttentiveRTC|RustLiveKit|SwiftProtobuf/i.test(fs.readFileSync(path.join(sdk, 'PASSKEYS.md'), 'utf8')),
+  'Passkey integration docs must use only the Attentive public API');
 console.log(`PASS: ${inventory.length} fork files; Attentive-only public products; native pins and API boundaries intact.`);
