@@ -158,6 +158,25 @@ class DemoTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('did not pass', await task)
         self.assertIsNone(self.demo.credential)
 
+    async def test_context_reset_discards_enrolled_credential(self):
+        task, packet = await self.enroll()
+        previous_user = self.demo.user
+        await self.receive({'type': 'session_context', 'correlationId': 'replacement-context'})
+        await self.prove_old_without_result(packet)
+        self.assertIn('did not pass', await task)
+        self.assertIsNone(self.demo.credential)
+        self.assertNotEqual(previous_user, self.demo.user)
+        task = self.start(); packet = await self.packet()
+        self.assertEqual(packet['mode'], 'register')
+
+    async def test_result_delivery_failure_does_not_report_success(self):
+        task = self.start(); packet = await self.packet()
+        self.demo.send = AsyncMock(side_effect=ConnectionError('disconnected'))
+        await self.receive({'type': 'fido2_proof', 'authenticationId': packet['authenticationId'],
+                            'correlationId': packet['correlationId'], 'proof': self.device.proof(packet)})
+        self.assertIn('did not pass', await task)
+        self.assertIsNone(self.demo.pending)
+
     async def prove_old_without_result(self, packet):
         await self.receive({'type': 'fido2_proof', 'authenticationId': packet['authenticationId'],
                             'correlationId': packet['correlationId'], 'proof': self.device.proof(packet)})

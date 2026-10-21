@@ -469,7 +469,11 @@ async def entrypoint(ctx: JobContext) -> None:
                     and packet.participant is not None and packet.participant.identity == participant.identity):
                 task = asyncio.create_task(pipeline.passkey_demo.receive(packet.data))
                 tasks.add(task)
-                task.add_done_callback(tasks.discard)
+                def passkey_completed(task: asyncio.Task) -> None:
+                    tasks.discard(task)
+                    if not task.cancelled() and task.exception() is not None:
+                        logger.error("Passkey demo packet handling failed")
+                task.add_done_callback(passkey_completed)
                 return
             if (transport is None or packet.topic != "rvc_latency_ack" or
                     packet.participant is None or packet.participant.identity != participant.identity):

@@ -98,6 +98,8 @@ class DemoSession:
                 return
             if self.context_id and self.context_id != correlation:
                 self._finish("interrupted")
+                self.credential = None
+                self.user = secrets.token_bytes(32)
             self.context_id = correlation
             # The optional device identifier is not an identity credential; do not store or log it.
             return
@@ -144,9 +146,13 @@ class DemoSession:
                 except Exception:
                     # Never emit credential data, decoder errors or proof material to logs/the model.
                     accepted = False
-            await self.send({"type": "fido2_result", "authenticationId": current.authentication_id,
-                             "correlationId": current.correlation_id, "accepted": accepted,
-                             "outcome": "demo_verified" if accepted else "demo_rejected"})
+            try:
+                await self.send({"type": "fido2_result", "authenticationId": current.authentication_id,
+                                 "correlationId": current.correlation_id, "accepted": accepted,
+                                 "outcome": "demo_verified" if accepted else "demo_rejected"})
+            except Exception:
+                self._finish("delivery_failed")
+                return
             self._finish("verified" if accepted else "rejected")
 
     def _finish(self, status: str) -> None:
