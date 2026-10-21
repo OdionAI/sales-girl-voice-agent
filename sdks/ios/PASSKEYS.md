@@ -1,0 +1,110 @@
+# Native passkey confirmation (unreleased)
+
+This feature is implemented in SDK source after 0.1.3. It is **not in the published
+0.1.3 binary**. A compatible Attentive backend and bank-approved associated domains
+are also required before an end-to-end transaction can work.
+
+Configure everything in code. There are no settings menus, sliders, enrollment
+buttons or custom authentication screens. The native system sheet appears over
+the call when authorization is requested.
+
+<!-- snippet: passkey-entry -->
+```swift
+import AttentiveVoice
+import AttentiveVoiceUI
+import SwiftUI
+
+@available(iOS 17, *)
+@MainActor
+struct BankAgentScreen: View {
+    let customerID: String
+    let bankDeviceIdentifier: String?
+    let callerToken: () async throws -> String
+
+    var body: some View {
+        AttentiveAgentView(
+            apiKey: "YOUR_API_KEY",
+            agentID: "YOUR_AGENT_ID",
+            customerID: customerID,
+            passkeys: .init(
+                relyingPartyIdentifiers: ["auth.bank.example"], // Replace with bank-approved domain.
+                deviceIdentifier: bankDeviceIdentifier,
+                ceremonyTimeoutSeconds: 120,
+                verificationTimeoutSeconds: 30
+            ),
+            callerToken: callerToken
+        )
+    }
+}
+```
+
+Existing `audioInput` settings work alongside `passkeys`; audio processing is
+independent of native authentication. Configuration is immutable per call object.
+
+| Setting | Meaning |
+| --- | --- |
+| `.disabled` | Default. Empty relying-party list disables the feature and preserves existing integrations. |
+| `relyingPartyIdentifiers` | Up to 16 exact trusted domains, without scheme, port, path or wildcards. Never derive them from an untrusted message. |
+| `deviceIdentifier` | Optional opaque bank-issued/host-supplied string, maximum 512 UTF-8 bytes. The SDK does not discover hardware identifiers or generate substitutes. Absence is sent as null. |
+| `ceremonyTimeoutSeconds` | Finite 1–300 seconds, default 120. Earlier server expiry/request timeout takes precedence. |
+| `verificationTimeoutSeconds` | Finite 1–120 seconds, default 30. Wait for backend verification after producing the proof, also bounded by server expiry. |
+
+Invalid configuration fails before a call starts. Missing device identifiers do
+not prevent conversation; the backend decides whether bank operations are allowed.
+
+## Host setup
+
+Add `webcredentials:<approved-domain>` to the host app's Associated Domains
+entitlement. The bank must serve an `apple-app-site-association` file authorizing
+that app's application identifier. The sample app needs its own approved entry;
+the SDK cannot inherit another app's association. See [Apple's passkey setup](https://developer.apple.com/documentation/authenticationservices/supporting-passkeys).
+
+`AttentiveAgentView` supplies its own presenting window, including sheets and
+multi-window apps. Custom UI hosts initialize `AttentiveCall` with the same
+`passkeys` value and set `call.passkeyPresentationAnchor` to a closure returning
+that call screen's window. Retain the call and call `end()` on dismissal.
+
+Native presentation is iOS-only. Source core remains iOS 16; supplied UI and the
+current binary-package distribution require iOS 17.
+Registration exclusion lists require iOS 17.4; older systems reject those requests
+rather than ignoring their constraints.
+
+## State and privacy
+
+- Existing `sessionAuthentication` / `actionAuthentication` remain the public states.
+  Identity still comes from the signed-in host's backend-issued `callerToken`.
+  Public API keys, customer selection and device identifiers do not prove identity.
+- Native approval only produces a proof. Action authentication stays `pending`
+  until a matching, authoritative backend verification result arrives.
+- `verified` means authentication passed, not that money moved. Transaction
+  completion is reported separately through the existing tool outcome.
+- Required user verification is enforced. Weaker verification requests, unsupported
+  extensions, unsupported algorithms and non-`none` attestation fail explicitly.
+- Dismissing the sheet leaves the call usable, pending, without a call-failure
+  alert. Local failures/expiry set action authentication to failed, not call failure.
+  Quote expiry/cancellation remains a backend responsibility.
+- One ceremony at a time. No automatic prompt retry, proof replay, or spoken/typed
+  substitute. Reconnect invalidates the active ceremony; the backend must start anew.
+- Sensitive options, proofs and device identifiers never enter chat, transcripts,
+  tool activity or the public event callback. Do not log the device property yourself.
+
+Passkeys can sync across devices and permit device-passcode authentication. This
+feature does not promise biometric-only or device-bound credentials.
+
+## Confirm with Wema before release
+
+1. Obtain `FIDO2_Passkey_Integration_Guide.docx` and accepted examples for assertion
+   and registration. Confirm unpadded base64url versus base64, the complete response
+   schema, optional fields and null/omitted user-handle behavior.
+2. Confirm relying-party domains and each host/test app's domain association.
+3. Confirm whether registration only enrolls or also authorizes the transaction.
+   The SDK never infers authorization from native registration success.
+4. Define the bank's `deviceImei` identifier, its source on iOS and missing-value policy.
+5. Confirm synced credentials/device passcodes are permitted and that platform
+   ES256 keys, attestation `none` and no-extension requests satisfy bank policy.
+6. Verify backend challenge binding to customer, prepared transaction/amount/payee,
+   expiry and call, and duplicate-execution/cancellation/retry behavior.
+
+Until these are confirmed and backend integration is complete, use mocked SDK
+ceremonies. Do not claim a Wema transaction has been tested or enable live money
+movement. End-to-end acceptance requires a real iPhone and bank test account.

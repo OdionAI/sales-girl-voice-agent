@@ -61,6 +61,49 @@ final class CallTests: XCTestCase {
     }
 
     @MainActor
+    func testPasskeyContextIsPrivateAndLegacyActionStatusCannotAuthorizeProtectedCall() async throws {
+        let transport = MockTransport()
+        let call = AttentiveCall(provider: StubProvider(), makeTransport: { transport }, microphonePermission: { true },
+            passkeys: .init(relyingPartyIdentifiers: ["auth.example.com"], deviceIdentifier: "private-device"))
+        var events: [CallEvent] = []
+        call.onEvent = { events.append($0) }
+        try await call.start(request, microphoneEnabled: false)
+        XCTAssertTrue(transport.passkeysEnabled)
+        transport.onPasskeyEvent?(.ready)
+        for _ in 0..<500 {
+            if !transport.privateMessages.isEmpty { break }
+            try await Task.sleep(for: .milliseconds(2))
+        }
+        let data = try XCTUnwrap(transport.privateMessages.first)
+        let context = try JSONDecoder().decode([String: JSONValue].self, from: data)
+        XCTAssertEqual(context["deviceImei"], .string("private-device"))
+        XCTAssertTrue(transport.messages.isEmpty)
+        XCTAssertTrue(call.transcripts.isEmpty)
+        XCTAssertTrue(call.toolActivity.isEmpty)
+        XCTAssertFalse(String(reflecting: events).contains("private-device"))
+        transport.onEvent?(.authentication(.init(scope: .action, status: .verified)))
+        XCTAssertEqual(call.actionAuthentication, .pending)
+        transport.onEvent?(.authentication(.init(scope: .session, status: .verified)))
+        XCTAssertEqual(call.sessionAuthentication, .verified)
+        let stale = transport.onPasskeyEvent
+        await call.end()
+        stale?(.ready)
+        await Task.yield()
+        XCTAssertEqual(transport.privateMessages.count, 1)
+        XCTAssertEqual(call.state, .ended)
+    }
+
+    @MainActor
+    func testInvalidPasskeyConfigurationFailsBeforeCreatingSession() async {
+        let transport = MockTransport()
+        let call = AttentiveCall(provider: StubProvider(), makeTransport: { transport }, microphonePermission: { true },
+            passkeys: .init(relyingPartyIdentifiers: ["https://auth.example.com"]))
+        do { try await call.start(request); XCTFail() }
+        catch { XCTAssertEqual(error as? CallError, .invalidRequest) }
+        XCTAssertEqual(transport.connections, 0)
+    }
+
+    @MainActor
     func testActualMicrophoneStateAndExternalMuteReachHeadlessAndUIObservers() async throws {
         let transport = MockTransport()
         transport.microphoneEnabled = false
@@ -203,6 +246,11 @@ private struct StubProvider: CallCredentialProvider {
 @MainActor
 private final class MockTransport: CallTransport {
     var onEvent: ((CallEvent) -> Void)?
+    var onPasskeyEvent: ((PasskeyTransportEvent) -> Void)?
+    var privateMessages: [Data] = []
+    var passkeysEnabled = false
+    func setPasskeysEnabled(_ enabled: Bool) { passkeysEnabled = enabled }
+    func sendPasskeyMessage(_ data: Data) async throws { privateMessages.append(data) }
     var microphoneEnabled: Bool?
     var changeMicrophone: (() async -> Void)?
     var disconnected = false

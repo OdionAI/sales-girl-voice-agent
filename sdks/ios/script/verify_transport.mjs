@@ -69,7 +69,8 @@ for (const relative of fs.readdirSync(path.join(sdk, 'Sources'), { recursive: tr
   const text = fs.readFileSync(path.join(sdk, 'Sources', relative), 'utf8');
   assert(!/\bimport\s+(?:LiveKit\w*|RustLiveKitUniFFI)\b/.test(text), `Upstream import in adapter: ${relative}`);
   if (/\bimport\s+AttentiveRTC\b/.test(text)) {
-    assert.equal(relative, 'AttentiveVoice/RealtimeCallTransport.swift');
+    assert(['AttentiveVoice/RealtimeCallTransport.swift', 'AttentiveVoice/ApplicationMicrophone.swift'].includes(relative),
+      `Transport import outside audited internal adapters: ${relative}`);
     assert(text.includes('internal import AttentiveRTC'), 'Transport types must not leak into public API');
   }
 }

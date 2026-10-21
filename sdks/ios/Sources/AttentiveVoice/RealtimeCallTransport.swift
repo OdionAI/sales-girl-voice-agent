@@ -5,6 +5,11 @@ internal import AttentiveRTC
 @MainActor
 final class RealtimeCallTransport: NSObject, CallTransport {
     var onEvent: ((CallEvent) -> Void)?
+    var onPasskeyEvent: ((PasskeyTransportEvent) -> Void)?
+    private var passkeysEnabled = false
+    private var passkeyPeer: Participant.Identity?
+    private var transportConnected = false
+    private static let passkeyTopic = "odion.auth.passkey"
     private let room = Room()
     private var closing = false
     private var sawAgent = false
@@ -73,6 +78,7 @@ final class RealtimeCallTransport: NSObject, CallTransport {
         try await room.connect(url: credentials.serverUrl.absoluteString, token: credentials.participantToken)
         try Task.checkCancellation()
         guard !closing else { throw CancellationError() }
+        transportConnected = true
         listening.setConnected(true)
         for participant in room.remoteParticipants.values { updateAgent(participant) }
         if microphoneEnabled { try await setMicrophone(enabled: true) }
@@ -80,6 +86,9 @@ final class RealtimeCallTransport: NSObject, CallTransport {
 
     func disconnect() async {
         closing = true
+        transportConnected = false
+        passkeyPeer = nil
+        onPasskeyEvent?(.unavailable)
         microphoneActivation.close()
         listening.close()
         microphone.stop()
@@ -99,12 +108,34 @@ final class RealtimeCallTransport: NSObject, CallTransport {
         try await room.localParticipant.sendText(text, for: "lk.chat").id
     }
 
+    func setPasskeysEnabled(_ enabled: Bool) { passkeysEnabled = enabled }
+
+    func sendPasskeyMessage(_ data: Data) async throws {
+        guard !closing, transportConnected, passkeysEnabled, let passkeyPeer, data.count <= 14_000 else {
+            throw PasskeyFailure.unavailable
+        }
+        try await room.localParticipant.publish(data: data, options: DataPublishOptions(
+            destinationIdentities: [passkeyPeer], topic: Self.passkeyTopic, reliable: true))
+    }
+
+    private func updatePasskeyPeer() {
+        guard passkeysEnabled, transportConnected, !closing else { return }
+        let agents = room.remoteParticipants.values.filter { $0.kind == .agent }
+        let peer = agents.count == 1 && agents.first?.attributes["attentive.passkeys.version"] == "1"
+            ? agents.first?.identity : nil
+        guard peer != passkeyPeer else { return }
+        if passkeyPeer != nil { onPasskeyEvent?(.unavailable) }
+        passkeyPeer = peer
+        if peer != nil { onPasskeyEvent?(.ready) }
+    }
+
     func setAudioInputConfiguration(_ configuration: AttentiveAudioInputConfiguration) async throws {
         try await listening.configure(configuration)
     }
 
     private func updateAgent(_ participant: Participant) {
         guard !closing, participant.kind == .agent else { return }
+        updatePasskeyPeer()
         sawAgent = true
         listening.updatePeer(identity: participant.identity?.stringValue,
                              version: participant.attributes["attentive.listening.version"],
@@ -120,12 +151,20 @@ extension RealtimeCallTransport: RoomDelegate {
             guard let self, !self.closing else { return }
             switch state {
             case .reconnecting:
+                self.transportConnected = false
+                self.passkeyPeer = nil
+                self.onPasskeyEvent?(.unavailable)
                 self.listening.setConnected(false)
                 self.onEvent?(.stateChanged(.reconnecting))
             case .connected:
+                self.transportConnected = true
+                self.updatePasskeyPeer()
                 self.listening.setConnected(true)
                 self.onEvent?(.stateChanged(.connected))
             case .disconnected where oldState == .connected || oldState == .reconnecting:
+                self.transportConnected = false
+                self.passkeyPeer = nil
+                self.onPasskeyEvent?(.unavailable)
                 self.onEvent?(.stateChanged(.failed))
             default: break
             }
@@ -136,6 +175,9 @@ extension RealtimeCallTransport: RoomDelegate {
         Task { @MainActor [weak self] in
             guard let self, !self.closing else { return }
             self.listening.setConnected(false)
+            self.transportConnected = false
+            self.passkeyPeer = nil
+            self.onPasskeyEvent?(.unavailable)
             self.onEvent?(.stateChanged(.reconnecting))
         }
     }
@@ -144,6 +186,7 @@ extension RealtimeCallTransport: RoomDelegate {
         Task { @MainActor [weak self] in
             guard let self, !self.closing else { return }
             self.microphone.refresh()
+            self.transportConnected = true
             for participant in self.room.remoteParticipants.values { self.updateAgent(participant) }
             self.listening.setConnected(true)
             self.onEvent?(.stateChanged(.connected))
@@ -162,6 +205,8 @@ extension RealtimeCallTransport: RoomDelegate {
         guard participant.kind == .agent else { return }
         Task { @MainActor [weak self] in
             guard let self, !self.closing, self.sawAgent else { return }
+            self.passkeyPeer = nil
+            self.onPasskeyEvent?(.unavailable)
             self.listening.updatePeer(identity: nil, version: nil)
             self.onEvent?(.agentStateChanged(.disconnected))
         }
@@ -182,6 +227,15 @@ extension RealtimeCallTransport: RoomDelegate {
 
     nonisolated func room(_ room: Room, participant: RemoteParticipant?, didReceiveData data: Data,
                           forTopic topic: String, encryptionType: EncryptionType) {
+        if topic == "odion.auth.passkey" {
+            guard participant?.kind == .agent, let identity = participant?.identity, data.count <= 14_000 else { return }
+            Task { @MainActor [weak self] in
+                guard let self, !self.closing, self.transportConnected, self.passkeysEnabled,
+                      identity == self.passkeyPeer else { return }
+                self.onPasskeyEvent?(.message(data))
+            }
+            return
+        }
         // Only the server-side agent can supply tool/auth observations.
         guard participant?.kind == .agent, let event = BackendEventDecoder.decode(data: data, topic: topic) else { return }
         Task { @MainActor [weak self] in

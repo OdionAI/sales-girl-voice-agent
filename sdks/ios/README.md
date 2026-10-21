@@ -1,5 +1,7 @@
 # AttentiveVoice (Preview)
 
+**Native passkey confirmation (unreleased):** see [code-only configuration and Wema integration prerequisites](PASSKEYS.md). Published 0.1.3 does not include this feature.
+
 **Key-based integration:** use an API key and agent ID
 with `AttentiveAgentView` or `AttentiveCall`. See [key-based setup](ACCOUNT_KEYS.md)
 and the [minimal app](Examples/QuickStart/README.md). No `SampleModel` is required.

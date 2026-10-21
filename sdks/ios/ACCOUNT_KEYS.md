@@ -1,5 +1,7 @@
 # Key-based integration
 
+**Native passkey confirmation (unreleased):** see [code-only configuration and Wema integration prerequisites](PASSKEYS.md). Published 0.1.3 does not include this feature.
+
 Install the latest compatible stable release listed at
 https://github.com/OdionAI/attentive-ios-sdk/releases/latest and pin its exact version.
 The dashboard key API must also be deployed and enabled;

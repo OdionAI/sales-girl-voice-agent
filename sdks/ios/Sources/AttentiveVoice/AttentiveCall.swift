@@ -1,6 +1,9 @@
 import AVFoundation
 import Combine
 import Foundation
+#if os(iOS)
+import UIKit
+#endif
 
 @MainActor
 protocol CallTransport: AnyObject {
@@ -10,10 +13,16 @@ protocol CallTransport: AnyObject {
     func disconnect() async
     func setMicrophone(enabled: Bool) async throws
     func sendText(_ text: String) async throws -> String
+    var onPasskeyEvent: ((PasskeyTransportEvent) -> Void)? { get set }
+    func setPasskeysEnabled(_ enabled: Bool)
+    func sendPasskeyMessage(_ data: Data) async throws
     func setAudioInputConfiguration(_ configuration: AttentiveAudioInputConfiguration) async throws
 }
 
 extension CallTransport {
+    var onPasskeyEvent: ((PasskeyTransportEvent) -> Void)? { get { nil } set {} }
+    func setPasskeysEnabled(_ enabled: Bool) {}
+    func sendPasskeyMessage(_ data: Data) async throws { throw PasskeyFailure.unavailable }
     var microphoneEnabled: Bool? { nil }
     func setAudioInputConfiguration(_ configuration: AttentiveAudioInputConfiguration) async throws {
         throw AttentiveAudioInputError.unsupported
@@ -35,6 +44,28 @@ public final class AttentiveCall: ObservableObject {
     @Published public private(set) var audioInputConfiguration: AttentiveAudioInputConfiguration
     @Published public private(set) var audioInputState: AttentiveAudioInputState
     public let agentAudioLevel = AgentAudioLevel()
+    public let passkeyConfiguration: AttentivePasskeyConfiguration
+    #if os(iOS)
+    /// Headless hosts return the window presenting this call. AttentiveAgentView supplies it automatically.
+    public var passkeyPresentationAnchor: (() -> UIWindow?)?
+    #endif
+    private lazy var passkeyCoordinator: PasskeyCoordinator = {
+        let authorizer: any PasskeyAuthorizing
+        #if os(iOS)
+        authorizer = NativePasskeyAuthorizer { [weak self] in self?.passkeyPresentationAnchor?() }
+        #else
+        authorizer = UnavailablePasskeyAuthorizer()
+        #endif
+        return PasskeyCoordinator(configuration: passkeyConfiguration, authorizer: authorizer,
+            send: { [weak self] data in
+                guard let self, let transport = self.transport, self.attempt != nil else { throw PasskeyFailure.unavailable }
+                try await transport.sendPasskeyMessage(data)
+            }, status: { [weak self] status in
+                guard let self else { return }
+                self.actionAuthentication = status
+                self.onEvent?(.authentication(.init(scope: .action, status: status)))
+            })
+    }()
 
     /// Called on the main actor. Treat payloads as private caller data.
     public var onEvent: ((CallEvent) -> Void)?
@@ -52,13 +83,15 @@ public final class AttentiveCall: ObservableObject {
     private var changingMicrophone = false
 
     /// Uses your dashboard calling key and agent. No endpoint or transport setup is required.
-    public convenience init(apiKey: String, agentID: String, audioInput: AttentiveAudioInputConfiguration = .standard) {
-        self.init(apiKey: apiKey, agentID: agentID, customerID: nil, audioInput: audioInput)
+    public convenience init(apiKey: String, agentID: String, audioInput: AttentiveAudioInputConfiguration = .standard,
+                            passkeys: AttentivePasskeyConfiguration = .disabled) {
+        self.init(apiKey: apiKey, agentID: agentID, customerID: nil, audioInput: audioInput, passkeys: passkeys)
     }
 
     /// Customer selection must match the identity in a backend-issued caller token.
-    public convenience init(apiKey: String, agentID: String, customerID: String?, audioInput: AttentiveAudioInputConfiguration = .standard) {
-        self.init(credentialProvider: nil, allowsInsecureDevelopmentConnections: false, audioInput: audioInput)
+    public convenience init(apiKey: String, agentID: String, customerID: String?, audioInput: AttentiveAudioInputConfiguration = .standard,
+                            passkeys: AttentivePasskeyConfiguration = .disabled) {
+        self.init(credentialProvider: nil, allowsInsecureDevelopmentConnections: false, audioInput: audioInput, passkeys: passkeys)
         sdkClient = SDKClient(apiKey: apiKey, agentID: agentID, customerID: customerID)
     }
 
@@ -80,22 +113,24 @@ public final class AttentiveCall: ObservableObject {
     }
 
     public convenience init(endpoint: URL, allowsInsecureDevelopmentConnections: Bool = false,
-                            audioInput: AttentiveAudioInputConfiguration = .standard) throws {
+                            audioInput: AttentiveAudioInputConfiguration = .standard,
+                            passkeys: AttentivePasskeyConfiguration = .disabled) throws {
         let provider = try HTTPCallCredentialProvider(endpoint: endpoint,
             allowsInsecureDevelopmentConnections: allowsInsecureDevelopmentConnections)
-        self.init(credentialProvider: provider, allowsInsecureDevelopmentConnections: allowsInsecureDevelopmentConnections, audioInput: audioInput)
+        self.init(credentialProvider: provider, allowsInsecureDevelopmentConnections: allowsInsecureDevelopmentConnections, audioInput: audioInput, passkeys: passkeys)
     }
 
     public convenience init(credentialProvider: any CallCredentialProvider,
                             allowsInsecureDevelopmentConnections: Bool = false,
-                            audioInput: AttentiveAudioInputConfiguration = .standard) {
+                            audioInput: AttentiveAudioInputConfiguration = .standard,
+                            passkeys: AttentivePasskeyConfiguration = .disabled) {
         self.init(credentialProvider: Optional(credentialProvider),
-                  allowsInsecureDevelopmentConnections: allowsInsecureDevelopmentConnections, audioInput: audioInput)
+                  allowsInsecureDevelopmentConnections: allowsInsecureDevelopmentConnections, audioInput: audioInput, passkeys: passkeys)
     }
 
     private convenience init(credentialProvider: (any CallCredentialProvider)?,
                              allowsInsecureDevelopmentConnections: Bool,
-                             audioInput: AttentiveAudioInputConfiguration) {
+                             audioInput: AttentiveAudioInputConfiguration, passkeys: AttentivePasskeyConfiguration) {
         self.init(provider: credentialProvider, allowInsecure: allowsInsecureDevelopmentConnections,
                   makeTransport: { RealtimeCallTransport() }, microphonePermission: {
             switch AVCaptureDevice.authorizationStatus(for: .audio) {
@@ -103,18 +138,20 @@ public final class AttentiveCall: ObservableObject {
             case .notDetermined: return await AVCaptureDevice.requestAccess(for: .audio)
             default: return false
             }
-        }, audioInput: audioInput)
+        }, audioInput: audioInput, passkeys: passkeys)
     }
 
     init(provider: (any CallCredentialProvider)?, allowInsecure: Bool = false,
          makeTransport: @escaping () -> any CallTransport,
          microphonePermission: @escaping () async -> Bool, agentTimeout: Duration = .seconds(30),
-         audioInput: AttentiveAudioInputConfiguration = .standard) {
+         audioInput: AttentiveAudioInputConfiguration = .standard,
+         passkeys: AttentivePasskeyConfiguration = .disabled) {
         self.provider = provider
         self.allowInsecure = allowInsecure
         self.makeTransport = makeTransport
         self.microphonePermission = microphonePermission
         self.agentTimeout = agentTimeout
+        passkeyConfiguration = passkeys
         audioInputConfiguration = audioInput
         audioInputState = .init(status: .idle, requested: audioInput)
     }
@@ -133,6 +170,8 @@ public final class AttentiveCall: ObservableObject {
     private func connect(microphoneEnabled: Bool, credentials: @escaping () async throws -> CallCredentials) async throws {
         guard operation == nil, [.idle, .ended, .failed].contains(state) else { throw CallError.alreadyActive }
         try audioInputConfiguration.validate()
+        try passkeyConfiguration.validate()
+        passkeyCoordinator.reset()
         transcripts = []
         toolActivity = []
         lastError = nil
@@ -146,6 +185,11 @@ public final class AttentiveCall: ObservableObject {
         attempt = id
         let connection = makeTransport()
         transport = connection
+        connection.setPasskeysEnabled(passkeyConfiguration.isEnabled)
+        connection.onPasskeyEvent = { [weak self] event in
+            guard let self, self.attempt == id else { return }
+            self.passkeyCoordinator.receive(event)
+        }
         connection.onEvent = { [weak self] event in
             guard let self, self.attempt == id else { return }
             self.receive(event)
@@ -170,6 +214,8 @@ public final class AttentiveCall: ObservableObject {
                 watchForAgent(id: id)
             } catch {
                 connection.onEvent = nil
+                connection.onPasskeyEvent = nil
+                passkeyCoordinator.suspend()
                 await connection.disconnect()
                 if attempt == id {
                     attempt = nil
@@ -192,12 +238,14 @@ public final class AttentiveCall: ObservableObject {
     public func end() async {
         guard state != .ending else { return }
         attempt = nil
+        passkeyCoordinator.suspend()
         watchdog?.cancel()
         watchdog = nil
         let pending = operation
         pending?.cancel()
         let connection = transport
         connection?.onEvent = nil
+        connection?.onPasskeyEvent = nil
         setState(.ending)
         await connection?.disconnect()
         _ = try? await pending?.value
@@ -294,12 +342,14 @@ public final class AttentiveCall: ObservableObject {
     private func fail(_ error: CallError) async {
         guard state != .ending else { return }
         attempt = nil
+        passkeyCoordinator.suspend()
         watchdog?.cancel()
         watchdog = nil
         let pending = operation
         pending?.cancel()
         let connection = transport
         connection?.onEvent = nil
+        connection?.onPasskeyEvent = nil
         setState(.ending)
         await connection?.disconnect()
         _ = try? await pending?.value
@@ -363,6 +413,8 @@ public final class AttentiveCall: ObservableObject {
             else { toolActivity.append(activity) }
             if toolActivity.count > 100 { toolActivity.removeFirst(toolActivity.count - 100) }
         case .authentication(let auth):
+            // Legacy voice-auth observations cannot authorize a passkey-protected action.
+            if passkeyConfiguration.isEnabled, auth.scope == .action { return }
             if auth.scope == .session { sessionAuthentication = auth.status }
             else { actionAuthentication = auth.status }
         default: break
