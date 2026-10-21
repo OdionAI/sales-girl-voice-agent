@@ -34,6 +34,7 @@ from .action_tools import (
     localized_action_text,
 )
 from .providers import RLLMClient, RSTTClient, RTTSClient, tts_token_budget
+from .pidgin import EjiroTTSClient, SBPNClient, LANGUAGE_RULES, apply_pidgin_stack, is_pidgin
 from .trace import TraceRecorder
 from .banking_tools import BankingTools, BANK_TOOLS
 from . import provider_directory, directory_email, directory_locations
@@ -137,16 +138,19 @@ class ConversationPipeline:
         agent_context: AgentRuntimeContext | None = None,
         session_identity: dict | None = None,
     ) -> None:
+        config = apply_pidgin_stack(config, agent_context, session_identity)
         self.config = config
         self.trace = trace
         self.send = send
         self.http = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=120))
         self.llm = RLLMClient(config, self.http)
-        self.tts = RTTSClient(config, self.http)
-        self.stt = RSTTClient(config, self.on_partial, self.on_final, self._provider_event)
+        self.tts = (EjiroTTSClient if is_pidgin(config.tts_language) else RTTSClient)(config, self.http)
+        self.stt = (SBPNClient if is_pidgin(config.tts_language) else RSTTClient)(config, self.on_partial, self.on_final, self._provider_event)
         self.agent_context = agent_context or AgentRuntimeContext()
         self.banking = BankingTools(self.http, self.agent_context, trace.session_id, send, session_identity)
         self.system_prompt = self.agent_context.system_prompt(config.system_prompt) + self.banking.prompt() + CONVERSATION_RULES
+        if is_pidgin(config.tts_language):
+            self.system_prompt += LANGUAGE_RULES
         self.knowledge = KnowledgeClient(config, self.http, self.agent_context)
         self.passkey_demo = None  # Provisioned only by the trusted call worker.
         self.action_tools = action_tool_definitions(self.agent_context)
@@ -387,6 +391,9 @@ class ConversationPipeline:
                 self.attempt = None
 
     def opening_greeting_text(self) -> str:
+        if is_pidgin(self.config.tts_language):
+            name = str(getattr(self.agent_context, "name", "") or "").strip()
+            return f"Hello! Na {name} dey here. How I fit help you today?" if name else "Hello! How I fit help you today?"
         # The opening is spoken directly by TTS, before the LLM sees a caller
         # turn. Allow an agent's own instructions to supply that first line.
         greeting = ""
@@ -423,6 +430,8 @@ class ConversationPipeline:
         return greeting
 
     def closing_goodbye_text(self) -> str:
+        if is_pidgin(self.config.tts_language):
+            return "Thank you well well. Enjoy your day. Bye bye."
         # Outbound agents should not thank the member for calling them. Keep
         # the existing generic goodbye unless that agent supplies its own.
         for line in self.agent_context.instructions.splitlines():
@@ -496,11 +505,12 @@ class ConversationPipeline:
         self.banking.ingest_pcm(pcm)
         if self.state == "recovering_stt":
             return
-        await self.stt.append(pcm)
         self.last_client_network_ms = client_network_ms
         duration_ms = len(pcm) / 2 / 16000 * 1000
         level = rms_pcm16(pcm)
         speaking = level >= self.config.speech_rms
+        if not is_pidgin(self.config.tts_language) or speaking or self.speech_candidate_active or self.state in {"speaking", "speculating"}:
+            await self.stt.append(pcm)
         if speaking:
             self._pause_compaction()
             if self.state in {"idle", "playing", "releasing"}:
@@ -549,6 +559,8 @@ class ConversationPipeline:
             )
             self.turn_pcm16.clear()
             self._clear_speech_candidate()
+            if is_pidgin(self.config.tts_language):
+                await self.stt.recover("speech_candidate_cancel")
             return
         if self.state in {"speaking", "speculating"}:
             self.turn_pcm16.extend(pcm)
@@ -915,6 +927,8 @@ class ConversationPipeline:
                              listening_only=not self.engagement.speech_enabled)
             attempt.authorization_event.set()
         attempt.knowledge_query = text
+        if is_pidgin(self.config.tts_language):
+            attempt.spoken_knowledge_acknowledgement = "Abeg give me small time make I check am for you."
         attempt.knowledge_gate_reason = "awaiting_explicit_llm_knowledge_request"
         self.attempt = attempt
         self.trace.record(
@@ -1264,6 +1278,8 @@ class ConversationPipeline:
                     self.config.system_prompt,
                     result.prompt_context(),
                 ) + self.banking.prompt() + CONVERSATION_RULES
+                if is_pidgin(self.config.tts_language):
+                    knowledge_prompt += LANGUAGE_RULES
                 followup_messages = [
                     {"role": "system", "content": knowledge_prompt},
                     *self._recent_history(attempt),
