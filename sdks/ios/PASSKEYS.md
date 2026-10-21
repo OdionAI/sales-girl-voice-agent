@@ -53,7 +53,8 @@ not prevent conversation; the backend decides whether bank operations are allowe
 
 ## Host setup
 
-Add `webcredentials:<approved-domain>` to the host app's Associated Domains
+Sign with a paid Apple Developer team; Personal Teams do not support Associated
+Domains. Add `webcredentials:<approved-domain>` to the host app's Associated Domains
 entitlement. The bank must serve an `apple-app-site-association` file authorizing
 that app's application identifier. The sample app needs its own approved entry;
 the SDK cannot inherit another app's association. See [Apple's passkey setup](https://developer.apple.com/documentation/authenticationservices/supporting-passkeys).
@@ -134,3 +135,7 @@ if unavailable). The placeholder domain cannot complete a native ceremony. The
 sample never fabricates backend acceptance. Use `.disabled` to omit passkeys.
 Simulated-bank verification remains isolated in tests, outside the shipped SDK
 and customer app.
+
+For the public SDK 0.1.4 setup, code settings and provisioned simulated-bank demo,
+see https://docs.odion.ai/ios/#native-passkey-confirmation. The demo requires its
+own approved app association and a compatible worker; it is not an SDK mock.

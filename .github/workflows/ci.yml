@@ -31,3 +31,15 @@ jobs:
 
       - name: Build Docker image
         run: docker build -t sales-girl-voice-agent:ci .
+
+  passkey-demo:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install isolated worker dependencies
+        run: pip install -r latency_lab/requirements.txt
+      - name: Verify demo proofs, intent gates and worker regressions
+        run: python -m unittest latency_lab.tests.test_passkey_demo latency_lab.tests.test_engagement latency_lab.tests.test_livekit_transport -v
