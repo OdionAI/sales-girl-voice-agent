@@ -18,6 +18,7 @@ from livekit.agents import AutoSubscribe, JobContext, WorkerOptions, cli
 from .agentic import load_agent_runtime_context, session_routing_context
 from .config import apply_runtime_overrides, lab_config_from_environ, load_platform_env
 from .pipeline import ConversationPipeline
+from .passkey_demo import DemoSession, TOPIC as PASSKEY_TOPIC, enabled as passkey_demo_enabled
 from .input_noise import InputNoiseFilter
 from .report import generate_report
 from .session_identity import verify_session_token
@@ -424,6 +425,13 @@ async def entrypoint(ctx: JobContext) -> None:
             agent_context=agent_context,
             session_identity=identity,
         )
+        if not sip_route and passkey_demo_enabled(identity):
+            async def send_passkey(payload: dict) -> None:
+                await ctx.room.local_participant.publish_data(
+                    json.dumps(payload), topic=PASSKEY_TOPIC, reliable=True,
+                    destination_identities=[participant.identity])
+            pipeline.passkey_demo = DemoSession(
+                send_passkey, rp_id="docs.odion.ai", origin="https://docs.odion.ai")
         transport.bind(pipeline)
         transport.user_identity = participant.identity
         transport.user_participant = participant
@@ -457,6 +465,12 @@ async def entrypoint(ctx: JobContext) -> None:
         ctx.room.register_text_stream_handler("lk.chat", on_text)
 
         def on_data_received(packet: rtc.DataPacket) -> None:
+            if (packet.topic == PASSKEY_TOPIC and getattr(pipeline, "passkey_demo", None) is not None
+                    and packet.participant is not None and packet.participant.identity == participant.identity):
+                task = asyncio.create_task(pipeline.passkey_demo.receive(packet.data))
+                tasks.add(task)
+                task.add_done_callback(tasks.discard)
+                return
             if (transport is None or packet.topic != "rvc_latency_ack" or
                     packet.participant is None or packet.participant.identity != participant.identity):
                 return
@@ -548,6 +562,8 @@ async def entrypoint(ctx: JobContext) -> None:
             ctx.room.off("participant_disconnected", participant_handler)
         ctx.room.unregister_text_stream_handler("lk.chat")
         if pipeline is not None:
+            if getattr(pipeline, "passkey_demo", None) is not None:
+                await pipeline.passkey_demo.close()
             await pipeline.close()
         else:
             trace.record("session_close", reason="livekit_startup_failed")

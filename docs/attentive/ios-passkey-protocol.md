@@ -1,7 +1,9 @@
 # Private iOS FIDO2 contract — SDK brief Revision 2
 
 Internal backend contract; exclude from public SDK documentation/distribution.
-Production worker handlers and the banking authorization gate are still required.
+An opt-in simulated-bank worker now implements this contract for native SDK
+tests. Real banking worker handlers and the Wema authorization gate remain
+separate integration requirements.
 The SDK implements the Revision 2 SDK brief dated 2026-10-21. The proposed topic
 name below must be confirmed by the backend team before rollout.
 

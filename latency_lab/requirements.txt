@@ -5,3 +5,4 @@ python-dotenv>=1.0,<2
 uvicorn[standard]>=0.30,<1
 jsonschema>=4.23,<5
 pyrnnoise==0.4.5
+webauthn==2.7.1

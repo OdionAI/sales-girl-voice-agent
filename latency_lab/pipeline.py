@@ -148,6 +148,7 @@ class ConversationPipeline:
         self.banking = BankingTools(self.http, self.agent_context, trace.session_id, send, session_identity)
         self.system_prompt = self.agent_context.system_prompt(config.system_prompt) + self.banking.prompt() + CONVERSATION_RULES
         self.knowledge = KnowledgeClient(config, self.http, self.agent_context)
+        self.passkey_demo = None  # Provisioned only by the trusted call worker.
         self.action_tools = action_tool_definitions(self.agent_context)
         self.directory_enabled = provider_directory.enabled(self.agent_context)
         self.pending_directory = None
@@ -1001,14 +1002,20 @@ class ConversationPipeline:
             {"role": "user", "content": attempt.hypothesis},
         ]
         try:
-            attempt.tool_calls = await self._stream_llm_and_tts(
-                attempt,
-                messages,
-                phase="prompt_first",
-                tools=([SPEECH_GATE_TOOL] + (
-                    self.action_tools if self.engagement.speech_enabled and not self.pending_action else []
-                ) if self.config.engagement_enabled else self.action_tools),
-            )
+            from .passkey_demo import requested as demo_requested, TOOL as DEMO_TOOL
+            if self.passkey_demo is not None and demo_requested(attempt.hypothesis):
+                # Selection may be speculative; the common gate below still requires
+                # the committed final, and the handler checks explicit intent again.
+                attempt.tool_calls = [ActionToolCall("demo-" + attempt.id, DEMO_TOOL, {})]
+            else:
+                attempt.tool_calls = await self._stream_llm_and_tts(
+                    attempt,
+                    messages,
+                    phase="prompt_first",
+                    tools=([SPEECH_GATE_TOOL] + (
+                        self.action_tools if self.engagement.speech_enabled and not self.pending_action else []
+                    ) if self.config.engagement_enabled else self.action_tools),
+                )
             if attempt.speech_control:
                 if not attempt.authorized:
                     await attempt.authorization_event.wait()
@@ -1050,6 +1057,13 @@ class ConversationPipeline:
                     await self._run_directory_lookup(attempt, messages, call)
                 elif call.name == directory_email.TOOL_NAME and directory_email.enabled(self.agent_context):
                     await self._prepare_directory_email(attempt, call, messages)
+                elif call.name == DEMO_TOOL and self.passkey_demo is not None:
+                    if demo_requested(self.final_text) and attempt.authorized:
+                        async def demo_progress(text: str) -> None:
+                            await self._speak_text(attempt, text, phase="passkey_demo")
+                        result = await self.passkey_demo.run(demo_progress)
+                        if not attempt.cancelled:
+                            await self._speak_text(attempt, result, phase="passkey_demo_result")
                 elif call.name in BANK_TOOLS:
                     await self._run_banking_tools(attempt, messages, attempt.tool_calls)
                 elif call.name == "end_call":
