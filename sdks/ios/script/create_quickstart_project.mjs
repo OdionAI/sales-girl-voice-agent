@@ -5,8 +5,11 @@ import { fileURLToPath } from "node:url";
 
 // Generates a source-development project without editing the published binary sample.
 const sdk = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const dependency = process.argv[2] ? resolve(process.argv[2]) : sdk;
-const target = join(sdk, ".build/quickstart");
+const dependencyArgument = process.argv.slice(2).find((argument) => !argument.startsWith("--"));
+const dependency = dependencyArgument ? resolve(dependencyArgument) : sdk;
+const passkeySimulator = process.argv.includes("--passkey-simulator");
+if (passkeySimulator && dependency !== sdk) throw new Error("The internal passkey harness requires the source package.");
+const target = join(sdk, passkeySimulator ? ".build/passkey-simulator-app" : ".build/quickstart");
 const project = join(target, "AttentiveQuickStart.xcodeproj");
 await mkdir(project, { recursive: true });
 const template = join(sdk, "Examples/AttentiveSample/AttentiveSample.xcodeproj/project.pbxproj");
@@ -22,7 +25,7 @@ objects.A30000000000000000000004.children = ["A20000000000000000000006"];
 objects.A20000000000000000000001.path = "AttentiveExampleApp.swift";
 objects.A20000000000000000000006.path = "AttentiveQuickStart.app";
 for (const id of ["B10000000000000000000003", "B10000000000000000000004"]) {
-  objects[id].buildSettings.PRODUCT_BUNDLE_IDENTIFIER = "ai.odion.attentive.quickstart";
+  objects[id].buildSettings.PRODUCT_BUNDLE_IDENTIFIER = passkeySimulator ? "ai.odion.attentive.passkey-simulator" : "ai.odion.attentive.quickstart";
 }
 objects.A90000000000000000000001 = { isa: "XCLocalSwiftPackageReference", relativePath: dependency };
 // Remove unreachable objects, including legacy SampleModel/settings/test file references.
@@ -38,6 +41,11 @@ visit(data.rootObject);
 for (const id of Object.keys(objects)) if (!reachable.has(id)) delete objects[id];
 execFileSync("plutil", ["-convert", "xml1", "-o", join(project, "project.pbxproj"), "-"], { input: JSON.stringify(data) });
 await mkdir(join(target, "AttentiveSample"), { recursive: true });
-await cp(join(sdk, "Examples/QuickStart/AttentiveExampleApp.swift"), join(target, "AttentiveSample/AttentiveExampleApp.swift"));
+await cp(join(sdk, passkeySimulator ? "Tests/PasskeySimulator/AttentiveExampleApp.swift" : "Examples/QuickStart/AttentiveExampleApp.swift"), join(target, "AttentiveSample/AttentiveExampleApp.swift"));
 await cp(join(sdk, "Examples/AttentiveSample/AttentiveSample/Info.plist"), join(target, "AttentiveSample/Info.plist"));
 console.log(project);
+
+if (passkeySimulator) {
+  const info = join(target, "AttentiveSample/Info.plist");
+  execFileSync("plutil", ["-replace", "NSAppTransportSecurity", "-json", '{"NSAllowsArbitraryLoads":true}', info]);
+}

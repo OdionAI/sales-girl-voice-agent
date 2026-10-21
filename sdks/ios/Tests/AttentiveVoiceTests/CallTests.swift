@@ -104,6 +104,44 @@ final class CallTests: XCTestCase {
     }
 
     @MainActor
+    func testInjectedCredentialDeviceStillRequiresMatchingBankResultThroughCall() async throws {
+        let transport = MockTransport()
+        let device = CallPasskeyAuthorizerStub()
+        let call = AttentiveCall(provider: StubProvider(), makeTransport: { transport }, microphonePermission: { true },
+            passkeys: .init(relyingPartyIdentifiers: ["auth.example.com"]), passkeyAuthorizer: device)
+        try await call.start(request, microphoneEnabled: false)
+        transport.onPasskeyEvent?(.ready)
+        for _ in 0..<500 {
+            if transport.privateMessages.count == 1 { break }
+            try await Task.sleep(for: .milliseconds(2))
+        }
+        let context = try JSONDecoder().decode([String: JSONValue].self, from: XCTUnwrap(transport.privateMessages.first))
+        let contextID = try XCTUnwrap(context["contextId"])
+        func incoming(_ fields: [String: JSONValue]) throws {
+            var payload = fields
+            payload["version"] = .number(1); payload["contextId"] = contextID
+            transport.onPasskeyEvent?(.message(try JSONEncoder().encode(payload)))
+        }
+        try incoming(["type": .string("session_context_ack")])
+        try incoming(["type": .string("fido2_ceremony"), "authenticationId": .string("call-test"),
+            "action": .number(1), "feature": .string("SimulatedAction"), "mode": .string("authenticate"),
+            "expiresAt": .number(Date().addingTimeInterval(60).timeIntervalSince1970),
+            "options": .object(["challenge": .string("AQID"), "rpId": .string("auth.example.com")])])
+        for _ in 0..<500 {
+            if transport.privateMessages.count == 2 { break }
+            try await Task.sleep(for: .milliseconds(2))
+        }
+        XCTAssertEqual(device.requests, 1)
+        XCTAssertEqual(transport.privateMessages.count, 2)
+        XCTAssertEqual(call.actionAuthentication, .pending)
+        XCTAssertTrue(call.transcripts.isEmpty)
+        try incoming(["type": .string("fido2_result"), "authenticationId": .string("call-test"),
+                      "status": .string("verified"), "authenticated": .bool(true)])
+        XCTAssertEqual(call.actionAuthentication, .verified)
+        await call.end()
+    }
+
+    @MainActor
     func testActualMicrophoneStateAndExternalMuteReachHeadlessAndUIObservers() async throws {
         let transport = MockTransport()
         transport.microphoneEnabled = false
@@ -241,6 +279,16 @@ private struct StubProvider: CallCredentialProvider {
         try await Task.sleep(for: delay)
         return Self.credentials
     }
+}
+
+@MainActor
+private final class CallPasskeyAuthorizerStub: PasskeyAuthorizing {
+    var requests = 0
+    func authorize(_ request: PasskeyRequest) async throws -> PasskeyProof {
+        requests += 1
+        return .assertion(id: Data([1]), clientData: Data([2]), authenticatorData: Data([3]), signature: Data([4]), userID: Data([5]))
+    }
+    func cancel() {}
 }
 
 @MainActor

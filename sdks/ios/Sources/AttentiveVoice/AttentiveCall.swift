@@ -45,17 +45,23 @@ public final class AttentiveCall: ObservableObject {
     @Published public private(set) var audioInputState: AttentiveAudioInputState
     public let agentAudioLevel = AgentAudioLevel()
     public let passkeyConfiguration: AttentivePasskeyConfiguration
+    // Internal dependency injection for interactive tests; never a customer API.
+    private let passkeyAuthorizerOverride: (any PasskeyAuthorizing)?
     #if os(iOS)
     /// Headless hosts return the window presenting this call. AttentiveAgentView supplies it automatically.
     public var passkeyPresentationAnchor: (() -> UIWindow?)?
     #endif
     private lazy var passkeyCoordinator: PasskeyCoordinator = {
         let authorizer: any PasskeyAuthorizing
-        #if os(iOS)
-        authorizer = NativePasskeyAuthorizer { [weak self] in self?.passkeyPresentationAnchor?() }
-        #else
-        authorizer = UnavailablePasskeyAuthorizer()
-        #endif
+        if let passkeyAuthorizerOverride {
+            authorizer = passkeyAuthorizerOverride
+        } else {
+            #if os(iOS)
+            authorizer = NativePasskeyAuthorizer { [weak self] in self?.passkeyPresentationAnchor?() }
+            #else
+            authorizer = UnavailablePasskeyAuthorizer()
+            #endif
+        }
         return PasskeyCoordinator(configuration: passkeyConfiguration, authorizer: authorizer,
             send: { [weak self] data in
                 guard let self, let transport = self.transport, self.attempt != nil else { throw PasskeyFailure.unavailable }
@@ -145,12 +151,14 @@ public final class AttentiveCall: ObservableObject {
          makeTransport: @escaping () -> any CallTransport,
          microphonePermission: @escaping () async -> Bool, agentTimeout: Duration = .seconds(30),
          audioInput: AttentiveAudioInputConfiguration = .standard,
-         passkeys: AttentivePasskeyConfiguration = .disabled) {
+         passkeys: AttentivePasskeyConfiguration = .disabled,
+         passkeyAuthorizer: (any PasskeyAuthorizing)? = nil) {
         self.provider = provider
         self.allowInsecure = allowInsecure
         self.makeTransport = makeTransport
         self.microphonePermission = microphonePermission
         self.agentTimeout = agentTimeout
+        passkeyAuthorizerOverride = passkeyAuthorizer
         passkeyConfiguration = passkeys
         audioInputConfiguration = audioInput
         audioInputState = .init(status: .idle, requested: audioInput)
