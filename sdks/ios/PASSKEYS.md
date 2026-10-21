@@ -64,8 +64,8 @@ multi-window apps. Custom UI hosts initialize `AttentiveCall` with the same
 `passkeys` value and set `call.passkeyPresentationAnchor` to a closure returning
 that call screen's window. Retain the call and call `end()` on dismissal.
 
-Native presentation is iOS-only. Source core remains iOS 16; supplied UI and the
-current binary-package distribution require iOS 17.
+Native presentation is iOS-only. The core supports iOS 16; supplied caller views
+require iOS 17.
 Registration exclusion lists require iOS 17.4; older systems reject those requests
 rather than ignoring their constraints.
 
@@ -78,8 +78,10 @@ rather than ignoring their constraints.
   until a matching, authoritative backend verification result arrives.
 - `verified` means authentication passed, not that money moved. Transaction
   completion is reported separately through the existing tool outcome.
-- Required user verification is enforced. Weaker verification requests, unsupported
-  extensions, unsupported algorithms and non-`none` attestation fail explicitly.
+- The bank’s user-verification preference is carried into the native request.
+  The backend must request required verification for protected banking actions.
+  Unsupported extensions, credential preferences, algorithms and non-`none`
+  attestation fail explicitly instead of being silently dropped.
 - Dismissing the sheet leaves the call usable, pending, without a call-failure
   alert. Local failures/expiry set action authentication to failed, not call failure.
   Quote expiry/cancellation remains a backend responsibility.
@@ -108,3 +110,19 @@ feature does not promise biometric-only or device-bound credentials.
 Until these are confirmed and backend integration is complete, use mocked SDK
 ceremonies. Do not claim a Wema transaction has been tested or enable live money
 movement. End-to-end acceptance requires a real iPhone and bank test account.
+
+## Revision 2 integration status
+
+The SDK now uses the revised structured ceremony contract: per-request
+correlation, ISO-8601 expiry, and explicit bank acceptance before authentication
+is verified. Configuration remains in code through both startup paths. No extra
+customer authentication screen or settings controls are added.
+
+Native registration and assertion options have separate mappings and proofs.
+Unsupported credential preferences fail explicitly. Host-supplied prompt limits
+and bank expiry bound the WebAuthn timeout; the SDK does not retry prompts or
+reuse proofs after reconnect. Transaction completion remains a separate outcome.
+
+The integration notes and simulated tests are available in source. Publishing a
+new SDK release, real-iPhone credential testing and Wema acceptance remain release
+gates; a simulated approval does not satisfy them.

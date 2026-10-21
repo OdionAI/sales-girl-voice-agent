@@ -3,7 +3,9 @@ import Foundation
 /// Private wire types never reach chat, tool events or the host's event callback.
 struct PasskeyRequest {
     enum Mode: String { case authenticate, register }
+    enum UserVerification: String { case required, preferred, discouraged }
     let authenticationID: String
+    let correlationID: String
     let mode: Mode
     let relyingParty: String
     let challenge: Data
@@ -13,18 +15,22 @@ struct PasskeyRequest {
     let displayName: String?
     let expiresAt: Date
     let promptTimeout: TimeInterval
+    let userVerification: UserVerification
 
     init(_ payload: [String: JSONValue], configuration: AttentivePasskeyConfiguration, now: Date) throws {
         guard let id = payload["authenticationId"]?.stringValue, !id.isEmpty, id.utf8.count <= 256,
+              let correlation = payload["correlationId"]?.stringValue, !correlation.isEmpty, correlation.utf8.count <= 256,
               let mode = Mode(rawValue: payload["mode"]?.stringValue ?? ""),
-              case .number(let expiry) = payload["expiresAt"], expiry.isFinite,
+              let expiryText = payload["expiresAt"]?.stringValue,
+              let expiry = Self.expiry(expiryText),
               case .number(let action) = payload["action"], action >= 0, action.rounded() == action,
               let feature = payload["feature"]?.stringValue, !feature.isEmpty, feature.utf8.count <= 128,
               case .object(let options) = payload["options"] else { throw PasskeyFailure.invalidRequest }
-        guard expiry > now.timeIntervalSince1970 else { throw PasskeyFailure.expired }
+        guard expiry > now else { throw PasskeyFailure.expired }
         authenticationID = id
+        correlationID = correlation
         self.mode = mode
-        expiresAt = Date(timeIntervalSince1970: expiry)
+        expiresAt = expiry
         let permitted: Set<String> = mode == .authenticate
             ? ["challenge", "rpId", "allowCredentials", "userVerification", "timeout", "extensions"]
             : ["challenge", "rp", "user", "pubKeyCredParams", "excludeCredentials", "authenticatorSelection", "attestation", "timeout", "extensions"]
@@ -36,10 +42,10 @@ struct PasskeyRequest {
             guard case .number(let milliseconds) = value, milliseconds.isFinite, milliseconds > 0 else { throw PasskeyFailure.invalidRequest }
             timeout = min(timeout, milliseconds / 1000)
         }
-        promptTimeout = min(timeout, expiry - now.timeIntervalSince1970)
+        promptTimeout = min(timeout, expiry.timeIntervalSince(now))
         if mode == .authenticate {
             relyingParty = options["rpId"]?.stringValue ?? ""
-            try Self.requireVerification(options["userVerification"])
+            userVerification = try Self.verification(options["userVerification"])
             credentialIDs = try Self.credentials(options["allowCredentials"])
             userID = nil; userName = nil; displayName = nil
         } else {
@@ -52,16 +58,25 @@ struct PasskeyRequest {
                 guard case .object(let fields) = parameter else { return false }
                 return fields["type"] == .string("public-key") && fields["alg"] == .number(-7)
             }
+            guard parameters.allSatisfy({ parameter in
+                guard case .object(let fields) = parameter,
+                      Set(fields.keys).isSubset(of: ["type", "alg"]),
+                      fields["type"] == .string("public-key"),
+                      case .number(let algorithm) = fields["alg"] else { return false }
+                return algorithm.isFinite && algorithm.rounded() == algorithm
+            }) else { throw PasskeyFailure.invalidRequest }
             guard supportsPlatformKey, options["attestation"] == nil || options["attestation"] == .string("none") else { throw PasskeyFailure.unsupportedOptions }
             if let selection = options["authenticatorSelection"] {
                 guard case .object(let fields) = selection,
                       Set(fields.keys).isSubset(of: ["authenticatorAttachment", "residentKey", "requireResidentKey", "userVerification"]),
                       fields["authenticatorAttachment"] == nil || fields["authenticatorAttachment"] == .string("platform"),
-                      fields["residentKey"] == nil || [JSONValue.string("required"), .string("preferred"), .string("discouraged")].contains(fields["residentKey"]!),
-                      fields["requireResidentKey"] == nil || fields["requireResidentKey"] == .bool(true) || fields["requireResidentKey"] == .bool(false)
+                      fields["residentKey"] == nil || fields["residentKey"] == .string("required"),
+                      fields["requireResidentKey"] == nil || fields["requireResidentKey"] == .bool(true)
                 else { throw PasskeyFailure.unsupportedOptions }
-                try Self.requireVerification(fields["userVerification"])
-            }
+                // Platform passkeys are discoverable. Other resident-key preferences
+                // cannot be selected with this native API and must not be discarded.
+                userVerification = try Self.verification(fields["userVerification"])
+            } else { userVerification = .preferred }
             relyingParty = rp["id"]?.stringValue ?? ""
             userID = try PasskeyEncoding.decode(user["id"]?.stringValue ?? "", maximum: 64)
             userName = name; displayName = display
@@ -71,9 +86,20 @@ struct PasskeyRequest {
               AttentivePasskeyConfiguration.isDomain(relyingParty) else { throw PasskeyFailure.untrustedRelyingParty }
     }
 
-    private static func requireVerification(_ value: JSONValue?) throws {
-        // This feature authorizes banking actions. A weaker request must never downgrade it.
-        guard value == nil || value == .string("required") else { throw PasskeyFailure.unsupportedOptions }
+    private static func verification(_ value: JSONValue?) throws -> UserVerification {
+        guard let value else { return .preferred } // WebAuthn default, not a local policy change.
+        guard let text = value.stringValue, let preference = UserVerification(rawValue: text) else {
+            throw PasskeyFailure.unsupportedOptions
+        }
+        return preference
+    }
+
+    private static func expiry(_ text: String) -> Date? {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let value = formatter.date(from: text) { return value }
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter.date(from: text)
     }
 
     private static func credentials(_ value: JSONValue?) throws -> [Data] {
@@ -84,6 +110,7 @@ struct PasskeyRequest {
                   Set(fields.keys).isSubset(of: ["id", "type", "transports"]) else { throw PasskeyFailure.unsupportedOptions }
             if let transports = fields["transports"] {
                 guard case .array(let values) = transports, values.allSatisfy({ $0.stringValue != nil }) else { throw PasskeyFailure.invalidRequest }
+                guard values.allSatisfy({ $0 == .string("internal") }) else { throw PasskeyFailure.unsupportedOptions }
             }
             return try PasskeyEncoding.decode(fields["id"]?.stringValue ?? "")
         }
@@ -107,7 +134,7 @@ struct PasskeyProof: CustomStringConvertible, CustomDebugStringConvertible {
     private static func credential(id: Data, response: [String: JSONValue]) -> [String: JSONValue] {
         ["id": .string(PasskeyEncoding.encode(id)), "rawId": .string(PasskeyEncoding.encode(id)),
          "type": .string("public-key"),
-         "clientExtensionResults": .object([:]), "response": .object(response)]
+         "response": .object(response)]
     }
     var description: String { "PasskeyProof(<redacted>)" }
     var debugDescription: String { description }

@@ -57,7 +57,7 @@ final class PasskeyValueTests: XCTestCase {
         XCTAssertLessThanOrEqual(request.promptTimeout, 10)
         payload["options"] = .object(["challenge": .string("AQID"), "rpId": .string("evil.example.com")])
         XCTAssertThrowsError(try PasskeyRequest(payload, configuration: config, now: now))
-        for option in ["extensions": JSONValue.object(["prf": .object([:])]), "userVerification": .string("discouraged"), "unknownRequirement": .bool(true)] {
+        for option in ["extensions": JSONValue.object(["prf": .object([:])]), "userVerification": .string("invalid"), "unknownRequirement": .bool(true)] {
             var options: [String: JSONValue] = ["challenge": .string("AQID"), "rpId": .string("auth.example.com")]
             options[option.key] = option.value; payload["options"] = .object(options)
             XCTAssertThrowsError(try PasskeyRequest(payload, configuration: config, now: now))
@@ -94,13 +94,13 @@ final class PasskeyCoordinatorTests: XCTestCase {
         try await waitUntil { fixture.messages.contains { $0["type"] == .string("fido2_proof") } }
         XCTAssertEqual(fixture.statuses.last, .pending)
         XCTAssertEqual(fixture.messages.last?["authenticationId"], .string("Mixed-Case-ID"))
-        fixture.message(["type": .string("fido2_result"), "authenticationId": .string("wrong"), "status": .string("verified"), "authenticated": .bool(true)])
+        fixture.message(["type": .string("fido2_result"), "authenticationId": .string("wrong"), "accepted": .bool(true)])
         XCTAssertEqual(fixture.statuses.last, .pending)
-        fixture.result(status: "verified", authenticated: false)
+        fixture.message(["type": .string("fido2_result"), "authenticationId": .string("Mixed-Case-ID"), "accepted": .string("true")])
         XCTAssertEqual(fixture.statuses.last, .pending)
-        fixture.result(status: "verified", authenticated: true)
+        fixture.result(accepted: true)
         XCTAssertEqual(fixture.statuses.last, .verified)
-        fixture.result(status: "failed", authenticated: false)
+        fixture.result(accepted: false)
         XCTAssertEqual(fixture.statuses.last, .verified)
         fixture.coordinator.suspend()
     }
@@ -109,20 +109,20 @@ final class PasskeyCoordinatorTests: XCTestCase {
         let fixture = PasskeyFixture(); try await fixture.ready()
         fixture.message(ceremonyPayload())
         try await waitUntil { fixture.messages.count == 2 }
-        fixture.result(status: "failed", authenticated: false)
+        fixture.result(accepted: false)
         XCTAssertEqual(fixture.statuses.last, .failed)
         XCTAssertFalse(fixture.statuses.contains(.verified))
         fixture.coordinator.suspend()
     }
 
-    func testNoPromptBeforeContextAcknowledgementOrWrongContextOrVersion() async throws {
+    func testNoPromptBeforeConnectionOrWithWrongVersionOrMissingCorrelation() async throws {
         let fixture = PasskeyFixture()
-        try await fixture.ready(acknowledge: false)
         fixture.message(ceremonyPayload())
-        fixture.message(["type": .string("session_context_ack")])
-        var wrong = ceremonyPayload(); wrong["contextId"] = .string("another-call")
-        fixture.message(wrong)
-        wrong = ceremonyPayload(); wrong["version"] = .number(2); fixture.message(wrong)
+        XCTAssertEqual(fixture.authorizer.requests, 0)
+        try await fixture.ready()
+        var wrong = ceremonyPayload(); wrong["version"] = .number(2); fixture.message(wrong)
+        wrong = ceremonyPayload(); wrong["correlationId"] = nil
+        fixture.coordinator.receive(.message(try JSONEncoder().encode(wrong)))
         XCTAssertEqual(fixture.authorizer.requests, 0)
         fixture.coordinator.suspend()
     }
@@ -131,7 +131,7 @@ final class PasskeyCoordinatorTests: XCTestCase {
         let fixture = PasskeyFixture(); fixture.authorizer.hold = true
         try await fixture.ready(); fixture.message(ceremonyPayload())
         try await waitUntil { fixture.authorizer.requests == 1 }
-        fixture.result(status: "verified", authenticated: true)
+        fixture.result(accepted: true)
         XCTAssertEqual(fixture.statuses.last, .pending)
         fixture.coordinator.suspend()
     }
@@ -143,7 +143,7 @@ final class PasskeyCoordinatorTests: XCTestCase {
         XCTAssertEqual(fixture.messages.last?["type"], .string("fido2_cancelled"))
         XCTAssertEqual(fixture.statuses.last, .pending)
         XCTAssertEqual(fixture.authorizer.requests, 1)
-        fixture.result(status: "verified", authenticated: true)
+        fixture.result(accepted: true)
         XCTAssertEqual(fixture.statuses.last, .pending)
         fixture.coordinator.suspend()
     }
@@ -153,13 +153,13 @@ final class PasskeyCoordinatorTests: XCTestCase {
         try await fixture.ready(); fixture.message(ceremonyPayload())
         try await waitUntil { fixture.authorizer.requests == 1 }
         fixture.message(ceremonyPayload())
-        var other = ceremonyPayload(); other["authenticationId"] = .string("other")
+        var other = ceremonyPayload(); other["authenticationId"] = .string("other"); other["correlationId"] = .string("other-correlation")
         fixture.message(other)
         try await waitUntil { fixture.messages.count == 2 }
         XCTAssertEqual(fixture.messages.last?["reason"], .string("busy"))
         fixture.authorizer.complete()
         try await waitUntil { fixture.messages.count == 3 }
-        fixture.result(status: "verified", authenticated: true)
+        fixture.result(accepted: true)
         var replay = ceremonyPayload(); replay["authenticationId"] = .string("mixed-case-id")
         fixture.message(replay)
         try await waitUntil { fixture.messages.count == 4 }
@@ -177,19 +177,19 @@ final class PasskeyCoordinatorTests: XCTestCase {
         fixture.authorizer.complete()
         for _ in 0..<20 { await Task.yield() }
         XCTAssertFalse(fixture.messages.contains { $0["type"] == .string("fido2_proof") })
-        fixture.result(status: "verified", authenticated: true)
+        fixture.result(accepted: true)
         XCTAssertEqual(fixture.statuses.last, .failed)
         fixture.coordinator.suspend()
     }
 
-    func testReconnectNeverReplaysProofAndOldContextCannotAuthorize() async throws {
+    func testReconnectNeverReplaysProofAndOldResultCannotAuthorize() async throws {
         let fixture = PasskeyFixture(); try await fixture.ready()
         fixture.message(ceremonyPayload()); try await waitUntil { fixture.messages.count == 2 }
         let previousContext = fixture.context
         fixture.coordinator.receive(.unavailable)
         try await fixture.ready()
-        fixture.message(["type": .string("fido2_result"), "contextId": .string(previousContext),
-                         "authenticationId": .string("Mixed-Case-ID"), "status": .string("verified"), "authenticated": .bool(true)])
+        fixture.message(["type": .string("fido2_result"), "correlationId": .string(previousContext),
+                         "authenticationId": .string("Mixed-Case-ID"), "accepted": .bool(true)])
         XCTAssertEqual(fixture.statuses.last, .pending)
         XCTAssertEqual(fixture.messages.filter { $0["type"] == .string("fido2_proof") }.count, 1)
         fixture.message(ceremonyPayload())
@@ -213,13 +213,13 @@ final class PasskeyCoordinatorTests: XCTestCase {
         try await waitUntil { fixture.messages.count == 3 }
         XCTAssertEqual(fixture.messages[1]["type"], .string("fido2_proof"))
         XCTAssertEqual(fixture.messages[2]["reason"], .string("expired"))
-        fixture.result(status: "verified", authenticated: true)
+        fixture.result(accepted: true)
         XCTAssertEqual(fixture.statuses.last, .failed)
         fixture.authorizer.hold = true; fixture.authorizer.ignoreCancellation = true
-        var next = ceremonyPayload(); next["authenticationId"] = .string("new-id")
+        var next = ceremonyPayload(); next["authenticationId"] = .string("new-id"); next["correlationId"] = .string("new-correlation")
         fixture.message(next)
         try await waitUntil { fixture.authorizer.requests == 2 }
-        fixture.message(["type": .string("fido2_abort"), "authenticationId": .string("new-id")])
+        fixture.message(["type": .string("fido2_abort"), "authenticationId": .string("new-id"), "correlationId": .string("new-correlation")])
         fixture.authorizer.complete()
         for _ in 0..<20 { await Task.yield() }
         XCTAssertEqual(fixture.messages.filter { $0["type"] == .string("fido2_proof") }.count, 1)
@@ -251,7 +251,8 @@ final class PasskeyCoordinatorTests: XCTestCase {
 private func ceremonyPayload(expiry: Date = Date().addingTimeInterval(60)) -> [String: JSONValue] {
     ["type": .string("fido2_ceremony"), "authenticationId": .string("Mixed-Case-ID"),
      "action": .number(1), "feature": .string("TransferFunds"), "mode": .string("authenticate"),
-     "expiresAt": .number(expiry.timeIntervalSince1970),
+     "correlationId": .string("ceremony-correlation"),
+     "expiresAt": .string(expiry.ISO8601Format(.init(includingFractionalSeconds: true))),
      "options": .object(["rpId": .string("auth.example.com"), "challenge": .string("AQID"), "userVerification": .string("required")])]
 }
 
@@ -267,22 +268,20 @@ private final class PasskeyFixture {
             if failSend { throw PasskeyFailure.unavailable }
             messages.append(try JSONDecoder().decode([String: JSONValue].self, from: data))
         }, status: { [unowned self] in statuses.append($0) })
-    func ready(acknowledge: Bool = true) async throws {
+    func ready() async throws {
         let count = messages.count
         coordinator.receive(.ready)
         try await waitUntil { self.messages.count > count }
-        context = messages.last?["contextId"]?.stringValue ?? ""
-        if acknowledge { message(["type": .string("session_context_ack")]) }
+        context = messages.last?["correlationId"]?.stringValue ?? ""
     }
     func message(_ fields: [String: JSONValue]) {
         var payload = fields
-        if payload["contextId"] == nil { payload["contextId"] = .string(context) }
-        if payload["version"] == nil { payload["version"] = .number(1) }
+        if payload["correlationId"] == nil { payload["correlationId"] = .string("ceremony-correlation") }
         coordinator.receive(.message(try! JSONEncoder().encode(payload)))
     }
-    func result(status: String, authenticated: Bool) {
+    func result(accepted: Bool) {
         message(["type": .string("fido2_result"), "authenticationId": .string("Mixed-Case-ID"),
-                 "status": .string(status), "authenticated": .bool(authenticated)])
+                 "accepted": .bool(accepted), "outcome": .string(accepted ? "executed" : "rejected")])
     }
 }
 

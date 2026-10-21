@@ -116,16 +116,15 @@ final class CallTests: XCTestCase {
             try await Task.sleep(for: .milliseconds(2))
         }
         let context = try JSONDecoder().decode([String: JSONValue].self, from: XCTUnwrap(transport.privateMessages.first))
-        let contextID = try XCTUnwrap(context["contextId"])
+        XCTAssertNotNil(context["correlationId"])
         func incoming(_ fields: [String: JSONValue]) throws {
             var payload = fields
-            payload["version"] = .number(1); payload["contextId"] = contextID
+            payload["correlationId"] = .string("call-correlation")
             transport.onPasskeyEvent?(.message(try JSONEncoder().encode(payload)))
         }
-        try incoming(["type": .string("session_context_ack")])
         try incoming(["type": .string("fido2_ceremony"), "authenticationId": .string("call-test"),
             "action": .number(1), "feature": .string("SimulatedAction"), "mode": .string("authenticate"),
-            "expiresAt": .number(Date().addingTimeInterval(60).timeIntervalSince1970),
+            "expiresAt": .string(Date().addingTimeInterval(60).ISO8601Format()),
             "options": .object(["challenge": .string("AQID"), "rpId": .string("auth.example.com")])])
         for _ in 0..<500 {
             if transport.privateMessages.count == 2 { break }
@@ -136,7 +135,7 @@ final class CallTests: XCTestCase {
         XCTAssertEqual(call.actionAuthentication, .pending)
         XCTAssertTrue(call.transcripts.isEmpty)
         try incoming(["type": .string("fido2_result"), "authenticationId": .string("call-test"),
-                      "status": .string("verified"), "authenticated": .bool(true)])
+                      "accepted": .bool(true)])
         XCTAssertEqual(call.actionAuthentication, .verified)
         await call.end()
     }

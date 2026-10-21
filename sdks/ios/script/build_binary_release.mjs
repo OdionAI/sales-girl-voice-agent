@@ -243,7 +243,7 @@ const releaseURL = `https://github.com/OdionAI/attentive-ios-sdk/releases/tag/${
 const metadata = {
   schemaVersion: 1, version, status: version.includes("-") ? "prerelease" : "stable",
   packageURL: "https://github.com/OdionAI/attentive-ios-sdk.git", releaseURL,
-  minimumIOS: "17.0", swiftToolsVersion: "6.1",
+  minimumIOS: "16.0", uiMinimumIOS: "17.0", swiftToolsVersion: "6.1",
   buildToolchain: {
     xcode: commandOutput("xcodebuild", ["-version"]),
     swift: commandOutput("xcrun", ["swift", "--version"]),

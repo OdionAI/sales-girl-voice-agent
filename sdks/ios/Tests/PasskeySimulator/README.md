@@ -42,7 +42,7 @@ with `ENABLE_TESTABILITY=YES` and `CODE_SIGNING_ALLOWED=NO`. The harness require
 source modules and `@testable` access; it cannot be used with the release package.
 The generated harness alone permits plain HTTP for the loopback bootstrap.
 
-1. Tap **Start call**. Confirm the agent speaks and the bank context is acknowledged.
+1. Tap **Start call**. Confirm the agent speaks and the bank context is received.
 2. Tap **Approve path**, then **Approve simulated passkey**. SDK action stays
    pending during bank verification, then becomes verified.
 3. Tap **Reject path** and approve the synthetic prompt. SDK action becomes failed
@@ -53,7 +53,9 @@ The generated harness alone permits plain HTTP for the loopback bootstrap.
    association with `auth.bank.example`; failure is expected and must not authorize.
 6. End the call. The SDK must reset the protected action to pending.
 
-The readiness attribute is advertised only after the worker knows the caller,
-so early packets cannot be mistaken for messages without an authenticated sender.
+The agent joins after the caller identity becomes active, matching normal dispatch.
+The test uses the Revision 2 topic and envelopes without a capability attribute,
+version field, context nonce field or acknowledgement handshake. It echoes both
+ceremony IDs and returns an `accepted` boolean after signature validation.
 Real bank testing still requires approved relying parties, domain association,
 bank challenge/verification endpoints and confirmation of the integration schema.
