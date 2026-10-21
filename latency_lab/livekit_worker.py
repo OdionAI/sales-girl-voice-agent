@@ -18,6 +18,7 @@ from livekit.agents import AutoSubscribe, JobContext, WorkerOptions, cli
 from .agentic import load_agent_runtime_context, session_routing_context
 from .config import apply_runtime_overrides, lab_config_from_environ, load_platform_env
 from .pipeline import ConversationPipeline
+from .input_noise import InputNoiseFilter
 from .report import generate_report
 from .session_identity import verify_session_token
 from .sip_bootstrap import resolve_route as resolve_sip_route, participant_identity as sip_participant_identity
@@ -497,6 +498,7 @@ async def entrypoint(ctx: JobContext) -> None:
             num_channels=1,
             frame_size_ms=100,
         )
+        noise_filter = InputNoiseFilter(agent_context, trace)
         async def receive_audio() -> None:
             first_frame = True
             async for event in stream:
@@ -505,7 +507,13 @@ async def entrypoint(ctx: JobContext) -> None:
                     trace.record("livekit_first_audio_frame_received", reason="microphone_entered_rvc",
                                  bytes=len(event.frame.data), sample_rate=event.frame.sample_rate)
                 async with input_lock:
-                    await pipeline.audio(bytes(event.frame.data))
+                    pcm = noise_filter.process(bytes(event.frame.data))
+                    if pcm:
+                        await pipeline.audio(pcm)
+            tail = noise_filter.finish()
+            if tail:
+                async with input_lock:
+                    await pipeline.audio(tail)
 
         input_task = asyncio.create_task(receive_audio())
         stop_task = asyncio.create_task(disconnected.wait())
