@@ -151,18 +151,19 @@ class DemoSession:
                                  "correlationId": current.correlation_id, "accepted": accepted,
                                  "outcome": "demo_verified" if accepted else "demo_rejected"})
             except Exception:
-                self._finish("delivery_failed")
+                self._finish("delivery_failed", current)
                 return
-            self._finish("verified" if accepted else "rejected")
+            self._finish("verified" if accepted else "rejected", current)
 
-    def _finish(self, status: str) -> None:
-        if self.pending:
-            self.pending.consumed = True
-            if not self.pending.future.done():
-                self.pending.future.set_result(status)
+    def _finish(self, status: str, current: Pending | None = None) -> None:
+        current = current or self.pending
+        if current:
+            current.consumed = True
+            if not current.future.done():
+                current.future.set_result(status)
 
     async def _ceremony(self, mode: str) -> str:
-        if self.closed or self.requests >= 6:
+        if self.closed or self.requests >= 6 or (mode == "authenticate" and not self.credential):
             return "unavailable"
         self.requests += 1
         current = Pending(str(uuid.uuid4()), str(uuid.uuid4()), mode, secrets.token_bytes(32),
@@ -207,13 +208,18 @@ class DemoSession:
         if self.running:
             return "A passkey test is already waiting. Complete or cancel the current system sheet first."
         self.running = True
+        context = self.context_id
         try:
             if not self.credential:
                 await progress("This is a simulated bank test, with no money movement. First, create a demo passkey in Apple's sheet.")
+                if self.closed or context != self.context_id:
+                    return self.message("interrupted")
                 status = await self._ceremony("register")
                 if status != "verified":
                     return self.message(status)
             await progress("Now use your passkey to verify this simulated test in Apple's sheet.")
+            if self.closed or context != self.context_id:
+                return self.message("interrupted")
             return self.message(await self._ceremony("authenticate"))
         finally:
             self.running = False

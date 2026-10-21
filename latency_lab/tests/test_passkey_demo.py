@@ -177,6 +177,38 @@ class DemoTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('did not pass', await task)
         self.assertIsNone(self.demo.pending)
 
+    async def test_old_result_delivery_cannot_finish_new_request(self):
+        task = self.start(); packet = await self.packet()
+        delivering = asyncio.Event(); release = asyncio.Event()
+        original_send = self.demo.send
+        async def delayed_send(value):
+            if value['type'] == 'fido2_result':
+                delivering.set(); await release.wait()
+            await original_send(value)
+        self.demo.send = delayed_send
+        proof_task = asyncio.create_task(self.receive({
+            'type': 'fido2_proof', 'authenticationId': packet['authenticationId'],
+            'correlationId': packet['correlationId'], 'proof': self.device.proof(packet)}))
+        self.tasks.append(proof_task)
+        await delivering.wait()
+        await self.receive({'type': 'session_context', 'correlationId': 'replacement-context'})
+        self.assertIn('did not pass', await task)
+        newer_task = self.start(); newer = await self.packet()
+        release.set(); await proof_task
+        await self.packet()  # Old result carries old IDs and cannot settle the new request.
+        self.assertFalse(self.demo.pending.future.done())
+        self.assertFalse(newer_task.done())
+        self.assertEqual(self.demo.pending.authentication_id, newer['authenticationId'])
+
+    async def test_context_change_during_progress_stops_authentication(self):
+        async def progress(text):
+            if text.startswith('Now use'):
+                await self.receive({'type': 'session_context', 'correlationId': 'replacement-context'})
+        task = asyncio.create_task(self.demo.run(progress)); self.tasks.append(task)
+        packet = await self.packet(); await self.prove(packet)
+        self.assertIn('did not pass', await task)
+        self.assertTrue(self.sent.empty())
+
     async def prove_old_without_result(self, packet):
         await self.receive({'type': 'fido2_proof', 'authenticationId': packet['authenticationId'],
                             'correlationId': packet['correlationId'], 'proof': self.device.proof(packet)})
