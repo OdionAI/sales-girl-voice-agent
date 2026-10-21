@@ -14,7 +14,7 @@ from latency_lab.config import LabConfig, apply_runtime_overrides
 from latency_lab.agentic import AgentRuntimeContext
 from latency_lab.pidgin import (
     EJIRO_MODEL, SBPN_MODEL, SBPN_WS_URL, EjiroTTSClient, SBPNClient,
-    apply_pidgin_stack, is_pidgin, split_text, wav_to_call_pcm,
+    apply_pidgin_stack, ejiro_spoken_text, is_pidgin, split_text, wav_to_call_pcm,
 )
 from latency_lab.pipeline import ConversationPipeline
 from latency_lab.providers import pcm16_wav
@@ -48,6 +48,22 @@ class PidginTests(unittest.IsolatedAsyncioTestCase):
             parts = split_text(text)
             self.assertEqual("".join(parts), text)
             self.assertTrue(all(0 < len(part) <= 240 for part in parts))
+
+    def test_mms_numbers_preserve_every_digit_and_decimal(self):
+        self.assertEqual(ejiro_spoken_text("006789"), " zero zero six seven eight nine ")
+        self.assertIn("point", ejiro_spoken_text("12.50"))
+        self.assertIn("naira", ejiro_spoken_text("\u20a612.50"))
+        self.assertEqual(ejiro_spoken_text("How you dey?"), "How you dey?")
+
+    async def test_mms_numeric_expansion_is_split_before_sending(self):
+        text = "Account 0067891234. Amount 65.20 naira. " * 15
+        async with aiohttp.ClientSession() as session:
+            _, chunks = await EjiroTTSClient(self.config, session).stream(text)
+            audio = b"".join([chunk async for chunk in chunks])
+        sent = "".join(item["input"] for item in self.requests)
+        self.assertEqual(sent, ejiro_spoken_text(text))
+        self.assertFalse(any(c.isdecimal() for c in sent))
+        self.assertGreater(len(audio), 0)
 
     def test_wav_resampling_preserves_duration_and_rejects_bad_audio(self):
         pcm = wav_to_call_pcm(pcm16_wav(b"\x01\x00" * 16000))

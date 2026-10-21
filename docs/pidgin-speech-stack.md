@@ -29,6 +29,11 @@ resampler converts incoming 16 kHz mono PCM16 to the existing 24 kHz call transp
 without waiting for the whole response. Partial PCM samples are carried between
 network chunks. Empty, truncated or oversized audio is rejected. Model-level
 streaming uses overlap-context vocoder windows, not incremental text input.
+MMS lacks some numeric tokens. The LLM is instructed to speak quantities in words;
+remaining digit sequences are read digit by digit at the Ejiro boundary, retaining
+leading zeros and decimal points. This does not alter transcripts or tool arguments.
+The 240-character bound applies after this expansion, so numeric greetings cannot
+silently fail or exceed the provider input limit.
 
 Voice Lab's explicit `tts_language_hint` override takes precedence over saved
 agent language. Selecting English again restores the normal provider path.

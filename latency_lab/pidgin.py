@@ -4,6 +4,8 @@ from __future__ import annotations
 import asyncio
 import io
 import json
+import re
+import unicodedata
 import wave
 from dataclasses import replace
 
@@ -24,7 +26,10 @@ information or tool results are in English. Preserve names, amounts, account
 numbers and factual meaning. Do not translate tool names or JSON argument keys.
 Do not imitate an accent with misspellings or invent facts. Use short, complete
 spoken sentences and ask one question at a time. Keep all existing safety and
-business rules. For example: "Abeg give me small time make I check am for you."
+business rules. In spoken replies, spell amounts and quantities in words, and
+read phone numbers, account numbers and codes digit by digit without losing zeros.
+Keep numeric tool arguments as numbers. For example:
+"Abeg give me small time make I check am for you."
 """
 
 
@@ -62,6 +67,15 @@ def split_text(text: str, limit: int = 240) -> list[str]:
     return parts
 
 
+def ejiro_spoken_text(text: str) -> str:
+    """MMS lacks some digit tokens; preserve identifiers without guessing value."""
+    words = ("zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine")
+    text = text.replace("\u20a6", " naira ").replace("%", " percent ")
+    # Numeric punctuation must stay audible rather than being dropped by MMS.
+    text = re.sub(r"(?<=\d)\.(?=\d)", " point ", text)
+    return re.sub(r"\d+", lambda match: " " + " ".join(words[unicodedata.decimal(c)] for c in match[0]) + " ", text)
+
+
 def wav_to_call_pcm(body: bytes) -> bytes:
     with wave.open(io.BytesIO(body), "rb") as reader:
         if (reader.getnchannels(), reader.getsampwidth(), reader.getframerate(), reader.getcomptype()) != (1, 2, 16000, "NONE"):
@@ -83,7 +97,7 @@ class EjiroTTSClient:
 
     async def stream(self, text):
         async def chunks():
-            for part in split_text(text):
+            for part in split_text(ejiro_spoken_text(text)):
                 if not part.strip():
                     continue
                 async with self.session.post(self.config.tts_url, json={
