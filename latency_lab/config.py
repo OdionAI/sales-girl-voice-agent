@@ -64,6 +64,7 @@ def _bool(name: str, default: bool) -> bool:
 
 @dataclass(frozen=True)
 class LabConfig:
+    speech_language_override: str = ""
     engagement_enabled: bool = _bool("RVC_LAB_ENGAGEMENT_ENABLED", False)
     engagement_ack_seconds: float = _float("RVC_LAB_ENGAGEMENT_ACK_SECONDS", 0.3)
     engagement_tool_seconds: float = _float("RVC_LAB_ENGAGEMENT_TOOL_SECONDS", 8.0)
@@ -230,6 +231,8 @@ def apply_runtime_overrides(
     """Map Voice Lab runtime overrides onto a latency-lab config."""
     payload = overrides if isinstance(overrides, dict) else {}
     updates: dict[str, Any] = {}
+    if payload.get("tts_language_hint"):
+        updates["speech_language_override"] = str(payload["tts_language_hint"])
     # Sessions may opt out, but cannot enable an operator-disabled experiment.
     engagement = payload.get("engagement_enabled")
     if engagement is False or engagement == "false":
