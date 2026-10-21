@@ -1,0 +1,7 @@
+services:
+  voice:
+    image: attentive/voice:bgfi-french-action-confirmation-20261020-1
+    build:
+      args:
+        SOURCE: bgfi-french-confirmation-52988d2
+        REQUIREMENTS: voice-contacts-6e92045/latency_lab/handoff/hybrid-python-freeze.txt

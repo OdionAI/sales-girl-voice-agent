@@ -16,12 +16,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .action_tools import action_tool_definitions
 from .agentic import AgentRuntimeContext, load_agent_runtime_context, session_routing_context
-from .config import (
-    apply_runtime_overrides,
-    apply_saved_agent_voice,
-    lab_config_from_environ,
-    load_platform_env,
-)
+from .config import apply_runtime_overrides, lab_config_from_environ, load_platform_env
 from .pipeline import ConversationPipeline
 from .report import generate_report
 from .trace import TraceRecorder
@@ -106,7 +101,6 @@ async def websocket_endpoint(ws: WebSocket) -> None:
     config = lab_config_from_environ()
     routing = session_routing_context({})
     identity = None
-    session_overrides = {}
     pending_message: dict[str, Any] | None = None
     try:
         first = await asyncio.wait_for(ws.receive(), timeout=0.5)
@@ -127,12 +121,6 @@ async def websocket_endpoint(ws: WebSocket) -> None:
                         await ws.close(code=1008)
                         return
                 config = _session_config_from_message(data)
-                session_overrides = data.get("runtime_overrides")
-                if not isinstance(session_overrides, dict):
-                    session_overrides = {
-                        key: value for key, value in data.items()
-                        if key not in _SESSION_CONFIG_META_KEYS
-                    }
                 routing = session_routing_context(identity or data)
             else:
                 pending_message = first
@@ -159,10 +147,6 @@ async def websocket_endpoint(ws: WebSocket) -> None:
             name=routing.configured_name,
             end_user_id=routing.end_user_id,
         )
-
-    config = apply_saved_agent_voice(
-        config, agent_context.tts_provider, agent_context.tts_voice_id, session_overrides,
-    )
 
     async def send(message: dict) -> None:
         await ws.send_json(message)

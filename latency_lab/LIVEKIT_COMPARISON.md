@@ -76,12 +76,6 @@ The signed comparison worker is currently single-caller/browser oriented.
 Original worker/SIP dispatch is unchanged; SIP handoff and multi-human policy
 are not implemented in this comparison entrypoint.
 
-## iOS listening controls
-
-The worker supports per-call noise control and response sensitivity through
-`attentive.listening.configure`. See [Listening controls](LISTENING_CONTROLS.md)
-for native dependencies, authorization, error handling, and the exact protocol.
-
 ## Start locally
 
 Keep the existing local LiveKit and supporting config, auth, banking and

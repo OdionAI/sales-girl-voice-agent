@@ -16,18 +16,12 @@ from livekit import rtc
 from livekit.agents import AutoSubscribe, JobContext, WorkerOptions, cli
 
 from .agentic import load_agent_runtime_context, session_routing_context
-from .config import (
-    apply_runtime_overrides,
-    apply_saved_agent_voice,
-    lab_config_from_environ,
-    load_platform_env,
-)
+from .config import apply_runtime_overrides, lab_config_from_environ, load_platform_env
 from .pipeline import ConversationPipeline
-from .listening import (
-    CAPABILITY_ATTRIBUTE, NUMERIC_CAPABILITY_ATTRIBUTE, RPC_METHOD, ListeningBusy, ListeningConfiguration, ListeningUnavailable,
-)
+from .input_noise import InputNoiseFilter
 from .report import generate_report
 from .session_identity import verify_session_token
+from .sip_bootstrap import resolve_route as resolve_sip_route, participant_identity as sip_participant_identity
 from .trace import TraceRecorder
 from .live_metrics import LiveMetricPublisher
 
@@ -117,6 +111,15 @@ class LiveKitPCMTransport:
             if self.playing:
                 await self.source.wait_for_playout()
             await self._finish_playout(attempt)
+            return
+        if kind == "tts_segment_end":
+            attempt = self.pipeline.attempt if self.pipeline else None
+            if self.playing:
+                await self.source.wait_for_playout()
+            if self.pipeline is not None and self.pipeline.attempt is attempt:
+                self.playing = False
+                await self.set_state("listening")
+                await self.pipeline.client_event("tts_segment_stop")
             return
         if kind in {"stop_tts", "tts_interruption"}:
             self.source.clear_queue()
@@ -327,40 +330,6 @@ def _microphone_track_sid(participant: rtc.RemoteParticipant) -> str:
     return ""
 
 
-def register_listening_rpc(
-    local_participant: Any,
-    pipeline: ConversationPipeline,
-    *,
-    caller_identity: str,
-    ready: asyncio.Event,
-    input_lock: asyncio.Lock,
-) -> Any:
-    """Share the worker's input lock: settings change between PCM blocks only."""
-    async def configure(data: rtc.RpcInvocationData) -> str:
-        if data.caller_identity != caller_identity:
-            raise rtc.RpcError(403, "Only this call's participant can change listening settings")
-        if not ready.is_set():
-            raise rtc.RpcError(503, "The agent is still initializing")
-        try:
-            configuration = ListeningConfiguration.parse(data.payload)
-        except ValueError as exc:
-            raise rtc.RpcError(400, str(exc)) from exc
-        async with input_lock:
-            # Shutdown may begin while this request waits behind an audio block.
-            if not ready.is_set():
-                raise rtc.RpcError(503, "The agent is no longer available")
-            try:
-                pipeline.configure_listening(configuration)
-            except ListeningBusy as exc:
-                raise rtc.RpcError(409, str(exc)) from exc
-            except ListeningUnavailable as exc:
-                raise rtc.RpcError(503, str(exc)) from exc
-        return json.dumps(configuration.payload(), separators=(",", ":"))
-
-    local_participant.register_rpc_method(RPC_METHOD, configure)
-    return configure
-
-
 async def entrypoint(ctx: JobContext) -> None:
     load_platform_env()
     config = lab_config_from_environ()
@@ -376,7 +345,8 @@ async def entrypoint(ctx: JobContext) -> None:
     ready = asyncio.Event()
     input_lock = asyncio.Lock()
     try:
-        identity = resolve_dispatch(ctx.job.metadata, ctx.room.name, config.agent_config_service_token)
+        sip_route = resolve_sip_route(ctx.job.metadata, ctx.room.name)
+        identity = {} if sip_route else resolve_dispatch(ctx.job.metadata, ctx.room.name, config.agent_config_service_token)
         config = apply_runtime_overrides(config, identity.get("runtime_overrides"), language=identity.get("language", "en"))
         trace.record(
             "livekit_job_received",
@@ -385,9 +355,16 @@ async def entrypoint(ctx: JobContext) -> None:
             agent_name=os.getenv("RVC_LAB_LIVEKIT_AGENT_NAME", DEFAULT_AGENT_NAME),
         )
         await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
-        participant = await asyncio.wait_for(
-            ctx.wait_for_participant(identity=identity["participant_identity"]), timeout=30,
-        )
+        if sip_route:
+            participant = await asyncio.wait_for(
+                ctx.wait_for_participant(kind=rtc.ParticipantKind.PARTICIPANT_KIND_SIP), timeout=30,
+            )
+            identity = sip_participant_identity(sip_route, participant, ctx.room.name,
+                                               rtc.ParticipantKind.PARTICIPANT_KIND_SIP)
+        else:
+            participant = await asyncio.wait_for(
+                ctx.wait_for_participant(identity=identity["participant_identity"]), timeout=30,
+            )
         def on_participant_disconnected(remote: rtc.RemoteParticipant) -> None:
             if remote.identity == participant.identity:
                 disconnected.set()
@@ -401,10 +378,6 @@ async def entrypoint(ctx: JobContext) -> None:
         )
         if not agent_context.loaded:
             raise RuntimeError("Configured agent could not be loaded; refusing an unconfigured call.")
-        config = apply_saved_agent_voice(
-            config, agent_context.tts_provider, agent_context.tts_voice_id,
-            identity.get("runtime_overrides"),
-        )
 
         async def end_call_handler(reason: str) -> None:
             trace.record(
@@ -456,9 +429,6 @@ async def entrypoint(ctx: JobContext) -> None:
         transport.user_participant = participant
         transport.user_track_sid = _microphone_track_sid(participant)
         transport.start_metrics()
-        register_listening_rpc(ctx.room.local_participant, pipeline,
-                               caller_identity=participant.identity, ready=ready,
-                               input_lock=input_lock)
         await transport.set_state("initializing")
 
         async def receive_text(reader: rtc.TextStreamReader, sender: str) -> None:
@@ -505,7 +475,6 @@ async def entrypoint(ctx: JobContext) -> None:
         ctx.room.on("data_received", data_handler)
         await pipeline.start()
         ready.set()
-        await ctx.room.local_participant.set_attributes({CAPABILITY_ATTRIBUTE: "1", NUMERIC_CAPABILITY_ATTRIBUTE: "2"})
         await pipeline.client_event(
             "client_ready",
             {
@@ -529,6 +498,7 @@ async def entrypoint(ctx: JobContext) -> None:
             num_channels=1,
             frame_size_ms=100,
         )
+        noise_filter = InputNoiseFilter(agent_context, trace)
         async def receive_audio() -> None:
             first_frame = True
             async for event in stream:
@@ -537,7 +507,13 @@ async def entrypoint(ctx: JobContext) -> None:
                     trace.record("livekit_first_audio_frame_received", reason="microphone_entered_rvc",
                                  bytes=len(event.frame.data), sample_rate=event.frame.sample_rate)
                 async with input_lock:
-                    await pipeline.audio(bytes(event.frame.data))
+                    pcm = noise_filter.process(bytes(event.frame.data))
+                    if pcm:
+                        await pipeline.audio(pcm)
+            tail = noise_filter.finish()
+            if tail:
+                async with input_lock:
+                    await pipeline.audio(tail)
 
         input_task = asyncio.create_task(receive_audio())
         stop_task = asyncio.create_task(disconnected.wait())
@@ -558,7 +534,6 @@ async def entrypoint(ctx: JobContext) -> None:
         )
         logger.exception("RVC LiveKit transport failed")
     finally:
-        ready.clear()
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
@@ -572,8 +547,6 @@ async def entrypoint(ctx: JobContext) -> None:
         if participant_handler is not None:
             ctx.room.off("participant_disconnected", participant_handler)
         ctx.room.unregister_text_stream_handler("lk.chat")
-        if pipeline is not None:
-            ctx.room.local_participant.unregister_rpc_method(RPC_METHOD)
         if pipeline is not None:
             await pipeline.close()
         else:

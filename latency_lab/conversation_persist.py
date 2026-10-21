@@ -127,6 +127,7 @@ class ConversationStore:
         room_name: str = "",
         transport: str | None = None,
         channel: str | None = None,
+        explicitly_routed_agent: bool = False,
     ) -> None:
         self.config = config
         self.session = session
@@ -137,6 +138,7 @@ class ConversationStore:
         self.room_name = room_name
         # Deployed callers predate transport; a supplied room preserves that API.
         self.transport = transport or ("livekit" if room_name else "browser")
+        self.explicitly_routed_agent = bool(explicitly_routed_agent)
         normalized = to_e164(self.caller)
         if re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", self.caller):
             self.channel, self.external_id = "web", self.caller.lower()
@@ -281,6 +283,7 @@ class ConversationStore:
                 return
             started = await self._request("POST", "/v1/conversations/sessions/start", {
                 "conversation_id": self.conversation_id, "channel": self.channel,
+                "explicitly_routed_agent": self.explicitly_routed_agent,
                 "client_session_id": self.client_session_id, "started_at": self.started_at.isoformat(),
             }, retry=True)
             nested = started.get("session")
