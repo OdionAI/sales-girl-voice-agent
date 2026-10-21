@@ -11,6 +11,7 @@ import wave
 from collections.abc import AsyncIterator, Awaitable, Callable
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import aiohttp
 
@@ -193,8 +194,8 @@ class RSTTClient:
                         {
                             "type": "session.update",
                             "model": self.config.stt_model,
-                            "language": "en",
-                            "to_language": "en",
+                            "language": "fr" if self.config.tts_language.lower() in {"fr", "french", "français"} else "en",
+                            "to_language": "fr" if self.config.tts_language.lower() in {"fr", "french", "français"} else "en",
                         }
                     )
                     await candidate.send_json(
@@ -397,7 +398,7 @@ class RSTTClient:
             content_type="audio/wav",
         )
         form.add_field("model", self.config.stt_model)
-        form.add_field("language", "en")
+        form.add_field("language", "fr" if self.config.tts_language.lower() in {"fr", "french", "français"} else "en")
         self.on_provider_event(
             "stt_batch_request_start",
             {
@@ -597,6 +598,7 @@ class RLLMClient:
         messages: list[dict[str, str]],
         *,
         tools: list[dict[str, Any]] | None = None,
+        tool_choice: str = "auto",
         max_tokens: int = 180,
         temperature: float = 0.35,
     ) -> AsyncIterator[str | ActionToolCall]:
@@ -612,9 +614,12 @@ class RLLMClient:
                 "thinking": bool(self.config.llm_enable_thinking),
             },
         }
+        # Groq rejects the self-hosted Qwen chat-template extension.
+        if urlsplit(self.config.llm_base_url).hostname == "api.groq.com":
+            payload.pop("chat_template_kwargs", None)
         if tools:
             payload["tools"] = tools
-            payload["tool_choice"] = "auto"
+            payload["tool_choice"] = tool_choice
         headers = {"Authorization": f"Bearer {self.config.llm_api_key}"}
         pending_calls: dict[int, dict[str, str]] = {}
         emitted_output = False
@@ -722,18 +727,14 @@ class RTTSClient:
             "stream": True,
             "stream_format": "audio",
             "initial_codec_chunk_frames": self.config.tts_initial_codec_chunk_frames,
-            "max_new_tokens": self.config.tts_max_new_tokens or tts_token_budget(text),
+            "max_new_tokens": tts_token_budget(text),
         }
-        if self.config.tts_seed is not None:
-            payload["seed"] = self.config.tts_seed
-        if self.config.uses_yinka_v7:
-            # Text-streaming prompt layout avoids premature EOS for this checkpoint.
-            # Keep the configured language: forcing Auto makes long English lists repeat.
-            payload["non_streaming_mode"] = False
         if self.config.tts_voice:
-            payload.update(task_type=self.config.tts_task_type, voice=self.config.tts_voice)
-            if self.config.tts_task_type == "Base":
-                payload["x_vector_only_mode"] = False
+            payload.update(
+                task_type="Base",
+                voice=self.config.tts_voice,
+                x_vector_only_mode=False,
+            )
         elif self._ref_audio:
             payload.update(
                 task_type="Base",

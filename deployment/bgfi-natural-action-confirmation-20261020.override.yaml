@@ -1,0 +1,7 @@
+services:
+  voice:
+    image: attentive/voice:bgfi-natural-action-confirmation-20261020-1
+    build:
+      args:
+        SOURCE: bgfi-natural-confirmation-6ddbc34
+        REQUIREMENTS: voice-contacts-6e92045/latency_lab/handoff/hybrid-python-freeze.txt

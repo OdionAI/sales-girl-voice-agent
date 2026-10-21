@@ -10,71 +10,8 @@ final class CallerControlsTests: XCTestCase {
         let configuration = CallerUIConfiguration()
         XCTAssertFalse(configuration.showsAccountMenu)
         XCTAssertFalse(configuration.showsCallOptions)
-        XCTAssertFalse(configuration.showsAudioInputSettings)
     }
     #endif
-
-    @MainActor
-    func testCodeLevelAudioInputBeforeCallDoesNotConnectOrChangeMicrophone() async throws {
-        let transport = UITransport()
-        let call = makeCall(transport)
-        let controls = CallerControls(call: call, enrollment: nil)
-        let settings = AttentiveAudioInputConfiguration(noiseControl: .noisyEnvironment,
-                                                       responseSensitivity: .strict)
-        try await call.setAudioInputConfiguration(settings)
-        XCTAssertEqual(call.audioInputConfiguration, settings)
-        XCTAssertEqual(call.audioInputState.status, .idle)
-        XCTAssertNil(controls.errorMessage)
-        XCTAssertEqual(transport.connections, 0)
-        XCTAssertTrue(transport.microphoneSelections.isEmpty)
-    }
-
-    @MainActor
-    func testUnsupportedCodeLevelAudioInputDoesNotDismissCallOrUnmuteCaller() async {
-        let transport = UITransport()
-        transport.listeningError = .unsupported
-        let call = makeCall(transport)
-        let controls = CallerControls(call: call, enrollment: nil)
-        await controls.start(request, microphoneEnabled: false)
-        do {
-            try await call.setAudioInputConfiguration(.noisyEnvironment)
-            XCTFail("Expected unsupported worker")
-        } catch {
-            XCTAssertEqual(error as? AttentiveAudioInputError, .unsupported)
-        }
-        XCTAssertEqual(call.audioInputState.status, .unsupported)
-        XCTAssertNil(controls.errorMessage)
-        XCTAssertNil(call.lastError)
-        XCTAssertEqual(call.state, .connected)
-        XCTAssertFalse(call.microphoneEnabled)
-        XCTAssertEqual(transport.microphoneSelections, [false])
-        XCTAssertEqual(transport.disconnects, 0)
-        await controls.end()
-    }
-
-    @MainActor
-    func testCodeLevelAudioInputFailureDoesNotPresentCallFailureAlert() async throws {
-        let transport = UITransport()
-        let call = makeCall(transport)
-        let controls = CallerControls(call: call, enrollment: nil)
-        await controls.start(request, microphoneEnabled: false)
-        transport.listeningError = .callerSpeaking
-        do {
-            try await call.setAudioInputConfiguration(.noisyEnvironment)
-            XCTFail("Expected caller-speaking rejection")
-        } catch {
-            XCTAssertEqual(error as? AttentiveAudioInputError, .callerSpeaking)
-        }
-        XCTAssertEqual(call.audioInputState.status, .failed)
-        XCTAssertNil(controls.errorMessage)
-        XCTAssertNil(call.lastError)
-        transport.listeningError = nil
-        try await call.setAudioInputConfiguration(.noisyEnvironment)
-        XCTAssertEqual(call.audioInputState.status, .applied)
-        XCTAssertFalse(call.microphoneEnabled)
-        XCTAssertEqual(transport.microphoneSelections, [false])
-        await controls.end()
-    }
 
     @MainActor
     func testAutomaticPresentationStartsOnceAndDoesNotRedialAfterEnd() async {
@@ -380,7 +317,6 @@ private final class UITransport: CallTransport {
     var disconnects = 0
     var microphoneSelections: [Bool] = []
     var messages: [String] = []
-    var listeningError: AttentiveAudioInputError?
     func connect(_ credentials: CallCredentials, microphoneEnabled: Bool) async throws {
         connections += 1
         microphoneSelections.append(microphoneEnabled)
@@ -388,10 +324,6 @@ private final class UITransport: CallTransport {
     func disconnect() async { disconnects += 1 }
     func setMicrophone(enabled: Bool) async throws { microphoneSelections.append(enabled) }
     func sendText(_ text: String) async throws -> String { messages.append(text); return UUID().uuidString }
-    func setAudioInputConfiguration(_ configuration: AttentiveAudioInputConfiguration) async throws {
-        if let listeningError { throw listeningError }
-        onEvent?(.audioInputChanged(.init(status: .applied, requested: configuration, applied: configuration)))
-    }
 }
 
 private struct UIEnrollmentProvider: VoiceEnrollmentProvider {

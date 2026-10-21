@@ -3,7 +3,6 @@ import AttentiveVoice
 import SwiftUI
 
 /// Optional caller UI. Retain the call in the host; do not replace it during a call.
-/// Set initial listening preferences with the call's `audioInput` initializer argument.
 @available(iOS 17, *)
 @MainActor
 public struct AttentiveCallerView: View {
@@ -162,9 +161,7 @@ struct CallerContent: View {
 
                 if configuration.showsAccountMenu || panel != nil {
                     Button {
-                        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.18)) {
-                            panel = panel == nil ? .bank : nil
-                        }
+                        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.18)) { panel = panel == nil ? .bank : nil }
                     } label: {
                         Image(systemName: panel == nil ? "line.3.horizontal" : "xmark")
                             .font(.system(size: 18)).contentTransition(.symbolEffect(.replace))
@@ -173,11 +170,8 @@ struct CallerContent: View {
                             .shadow(color: CallerTheme.ink.opacity(0.08), radius: 12, x: 0, y: 6)
                     }
                     .buttonStyle(.plain)
-                    .accessibilityLabel(panel == nil
-                        ? "Open \(configuration.profileTitle)"
-                        : "Close floating panel")
-                    .accessibilityIdentifier(panel == nil
-                        ? "bankMenu" : "closePanel")
+                    .accessibilityLabel(panel == nil ? "Open \(configuration.profileTitle)" : "Close floating panel")
+                    .accessibilityIdentifier(panel == nil ? "bankMenu" : "closePanel")
                     .padding(.top, 8).padding(.trailing, 16)
                 }
             }

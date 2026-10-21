@@ -55,6 +55,35 @@ class MemoryTest(unittest.IsolatedAsyncioTestCase):
         self.memory.user("one", "another value")
         self.assertEqual(self.memory.history, [{"role": "user", "content": "0123456789"}])
 
+    def test_listening_context_preserves_exact_transcript_without_promoting_instructions(self):
+        self.memory.user("quiet", "Send the contract tomorrow.", listening_only=True)
+        self.memory.finish("quiet")
+        self.assertEqual(self.memory.history, [{"role": "user", "content": "Send the contract tomorrow."}])
+        self.assertIn("not a request to execute", self.memory.context()[0]["content"])
+        self.assertTrue(self.memory.context()[0]["content"].endswith("Send the contract tomorrow."))
+
+    async def test_long_listening_period_can_compact_with_provenance(self):
+        for index in range(6):
+            self.memory.user(str(index), f"Heard fact {index}", listening_only=True)
+            self.memory.finish(str(index))
+        llm = SummaryLLM()
+        self.assertTrue(await self.memory.compact(llm))
+        payload = json.loads(llm.calls[0][0][1]["content"])
+        self.assertEqual(len(payload["older_exchanges"]), 4)
+        self.assertTrue(all("Listening-only speech" in m["content"] for m in payload["older_exchanges"]))
+        self.assertIn("Preserve listening-only provenance", llm.calls[0][0][0]["content"])
+
+    async def test_response_authorization_change_invalidates_compaction_snapshot(self):
+        for index in range(6):
+            self.memory.user(str(index), f"Heard fact {index}", listening_only=True)
+            self.memory.finish(str(index))
+        llm = SummaryLLM(block=True)
+        task = asyncio.create_task(self.memory.compact(llm))
+        await llm.started.wait()
+        self.memory.turn("0").listening_only = False
+        llm.release.set()
+        self.assertFalse(await task)
+
     def test_unfinished_fragments_are_not_compacted(self):
         self.seed()
         for index, text in enumerate(["my budget", "is 3000", "five hundred", "Narrow"]):

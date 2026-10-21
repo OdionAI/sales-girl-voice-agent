@@ -95,9 +95,13 @@ class BankingTools:
         await self.send({"type": topic, "payload": {"type": topic, **payload}})
 
     async def activity(self, call, event: str, result: dict | None = None) -> None:
+        arguments = {k: v for k, v in call.arguments.items() if k not in AUTH_FIELDS}
+        # Destination addresses are PII; do not echo them into client activity events.
+        if call.name == "email_provider_results" and "recipient_email" in arguments:
+            arguments["recipient_email"] = "[redacted]"
         await self.emit("odion.tool.activity", {
             "call_id": call.id, "tool_name": call.name, "event": event,
-            "arguments": {k: v for k, v in call.arguments.items() if k not in AUTH_FIELDS},
+            "arguments": arguments,
             "ts_ms": time.time() * 1000, "result": result,
             "status": result.get("status", "failed") if result else "running",
         })

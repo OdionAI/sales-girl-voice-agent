@@ -50,10 +50,6 @@ test customer ID, room creation or transport setup is required for general calls
 Prompts, model choices and tools remain dashboard/worker configuration. Runtime
 override switches are not part of this integration.
 
-Set [noise control and response sensitivity](LISTENING_CONTROLS.md) in the
-`audioInput` parameter of `AttentiveAgentView`. These settings stay in code and
-do not add buttons, sliders, or menus to the caller.
-
 Keep the key/agent pair stable while the view is presented. To change agents,
 dismiss the caller first, then present a new view (or change its SwiftUI identity
 with `.id(agentID)`). Never switch tenants mid-call.

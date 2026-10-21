@@ -6,6 +6,10 @@ This is the experimental speculative-generation pipeline for measuring the natur
 
 ## Ownership and release boundary
 
+For the opt-in contextual acknowledgements, pending-tool updates, and silence
+preferences, see [Contextual engagement](ENGAGEMENT.md). This is implemented in
+RVC; it does not transfer orchestration to LiveKit.
+
 ```mermaid
 sequenceDiagram
     participant B as Browser mic/VAD playback
@@ -42,12 +46,12 @@ sequenceDiagram
     opt LLM selects a configured action
         C->>C: prepare validated action arguments
         C->>B: ask for explicit confirmation after final authority
-        B->>C: separate committed yes/no turn
+        B->>C: separate committed reply in natural language
         alt caller confirms
             C->>C: call conversation-service API once
             C->>B: speak success only after API success
-        else caller rejects or is unclear
-            C->>B: cancel or repeat confirmation
+        else caller rejects, changes the request, or is unclear
+            C->>B: cancel, handle the new request, or ask naturally for clarification
         end
     end
     opt committed caller turn clearly closes a SIP call
@@ -112,6 +116,11 @@ by the dashboard/runtime environment. `AGENT_CONFIG_API_BASE_URL`, when set,
 overrides it for an isolated experiment. This keeps mapped SIP calls from
 silently falling back to the lab prompt and losing their configured tools.
 
+For a verified AICC SIP route, the worker marks its conversation session as an
+explicitly routed voice call. The conversation service can then record that
+agent's session even if a different agent remains the business default. The
+marker is not set for browser calls or unverified SIP identities.
+
 ### Increment 3: confirmed internal actions
 
 The current branch exposes native LLM function definitions only for an agent's
@@ -122,6 +131,12 @@ deterministic confirmation question. Only an affirmative, separately committed
 caller turn authorizes one request to the conversation service. Rejection
 cancels the pending action, unclear evidence repeats the confirmation, and
 spoken success is generated only from a successful API result.
+
+Confirmation questions, acknowledgements, and ticket/email results use the
+agent's saved `tts_language_hint` for French agents. The confirmation matcher
+accepts clear French approvals and refusals as well as common English replies,
+including “Okay, create the ticket,” so a caller's language does not cause the
+action prompt to switch languages or repeat after an explicit approval.
 
 Generic HTTP tools, transfers, and transactional banking actions remain outside
 this increment. Trace events record tool preparation, final-authority waiting,
@@ -149,11 +164,43 @@ events cover the map decision (only a phone suffix), authorization, goodbye
 playout completion, and room deletion.
 
 Once the remote participant, microphone track, and RVC output track are ready,
-the worker proactively speaks one short greeting using the saved agent name.
+the worker proactively speaks one short greeting. To customize it for one
+agent, add a single line to that agent's saved instructions:
+
+```text
+SPOKEN_OPENING: Hello, I'm Amaka calling from Leadway Health. I'm calling to check in and hear how your experience has been so far. Is now a convenient time for a quick chat?
+```
+
+The worker speaks this line directly through TTS before the first caller turn.
+Without it, the shared `RVC_LAB_OPENING_GREETING_TEXT` setting or the default
+name-based greeting applies. Keep the line under 500 characters.
 This opening is recorded as `opening-0000`, adds only an assistant message to
 conversation history, and does not create a fake caller transcript or change
 the measured caller-turn response path. Set
 `RVC_LAB_OPENING_GREETING_ENABLED=false` to disable it.
+
+Outbound agents may also set `SPOKEN_GOODBYE: ...` in their saved instructions
+for the final line after `builtin://end_call` is authorized. Other agents keep
+the default goodbye. The action still requires a committed caller utterance
+that clearly finishes the conversation; a mere thank-you is not enough.
+
+The Leadway provider lookup accepts plan, town, specific area, and specialty
+filters. Town and area are matched against both town and address fields;
+specialty checks use the sheet's specialty, category, and provider-name fields.
+Results are ranked by these text matches, with a maximum of five returned for
+the spoken response. This ranking is not a geographic distance calculation.
+When the caller requests the list by email, the worker refreshes those same
+filters and sends no more than the seven highest-ranked matches, even when many
+rows qualify. A directory match is not confirmation of individual coverage.
+On the configured, verified Leadway SIP route, an operator-managed phone
+directory can identify a caller by name and select their saved default email.
+The known name is used in the proactive opening and subsequent conversation.
+The runtime never resolves a caller profile from browser identity or a number
+spoken during the conversation. An explicitly requested alternate recipient is
+read back and requires a separate clear caller confirmation before sending;
+only the requested provider list can be emailed. Contact email addresses are
+redacted from tool-activity events. A mapped caller without a saved email can
+still provide an alternate address for that one confirmed send.
 
 With the dashboard running on port 3000, start the transport worker:
 

@@ -3,20 +3,6 @@ import XCTest
 final class SampleUITests: XCTestCase {
     override func setUpWithError() throws { continueAfterFailure = false }
 
-    func testGenericCallerDoesNotExposeListeningOrOptionsMenus() {
-        let app = XCUIApplication()
-        app.launchArguments = ["--generic-ui", "--chat-only"]
-        app.launchEnvironment["ATTENTIVE_LOCAL_DEVICE"] = "0"
-        app.launch()
-        XCTAssertTrue(app.buttons["startCall"].waitForExistence(timeout: 10))
-        XCTAssertFalse(app.buttons["audioInputSettings"].exists)
-        XCTAssertFalse(app.buttons["bankMenu"].exists)
-        XCTAssertFalse(app.buttons["More call options"].exists)
-        XCTAssertFalse(app.segmentedControls["noiseControl"].exists)
-        XCTAssertFalse(app.segmentedControls["responseSensitivity"].exists)
-        attachScreen("Caller with code-only audio configuration")
-    }
-
     func testInsufficientCreditAlert() throws {
         guard let endpoint = ProcessInfo.processInfo.environment["ATTENTIVE_CREDIT_TEST_ENDPOINT"] else {
             throw XCTSkip("Requires a local fixture returning HTTP 402 with code no_airtime.")

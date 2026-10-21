@@ -133,8 +133,7 @@ class AgentRuntimeContext:
     knowledge_base_ids: tuple[str, ...] = ()
     tools: tuple[dict[str, Any], ...] = ()
     loaded: bool = False
-    tts_provider: str = ""
-    tts_voice_id: str = ""
+    tts_language_hint: str = ""
 
     def _capability_rules(self) -> str:
         enabled = {
@@ -146,12 +145,12 @@ class AgentRuntimeContext:
             "- Keep the spoken answer to one or two short sentences unless the caller asks for more detail."
         ]
         banking = bank_records(self)
-        supported = sorted(enabled.intersection({"create_ticket", "send_email"}) | banking.keys())
+        supported = sorted(enabled.intersection({"create_ticket", "send_email", "email_provider_results"}) | banking.keys())
         if supported:
             lines.extend(
                 [
                     f"- Configured action tools: {', '.join(supported)}.",
-                    "- When the caller requests one of those actions, call the matching function. Banking reads and previews run after the final caller transcript and follow the application's session voice-verification policy. Tickets, emails and prepared transaction execution require a separate confirmation turn.",
+                    "- When the caller requests one of those actions, call the matching function. Banking reads and previews run after the final caller transcript and follow the application's session voice-verification policy. Tickets, generic send_email and prepared transaction execution require a separate confirmation turn. For email_provider_results, a committed request is sufficient to send the hospital list to the verified caller's saved email. If the caller explicitly asks for another address, pass only the address they stated; the application reads it back and requires a separate clear confirmation before sending there.",
                     "- Never claim an action succeeded before its function result confirms success.",
                 ]
             )
@@ -322,8 +321,7 @@ async def load_agent_runtime_context(
         name=str(payload.get("name") or room_context.configured_name).strip(),
         end_user_id=room_context.end_user_id,
         instructions=str(payload.get("instructions") or "").strip(),
-        tts_provider=str(payload.get("tts_provider") or "").strip(),
-        tts_voice_id=str(payload.get("tts_voice_id") or "").strip(),
+        tts_language_hint=str(payload.get("tts_language_hint") or "").strip(),
         knowledge_base_ids=knowledge_base_ids,
         tools=tools,
         loaded=True,

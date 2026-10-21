@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock
 from latency_lab.livekit_worker import LiveKitPCMTransport, resolve_dispatch
 from latency_lab.tests import test_banking_tools
 from latency_lab.config import LabConfig
+from latency_lab.agentic import AgentRuntimeContext
 from latency_lab.pipeline import Attempt, ConversationPipeline
 from latency_lab.trace import TraceRecorder
 
@@ -204,6 +205,25 @@ class LiveKitPCMTransportTests(unittest.IsolatedAsyncioTestCase):
         await drain
         self.assertNotIn("tts_stop", self.pipeline.events)
 
+    async def test_engagement_segment_does_not_finish_turn(self):
+        self.transport.playing = True
+        original = self.pipeline.attempt
+        await self.transport.send({"type": "tts_segment_end"})
+        self.assertEqual(self.pipeline.events, ["tts_segment_stop"])
+        self.assertIs(self.pipeline.attempt, original)
+        self.assertTrue(self.source.waited)
+
+    async def test_stale_engagement_segment_cannot_change_replacement_turn(self):
+        waiting = asyncio.Event()
+        self.source.wait_for_playout = waiting.wait
+        self.transport.playing = True
+        drain = asyncio.create_task(self.transport.send({"type": "tts_segment_end"}))
+        await asyncio.sleep(0)
+        self.pipeline.attempt = SimpleNamespace(id="replacement")
+        waiting.set()
+        await drain
+        self.assertEqual(self.pipeline.events, [])
+
     async def test_final_transcript_supports_web_and_swift_with_same_identity(self):
         writer = SimpleNamespace(write=AsyncMock(), aclose=AsyncMock())
         participant = SimpleNamespace(identity="agent-test", publish_transcription=AsyncMock(),
@@ -241,6 +261,30 @@ class PipelineTransportTest(unittest.IsolatedAsyncioTestCase):
     async def asyncTearDown(self):
         await self.pipeline.close()
         self.temp.cleanup()
+
+    async def test_agent_spoken_opening_overrides_shared_greeting(self):
+        self.pipeline.config = LabConfig(opening_greeting_text="Hello! How can I help you today?")
+        self.pipeline.agent_context = AgentRuntimeContext(
+            name="Amaka",
+            instructions=(
+                "You are Amaka from Leadway Health.\n"
+                "SPOKEN_OPENING: Hello, I'm Amaka calling from Leadway Health. "
+                "I'm calling to check in and hear how your experience has been so far. "
+                "Is now a convenient time for a quick chat?\n"
+            ),
+        )
+
+        self.assertEqual(
+            self.pipeline.opening_greeting_text(),
+            "Hello, I'm Amaka calling from Leadway Health. "
+            "I'm calling to check in and hear how your experience has been so far. "
+            "Is now a convenient time for a quick chat?",
+        )
+        self.pipeline.agent_context = AgentRuntimeContext(name="Amaka")
+        self.assertEqual(
+            self.pipeline.opening_greeting_text(),
+            "Hello! How can I help you today?",
+        )
 
     async def test_greeting_is_cancellable_and_not_committed_after_interruption(self):
         started = asyncio.Event()

@@ -18,14 +18,6 @@ Resolve the latest compatible stable SDK release, then pin its exact tag. Add `N
 your target. The account and three-dot menus are hidden; mute, transcript and end
 call remain available.
 
-The launch screen contains the app name and Start call button. Set noise control
-and response sensitivity in the `audioInput` initializer argument in
-`AttentiveExampleApp.swift`. The example also sets suppression strength, minimum
-speech level, and speech/interruption confirmation times in code. These optional
-numeric values require the updated comparison worker and do not add any caller
-controls. See [accepted ranges](../../LISTENING_CONTROLS.md). Speech level is
-input loudness, not voice pitch.
-
 The Start call button belongs to this app. It presents `AttentiveAgentView` in a
 full-screen cover, which starts once and dismisses after End call. Pass
 `startsAutomatically: false` only when you want the SDK's built-in start button.

@@ -5,6 +5,7 @@ import json
 import tempfile
 import time
 import unittest
+from types import SimpleNamespace
 import uuid
 from pathlib import Path
 from unittest.mock import AsyncMock
@@ -19,6 +20,22 @@ from latency_lab.config import LabConfig
 from latency_lab.pipeline import ConversationPipeline
 from latency_lab.session_identity import verify_session_token
 from latency_lab.trace import TraceRecorder
+
+
+class ActivityRedactionTest(unittest.IsolatedAsyncioTestCase):
+    async def test_activity_redacts_alternate_email_destination(self):
+        from latency_lab.banking_tools import BankingTools
+
+        events = []
+        async def send(event):
+            events.append(event)
+        bank = BankingTools(None, SimpleNamespace(tools=[]), "session", send, {})
+        await bank.activity(ActionToolCall("mail", "email_provider_results", {
+            "recipient_email": "private@example.test",
+        }), "completed", {"status": "needs_confirmation"})
+        event = events[0]
+        self.assertEqual(event["payload"]["arguments"]["recipient_email"], "[redacted]")
+        self.assertNotIn("private@example.test", str(event))
 
 
 def identity():

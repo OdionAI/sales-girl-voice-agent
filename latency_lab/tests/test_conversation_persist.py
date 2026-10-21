@@ -140,6 +140,38 @@ class ConversationStoreTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.http.payloads("/sessions/start")[0]["channel"], "web")
         self.assertEqual(store.session_id, SESSION_ID)
 
+    async def test_verified_sip_route_marks_its_session_start(self):
+        store = self.store(
+            caller="+2348012345678", channel="voice",
+            explicitly_routed_agent=True,
+        )
+        await store.start()
+        payload = self.http.payloads("/sessions/start")[0]
+        self.assertEqual(payload["channel"], "voice")
+        self.assertTrue(payload["explicitly_routed_agent"])
+
+    async def test_unmarked_voice_session_keeps_active_agent_requirement(self):
+        store = self.store(caller="+2348012345678", channel="voice")
+        await store.start()
+        self.assertFalse(self.http.payloads("/sessions/start")[0]["explicitly_routed_agent"])
+
+    async def test_pipeline_marks_only_verified_aicc_identity_as_routed(self):
+        async def send(_message):
+            pass
+
+        route = {"entry_surface": "aicc_inbound", "sip_caller_verified": True}
+        pipeline = ConversationPipeline(self.config, self.trace, send,
+                                        transport="livekit", agent_context=self.context,
+                                        session_identity=route)
+        self.assertTrue(pipeline.conversations.explicitly_routed_agent)
+        await pipeline.http.close()
+
+        unverified = ConversationPipeline(self.config, self.trace, send,
+                                          transport="livekit", agent_context=self.context,
+                                          session_identity={**route, "sip_caller_verified": False})
+        self.assertFalse(unverified.conversations.explicitly_routed_agent)
+        await unverified.http.close()
+
     async def test_phone_resolves_and_starts_voice_session(self):
         store = self.store("08012345678")
         await store.start()
