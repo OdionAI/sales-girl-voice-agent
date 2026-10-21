@@ -1,5 +1,7 @@
 # AttentiveVoice (Preview)
 
+**Native passkey confirmation (unreleased):** see [code-only configuration and Wema integration prerequisites](PASSKEYS.md). Published 0.1.3 does not include this feature.
+
 **Key-based integration:** use an API key and agent ID
 with `AttentiveAgentView` or `AttentiveCall`. See [key-based setup](ACCOUNT_KEYS.md)
 and the [minimal app](Examples/QuickStart/README.md). No `SampleModel` is required.
@@ -11,6 +13,10 @@ The app imports `AttentiveVoice`. The internal `AttentiveRTC` source fork retain
 the pinned transport's WebRTC media, WebSocket signaling, audio capture/playback
 and reconnection. See [transport provenance and packaging](Vendor/AttentiveRTC/README.md).
 Requires iOS 16+ (macOS 13+ for the diagnostic executable) and Swift 6.1+ tooling.
+
+This source revision adds [noise control and response sensitivity](LISTENING_CONTROLS.md)
+through code-level `audioInput` configuration on the headless API and supplied
+caller, with acknowledgement from the matching `rvc-livekit-comparison` worker. These controls require an updated SDK build and worker.
 
 Start with the [customer integration quickstart](GETTING_STARTED.md) for complete
 Swift snippets using your own UI or the supplied caller screen. See

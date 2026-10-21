@@ -1,5 +1,7 @@
 # Key-based integration
 
+**Native passkey confirmation (unreleased):** see [code-only configuration and Wema integration prerequisites](PASSKEYS.md). Published 0.1.3 does not include this feature.
+
 Install the latest compatible stable release listed at
 https://github.com/OdionAI/attentive-ios-sdk/releases/latest and pin its exact version.
 The dashboard key API must also be deployed and enabled;
@@ -49,6 +51,10 @@ No `SampleModel`, subscriptions, endpoint, business slug, caller contact, shared
 test customer ID, room creation or transport setup is required for general calls.
 Prompts, model choices and tools remain dashboard/worker configuration. Runtime
 override switches are not part of this integration.
+
+Set [noise control and response sensitivity](LISTENING_CONTROLS.md) in the
+`audioInput` parameter of `AttentiveAgentView`. These settings stay in code and
+do not add buttons, sliders, or menus to the caller.
 
 Keep the key/agent pair stable while the view is presented. To change agents,
 dismiss the caller first, then present a new view (or change its SwiftUI identity

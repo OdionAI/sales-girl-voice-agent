@@ -69,9 +69,12 @@ for (const relative of fs.readdirSync(path.join(sdk, 'Sources'), { recursive: tr
   const text = fs.readFileSync(path.join(sdk, 'Sources', relative), 'utf8');
   assert(!/\bimport\s+(?:LiveKit\w*|RustLiveKitUniFFI)\b/.test(text), `Upstream import in adapter: ${relative}`);
   if (/\bimport\s+AttentiveRTC\b/.test(text)) {
-    assert.equal(relative, 'AttentiveVoice/RealtimeCallTransport.swift');
+    assert(['AttentiveVoice/RealtimeCallTransport.swift', 'AttentiveVoice/ApplicationMicrophone.swift'].includes(relative),
+      `Transport import outside audited internal adapters: ${relative}`);
     assert(text.includes('internal import AttentiveRTC'), 'Transport types must not leak into public API');
   }
 }
 assert(!fs.existsSync(path.join(sdk, 'Sources/AttentiveVoice/LiveKitCallTransport.swift')));
+assert(!/LiveKit|AttentiveRTC|RustLiveKit|SwiftProtobuf/i.test(fs.readFileSync(path.join(sdk, 'PASSKEYS.md'), 'utf8')),
+  'Passkey integration docs must use only the Attentive public API');
 console.log(`PASS: ${inventory.length} fork files; Attentive-only public products; native pins and API boundaries intact.`);

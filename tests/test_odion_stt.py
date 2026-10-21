@@ -714,7 +714,6 @@ class OdionSTTTests(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch("main.google.LLM", return_value=object()) as llm_mock,
-            patch.object(main, "VOICE_AGENT_LLM_PROVIDER", "google"),
             patch.object(main, "LLM_PROVIDER", "google"),
             patch(
                 "main.AgentSession",
