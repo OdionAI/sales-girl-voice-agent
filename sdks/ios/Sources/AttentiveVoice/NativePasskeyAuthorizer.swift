@@ -32,27 +32,7 @@ final class NativePasskeyAuthorizer: NSObject, PasskeyAuthorizing, ASAuthorizati
         guard controller == nil else { throw PasskeyFailure.busy }
         guard let window = anchor(), window.windowScene?.activationState == .foregroundActive,
               !window.isHidden else { throw PasskeyFailure.presentationUnavailable }
-        let provider = ASAuthorizationPlatformPublicKeyCredentialProvider(relyingPartyIdentifier: request.relyingParty)
-        let authorization: ASAuthorizationRequest
-        switch request.mode {
-        case .authenticate:
-            let assertion = provider.createCredentialAssertionRequest(challenge: request.challenge)
-            assertion.userVerificationPreference = .required
-            assertion.allowedCredentials = request.credentialIDs.map { .init(credentialID: $0) }
-            authorization = assertion
-        case .register:
-            guard let userID = request.userID, let name = request.userName else { throw PasskeyFailure.invalidRequest }
-            let registration = provider.createCredentialRegistrationRequest(challenge: request.challenge, name: name, userID: userID)
-            registration.displayName = request.displayName
-            registration.userVerificationPreference = .required
-            registration.attestationPreference = .none
-            if !request.credentialIDs.isEmpty {
-                if #available(iOS 17.4, *) {
-                    registration.excludedCredentials = request.credentialIDs.map { .init(credentialID: $0) }
-                } else { throw PasskeyFailure.unsupportedOptions }
-            }
-            authorization = registration
-        }
+        let authorization = try authorizationRequest(for: request)
         self.window = window
         mode = request.mode
         let controller = ASAuthorizationController(authorizationRequests: [authorization])
@@ -63,6 +43,32 @@ final class NativePasskeyAuthorizer: NSObject, PasskeyAuthorizing, ASAuthorizati
             self.continuation = continuation
             controller.performRequests()
         }
+    }
+
+    // Internal typed mapping is separately testable without invoking credential UI.
+    func authorizationRequest(for request: PasskeyRequest) throws -> ASAuthorizationRequest {
+        let provider = ASAuthorizationPlatformPublicKeyCredentialProvider(relyingPartyIdentifier: request.relyingParty)
+        let authorization: ASAuthorizationRequest
+        switch request.mode {
+        case .authenticate:
+            let assertion = provider.createCredentialAssertionRequest(challenge: request.challenge)
+            assertion.userVerificationPreference = .init(rawValue: request.userVerification.rawValue)
+            assertion.allowedCredentials = request.credentialIDs.map { .init(credentialID: $0) }
+            authorization = assertion
+        case .register:
+            guard let userID = request.userID, let name = request.userName else { throw PasskeyFailure.invalidRequest }
+            let registration = provider.createCredentialRegistrationRequest(challenge: request.challenge, name: name, userID: userID)
+            registration.displayName = request.displayName
+            registration.userVerificationPreference = .init(rawValue: request.userVerification.rawValue)
+            registration.attestationPreference = .none
+            if !request.credentialIDs.isEmpty {
+                if #available(iOS 17.4, *) {
+                    registration.excludedCredentials = request.credentialIDs.map { .init(credentialID: $0) }
+                } else { throw PasskeyFailure.unsupportedOptions }
+            }
+            authorization = registration
+        }
+        return authorization
     }
 
     func cancel() {

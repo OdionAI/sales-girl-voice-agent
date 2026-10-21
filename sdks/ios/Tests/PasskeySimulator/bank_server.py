@@ -10,6 +10,7 @@ import os
 import time
 import uuid
 import wave
+from datetime import datetime, timezone
 from pathlib import Path
 
 from aiohttp import web
@@ -18,7 +19,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from livekit import api, rtc
 
-TOPIC = "odion.auth.passkey"
+TOPIC = "attentive.fido2.v1"
 URL = "ws://127.0.0.1:7880"
 
 
@@ -79,37 +80,45 @@ class Bank:
         self.verifying = False
         self.stage = "Local agent joining"
         self.room.on("data_received", lambda packet: self.task(self.receive(packet)))
-        self.room.on("participant_connected", lambda participant: self.task(self.caller_ready(participant)))
-        await self.room.connect(URL, token(name, "simulated-bank-agent", agent=True))
-        self.record("local_agent_connected")
+        self.task(self.join_agent(name))
         return web.json_response({"serverUrl": URL, "roomName": name, "participantToken": token(name, "simulated-caller")})
 
+    async def join_agent(self, name):
+        # Production dispatch also starts after the caller joins. Wait for its active
+        # identity so the native SDK can resolve the sender of the first context packet.
+        async with api.LiveKitAPI("http://127.0.0.1:7880", "devkey", "secret") as service:
+            for _ in range(100):
+                try:
+                    participants = await service.room.list_participants(api.ListParticipantsRequest(room=name))
+                    if any(p.identity == "simulated-caller" and p.state == 2 for p in participants.participants):
+                        break
+                except api.TwirpError:
+                    pass
+                await asyncio.sleep(0.1)
+            else:
+                self.stage = "Caller did not join the local room"
+                return
+        await self.room.connect(URL, token(name, "simulated-bank-agent", agent=True))
+        self.record("local_agent_connected")
+        self.task(self.speak())
+
     async def send(self, kind: str, **fields):
-        payload = {"version": 1, "type": kind, "contextId": self.context, **fields}
+        payload = {"type": kind, **fields}
         await self.room.local_participant.publish_data(json.dumps(payload), topic=TOPIC,
                                                       destination_identities=["simulated-caller"], reliable=True)
-
-    async def caller_ready(self, participant):
-        if participant.identity != "simulated-caller":
-            return
-        # Advertise readiness only after the worker can bind packets to this caller.
-        await self.room.local_participant.set_attributes({"attentive.passkeys.version": "1"})
-        await self.speak()
 
     async def receive(self, packet):
         if packet.topic != TOPIC or not packet.participant or packet.participant.identity != "simulated-caller":
             return
         value = json.loads(packet.data)
-        if value.get("version") != 1:
-            return
         kind = value.get("type")
         if kind == "session_context":
-            self.context = value["contextId"]
-            await self.send("session_context_ack")
-            self.stage = "Context acknowledged; choose a test"
-            self.record("context_acknowledged")
+            self.context = value["correlationId"]
+            self.stage = "Context received; choose a test"
+            self.record("context_received")
             return
-        if value.get("contextId") != self.context or not self.active or value.get("authenticationId") != self.active["id"]:
+        if (not self.active or value.get("authenticationId") != self.active["id"]
+                or value.get("correlationId") != self.active["correlation"]):
             return
         if kind == "fido2_cancelled":
             self.stage = "Cancelled — no action authorized"
@@ -129,7 +138,8 @@ class Bank:
             await asyncio.sleep(2)
             verified = valid and active["mode"] == "approve" and time.time() < active["expires"]
             await self.send("fido2_result", authenticationId=active["id"],
-                            status="verified" if verified else "failed", authenticated=verified)
+                            correlationId=active["correlation"], accepted=verified,
+                            outcome="executed" if verified else "rejected")
             self.stage = "Verified — SIMULATED ONLY" if verified else "Rejected — no action authorized"
             self.record("verified" if verified else "rejected", signature_valid=valid)
             self.verifying = False
@@ -157,10 +167,10 @@ class Bank:
         if mode not in {"approve", "reject", "native"}:
             raise web.HTTPBadRequest()
         challenge = base64.urlsafe_b64encode(os.urandom(32)).rstrip(b"=").decode()
-        self.active = {"id": str(uuid.uuid4()), "challenge": challenge, "expires": time.time() + 60, "mode": mode}
+        self.active = {"id": str(uuid.uuid4()), "correlation": str(uuid.uuid4()), "challenge": challenge, "expires": time.time() + 60, "mode": mode}
         self.stage = "Native system check" if mode == "native" else "Awaiting simulated credential approval"
-        await self.send("fido2_ceremony", authenticationId=self.active["id"], action=1, feature="SimulatedAction",
-                        mode="authenticate", expiresAt=self.active["expires"],
+        await self.send("fido2_ceremony", authenticationId=self.active["id"], correlationId=self.active["correlation"], action=1, feature="SimulatedAction",
+                        mode="authenticate", expiresAt=datetime.fromtimestamp(self.active["expires"], timezone.utc).isoformat().replace("+00:00", "Z"),
                         options={"rpId": "auth.bank.example", "challenge": challenge, "userVerification": "required"})
         self.record("ceremony_started", mode=mode)
         return web.json_response({"ok": True})

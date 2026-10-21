@@ -1,120 +1,137 @@
-# Private iOS passkey protocol v1 — backend implementation required
+# Private iOS FIDO2 contract — SDK brief Revision 2
 
-Internal contract only; exclude from public SDK documentation/distribution. The
-current comparison worker has no handlers for this contract. Do not
-advertise its capability until the handlers and banking authorization gate exist.
+Internal backend contract; exclude from public SDK documentation/distribution.
+Production worker handlers and the banking authorization gate are still required.
+The SDK implements the Revision 2 SDK brief dated 2026-10-21. The proposed topic
+name below must be confirmed by the backend team before rollout.
 
-## Readiness and transport
+## Routing and call start
 
-Use the existing agent connection, reliable destination-targeted data packets on
-`odion.auth.passkey`, never `lk.chat`, transcripts, tool activity or LLM arguments.
-Each complete envelope is limited to 14,000 UTF-8 bytes. The SDK accepts only the
-single agent-kind participant advertising `attentive.passkeys.version=1`. Multiple
-agents, capability removal or reconnect invalidate readiness. Room permissions
-must reserve that participant role for the trusted worker.
+Use reliable, destination-targeted structured packets on `attentive.fido2.v1`,
+never chat, transcripts, tool activity or model arguments. The topic carries the
+protocol version. An optional JSON `version` must equal 1; it is not required by
+the brief. Maximum envelope size is 14,000 UTF-8 bytes.
 
-Every message carries `version: 1`, `type` and `contextId`, a random SDK nonce per
-connection. Every ceremony message also carries `authenticationId` verbatim. The
-SDK prevents case-insensitive reuse within a call; the backend must enforce
-customer/room/transaction binding, expiry, single use and execution idempotency.
-
-On readiness SDK sends:
+The SDK selects the single agent-kind participant as the assigned worker. Room
+permissions must reserve that role for the trusted worker. An ambiguous room
+with multiple agents cannot perform a ceremony. No capability attribute or
+acknowledgement handshake is required. At call start, once the assigned worker
+is available, the SDK sends one context message:
 
 ```json
-{"version":1,"type":"session_context","contextId":"SDK_NONCE","deviceImei":null,"platform":"ios","supportedModes":["authenticate","register"]}
+{"type":"session_context","correlationId":"SDK_CONTEXT_REQUEST_ID","deviceImei":null}
 ```
 
-Bind this to the token-authenticated caller, not model text. The opaque device
-identifier is host-supplied, not identity proof. Acknowledge within ten seconds:
+The context correlation ID identifies that context message only. It is not a
+nonce that the worker must echo on later ceremonies. `deviceImei` is the optional
+opaque identifier supplied in code by the signed-in host. Bind it to the caller
+from the verified token; it does not prove identity. Reconnection sends a new
+context once the assigned worker is available and invalidates any active prompt.
+A failed context send is not retried automatically.
 
-```json
-{"version":1,"type":"session_context_ack","contextId":"SDK_NONCE"}
-```
-
-Wait for acknowledgement before starting a ceremony. Reconnect/capability loss
-invalidates the context and active ceremony; acknowledge a fresh context and
-issue a new challenge. No proofs are replayed. Unsupported clients/workers may
-converse, but must not execute passkey-required actions.
-
-## Ceremony
+## Ceremony and native options
 
 ```json
 {
-  "version":1,"type":"fido2_ceremony","contextId":"SDK_NONCE",
-  "authenticationId":"WEMA_ID_VERBATIM","action":1,"feature":"TransferFunds",
-  "mode":"authenticate","expiresAt":1900000000,
+  "type":"fido2_ceremony",
+  "authenticationId":"WEMA_ID_VERBATIM","correlationId":"WORKER_REQUEST_ID",
+  "action":1,"feature":"TransferFunds","mode":"authenticate",
+  "expiresAt":"2099-10-21T12:34:56.123Z",
   "options":{"rpId":"auth.bank.example","challenge":"AQID","userVerification":"required","allowCredentials":[]}
 }
 ```
 
-`expiresAt` is absolute Unix seconds, bounded by the Wema challenge and prepared
-quote lifetime. The client timer is an additional UI guard, not authoritative
-expiry enforcement. Bind amount/payee/operation/customer to that challenge on the
-server; changing a quote must invalidate its pending authorization.
+`expiresAt` is an ISO-8601 timestamp with time zone, with optional fractional
+seconds. Numeric Unix timestamps are rejected. Already expired requests are
+ignored without opening a sheet or changing a previous authentication result.
+The client timer is a UI guard; the server must enforce expiry authoritatively.
 
-`options` is the flat WebAuthn public-key object, not a `publicKey` wrapper. Native
-APIs require parsing the supported fields; challenge/client-data bytes are never
-regenerated or signatures inspected/verified by the SDK.
+Every ceremony message requires a nonempty `authenticationId` and `correlationId`
+(up to 256 UTF-8 bytes each). Replies echo both strings verbatim. Match both on
+results and aborts. The SDK prevents authentication-ID/correlation-ID reuse in a
+call, including reconnects. Duplicate active requests do not reopen a prompt;
+another request while busy gets `fido2_failed` with reason `busy`. Withdraw the
+old ceremony with a matching `fido2_abort` before starting its replacement.
 
-- Assertion: `rpId`, `challenge`, `allowCredentials` with public-key IDs and
-  optional transport hints, `userVerification`, `timeout` (milliseconds).
+Bind each ID to the authenticated customer, call and prepared transaction,
+including amount/payee/operation/quote expiry. Never derive these from model text.
+A changed quote needs a fresh challenge and IDs. Disconnected/expired/cancelled
+ceremonies must not execute. Call teardown invalidates late native callbacks.
+
+`options` is the flat WebAuthn public-key object, not a `publicKey` wrapper:
+
+- Assertion: `rpId`, `challenge`, `allowCredentials`, `userVerification`, `timeout`.
 - Registration: `rp: {id,name}`, `user: {id,name,displayName}`, `challenge`,
-  `pubKeyCredParams` including public-key ES256 (`alg: -7`), optional
-  `excludeCredentials`, `authenticatorSelection`, `attestation: none`, `timeout`.
-  Nonempty exclusions require iOS 17.4; older versions reject rather than ignore.
-- Platform/resident credentials and required user verification are enforced.
-  Missing verification is strengthened to required; explicitly weaker values fail.
-- Nonempty extensions, unknown option keys, unsupported algorithms or requested
-  direct/enterprise attestation fail. Empty extension objects are permitted.
-- Challenges, user handles and credential IDs use canonical unpadded base64url.
-  Do not put a CIF in display fields; use Wema's opaque WebAuthn user handle.
+  `pubKeyCredParams`, `excludeCredentials`, `authenticatorSelection`, `attestation`,
+  `timeout`. Registration is a separate native request and response schema.
+- RP IDs must match the host-configured exact allowlist. IDs and challenges use
+  canonical unpadded base64url. User handles are opaque bank values, not a CIF in
+  a display field.
+- `required`, `preferred` and `discouraged` user verification are mapped unchanged
+  to the native request. Omission keeps WebAuthn's `preferred` default. For bank
+  approval, the backend must request `required` and Wema must verify its policy;
+  the SDK does not silently strengthen or weaken the supplied options.
+- `timeout` is milliseconds and bounds the native prompt lifetime together with
+  the host timeout and server expiry. The shortest limit wins.
+- Native platform credentials are discoverable and ES256. Registration accepts
+  platform attachment, explicit `residentKey: required` / `requireResidentKey: true`
+  or omitted selection constraints. Other explicit resident-key preferences and
+  cross-platform attachment fail with `unsupported_options`; they are not dropped.
+- All algorithm descriptors are validated, then ES256 (`alg: -7`) is selected from
+  the offered alternatives. No supported alternative means explicit failure.
+- Only omitted/`none` attestation, empty extensions and omitted/empty/`internal`
+  credential transport hints are supported. Unsupported hints/requirements fail.
+  Nonempty registration exclusions require iOS 17.4; older iOS rejects them.
 
-## Replies and verification
+## Proofs and results
 
-Native assertion success sends:
-
-```json
-{"version":1,"type":"fido2_proof","contextId":"SDK_NONCE","authenticationId":"WEMA_ID_VERBATIM","proof":{"id":"...","rawId":"...","type":"public-key","clientExtensionResults":{},"response":{"clientDataJSON":"...","authenticatorData":"...","signature":"...","userHandle":null}}}
-```
-
-Registration has `clientDataJSON` and `attestationObject`, not assertion
-signature/authenticatorData/userHandle fields. Confirm this minimal profile with
-Wema; it does not claim to implement every browser Level 3 `toJSON()` field.
-
-Cancellation sends `type: fido2_cancelled` and both IDs. Failure sends
-`type: fido2_failed`, both IDs and a stable `reason`: `invalid_request`,
-`unsupported_options`, `untrusted_relying_party`, `expired`, `busy`, `replayed`,
-`unavailable`, `presentation_unavailable`, `authorization_failed`, `invalid_credential`.
-No OS error text or credential/device data goes into logs.
-
-Native success leaves action authentication pending. After authoritative Wema
-verification, publish the correlated result:
+Assertion proof:
 
 ```json
-{"version":1,"type":"fido2_result","contextId":"SDK_NONCE","authenticationId":"WEMA_ID_VERBATIM","status":"verified","authenticated":true}
+{"type":"fido2_proof","authenticationId":"WEMA_ID_VERBATIM","correlationId":"WORKER_REQUEST_ID","proof":{"id":"...","rawId":"...","type":"public-key","response":{"clientDataJSON":"...","authenticatorData":"...","signature":"...","userHandle":null}}}
 ```
 
-Use `status: failed` for rejection. SDK accepts success only after proof submission
-starts, before expiry, for the exact active IDs. Authentication and transaction
-completion are separate. Legacy `odion.auth.action_status` cannot authorize an
-action while this SDK feature is enabled. A voice check may still authenticate
-the session, but cannot replace the transaction's required passkey proof.
+Registration proof has only `clientDataJSON` and `attestationObject` in its
+response, not assertion signature/authenticator-data/user-handle fields. The SDK
+serializes credentials; it never calls Wema or validates the proof cryptographically.
+The isolated test bank validates synthetic signatures only in its test harness.
 
-Send `type: fido2_abort` with both IDs to withdraw an active quote. SDK dismisses
-the prompt and returns to pending. Never execute after abort/cancel/expiry,
-unsupported capability or missing bank verification. A retry needs a new challenge
-and ID, never a spoken/typed/model-confirmed fallback. Native creation of a passkey
-does not by itself authorize a transaction; Wema must define enrollment semantics.
+Native success leaves `actionAuthentication` pending. After Wema verifies the
+proof, return the matching IDs and a JSON boolean:
 
-## Acceptance before rollout
+```json
+{"type":"fido2_result","authenticationId":"WEMA_ID_VERBATIM","correlationId":"WORKER_REQUEST_ID","accepted":true,"outcome":"executed"}
+```
 
-Confirm Wema's guide, serialization vectors for both modes, bank-approved domain
-association for each app, device identifier meaning, registration semantics and
-synced/device-bound credential policy. Verify backend no-logging/no-recording/no-LLM
-exposure of all sensitive messages. Test wrong sender/context/ID, result-before-proof,
-changed quotes, duplicates, cancellation, expiry, reconnect, delivery failure and
-unknown outcomes without duplicate execution. Run real-iPhone test-account cases.
-Review bank-required transaction display before enabling money movement.
+Only `accepted: true` after proof submission and before expiry marks the action
+verified. `accepted: false` marks it failed. Missing/non-boolean acceptance,
+wrong IDs, results before a proof, and stale results are ignored. Legacy
+`status`/`authenticated` fields cannot authorize it. `outcome` never changes
+whether authentication passed; transaction completion continues through existing
+tool-outcome events and agent speech. Registration success alone cannot authorize
+money movement; Wema must define its acceptance semantics.
 
-The SDK does not call Wema, store proofs, change workers, or bypass caller tokens.
-Public docs should describe only Attentive configuration and native behavior.
+Cancellation sends `fido2_cancelled` with both IDs, leaves authentication pending
+and keeps the call usable. Failure sends `fido2_failed` with both IDs and `reason`:
+`invalid_request`, `unsupported_options`, `untrusted_relying_party`, `expired`,
+`busy`, `replayed`, `unavailable`, `presentation_unavailable`,
+`authorization_failed` or `invalid_credential`.
+
+The optional matching `fido2_abort` withdraws a ceremony and returns it to pending.
+No native prompt, proof or completed ceremony is automatically retried. A fresh
+ceremony is needed after reconnect. Legacy action-status messages and spoken or
+typed confirmation cannot substitute for bank acceptance while passkeys are enabled.
+Never log, record or expose options/proofs/device IDs to the model or public events.
+
+## Acceptance before release
+
+Confirm Wema's companion guide and assertion/registration serialization vectors,
+base64 versus base64url, approved RP domains and per-app associated-domain files,
+device identifier meaning, registration authorization semantics, synced/device-bound
+credential expectations and user-verification/attestation policy. These are external
+acceptance requirements, not assumptions established by the SDK tests.
+
+Both headless and supplied-UI entry points receive code-level passkey configuration.
+The core supports iOS 16; supplied UI requires iOS 17. Integration notes must retain
+that distinction. Automated state tests, typed native-request tests and a simulated
+bank ceremony do not replace real-iPhone passkey and Wema test-account acceptance.

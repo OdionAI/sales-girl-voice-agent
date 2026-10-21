@@ -9,7 +9,7 @@ final class RealtimeCallTransport: NSObject, CallTransport {
     private var passkeysEnabled = false
     private var passkeyPeer: Participant.Identity?
     private var transportConnected = false
-    private static let passkeyTopic = "odion.auth.passkey"
+    private static let passkeyTopic = "attentive.fido2.v1"
     private let room = Room()
     private var closing = false
     private var sawAgent = false
@@ -121,8 +121,7 @@ final class RealtimeCallTransport: NSObject, CallTransport {
     private func updatePasskeyPeer() {
         guard passkeysEnabled, transportConnected, !closing else { return }
         let agents = room.remoteParticipants.values.filter { $0.kind == .agent }
-        let peer = agents.count == 1 && agents.first?.attributes["attentive.passkeys.version"] == "1"
-            ? agents.first?.identity : nil
+        let peer = agents.count == 1 ? agents.first?.identity : nil
         guard peer != passkeyPeer else { return }
         if passkeyPeer != nil { onPasskeyEvent?(.unavailable) }
         passkeyPeer = peer
@@ -227,7 +226,7 @@ extension RealtimeCallTransport: RoomDelegate {
 
     nonisolated func room(_ room: Room, participant: RemoteParticipant?, didReceiveData data: Data,
                           forTopic topic: String, encryptionType: EncryptionType) {
-        if topic == "odion.auth.passkey" {
+        if topic == "attentive.fido2.v1" {
             guard participant?.kind == .agent, let identity = participant?.identity, data.count <= 14_000 else { return }
             Task { @MainActor [weak self] in
                 guard let self, !self.closing, self.transportConnected, self.passkeysEnabled,
