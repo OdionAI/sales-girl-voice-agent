@@ -81,3 +81,4 @@ watchfiles==1.2.0
 websockets==17.1
 yarl==1.24.5
 pyrnnoise==0.4.5
+webauthn==2.7.1
