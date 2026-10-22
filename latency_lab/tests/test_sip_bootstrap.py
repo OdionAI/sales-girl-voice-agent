@@ -72,6 +72,28 @@ class AiccNumberRoutingTest(unittest.TestCase):
         ident = self._identity(_participant(called="233308048122"))
         self.assertEqual(ident["config_agent_id"], "agent-sonia")
 
+    def test_dialed_number_found_in_an_unexpected_attribute(self) -> None:
+        # The dialed number arrives under an attribute name we do not know about:
+        # the configured DID must still be found by scanning the call's values.
+        p = SimpleNamespace(
+            kind="sip",
+            identity="sip_+2330000000000",
+            attributes={"sip.trunkID": TRUNK, "sip.phoneNumber": "+2330000000000",
+                        "sip.h.X-Some-Forwarded-To": "233308048122"},
+        )
+        ident = self._identity(p)
+        self.assertEqual(ident["config_agent_id"], "agent-sonia")
+
+    def test_dialed_number_from_livekit_trunk_attribute(self) -> None:
+        p = SimpleNamespace(
+            kind="sip",
+            identity="sip_+2330000000000",
+            attributes={"sip.trunkID": TRUNK, "sip.phoneNumber": "+2330000000000",
+                        "sip.trunkPhoneNumber": "+233308048122"},
+        )
+        ident = self._identity(p)
+        self.assertEqual(ident["config_agent_id"], "agent-sonia")
+
     def test_non_trunk_participant_is_rejected(self) -> None:
         with self.assertRaises(ValueError):
             self._identity(_participant(caller="301050", trunk="ST_OTHER"))

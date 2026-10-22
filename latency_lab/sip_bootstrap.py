@@ -7,22 +7,33 @@ default agent:
 * ``caller_routes``  — keyed by the **caller** number (the ``from`` number).
 
 Resolution order: ``did_routes`` -> ``caller_routes`` -> the top-level default.
-A call whose called/caller number is not listed still uses the default, so
-omitting these maps keeps the previous single-default behaviour.
+
+The dialed number arrives under different attribute names depending on the
+carrier/trunk (a mapped header such as ``X-Callee-Number``, or LiveKit's own
+trunk-number attribute). To be robust we first read the well-known keys, then —
+only for numbers the operator has explicitly configured — scan every attribute
+value plus the participant identity and room name. Scanning can only match a
+configured DID, so it cannot misroute a number the operator did not map.
 """
 import json
 import os
 import re
+import sys
 
 _NAMED_UNKNOWN = {"anonymous", "restricted", "unavailable", "unknown", "private"}
 
 # LiveKit exposes the callee (called) number under one of these attributes.
 _CALLEE_KEYS = (
+    "sip.trunkphonenumber",
+    "sip.trunk_phone_number",
     "sip.h.x-callee-number",
     "sip.h.x-odion-callee-number",
     "sip.x_callee_number",
     "sip.calleenumber",
     "sip.callee_number",
+    "sip.h.x-to",
+    "sip.to",
+    "sip.called",
 )
 # Caller (from) number attributes.
 _CALLER_KEYS = (
@@ -64,6 +75,15 @@ def _lookup(number_map, value):
     return None
 
 
+def _lookup_any(number_map, values):
+    """Return the first route whose key matches any of ``values``."""
+    for value in values:
+        route = _lookup(number_map, value)
+        if route:
+            return route
+    return None
+
+
 def resolve_route(metadata, room_name):
     payload = json.loads(metadata or "{}")
     if payload.get("entry_surface") != "aicc_inbound":
@@ -88,9 +108,24 @@ def participant_identity(route, participant, room_name, sip_kind):
     if not caller:
         caller = attrs.get("sip.phoneNumber") or participant.identity
 
+    did_map = route.get("did_routes") or {}
+    caller_map = route.get("caller_routes") or {}
+    # Every string this call exposes — used only to match operator-configured numbers.
+    haystack = [called, caller, participant.identity, room_name]
+    haystack += [str(v) for v in attrs.values()]
+    haystack += [str(k) for k in attrs.keys()]
+
+    # Temporary diagnostic: which attributes did this call actually carry?
+    try:
+        print(f"[sip-routing] attrs={json.dumps(attrs, default=str)}", file=sys.stderr, flush=True)
+    except Exception:
+        pass
+
     chosen = (
-        _lookup(route.get("did_routes"), called)
-        or _lookup(route.get("caller_routes"), caller)
+        _lookup(did_map, called)
+        or _lookup_any(did_map, haystack)          # dialed number under any attribute
+        or _lookup(caller_map, caller)
+        or _lookup_any(caller_map, [participant.identity, room_name])
         or {}
     )
     return {
@@ -106,6 +141,7 @@ def participant_identity(route, participant, room_name, sip_kind):
         "language": "en",
         "caller_phone": attrs.get("sip.phoneNumber", ""),
         "called_phone": called,
+        "sip_attribute_keys": sorted(str(key) for key in attrs.keys()),
         "sip_trunk_id": attrs["sip.trunkID"],
         "sip_caller_verified": True,
         "voice_auth_required": chosen.get(
