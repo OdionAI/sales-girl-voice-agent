@@ -219,6 +219,10 @@ def normalize_tts_language(value: str) -> str:
         return "French"
     if normalized in {"en", "eng", "english"}:
         return "English"
+    if normalized in {"yo", "yor", "yoruba", "yorùbá"}:
+        return "Yoruba"
+    if normalized in {"ha", "hau", "hausa"}:
+        return "Hausa"
     return str(value or "").strip() or "English"
 
 
