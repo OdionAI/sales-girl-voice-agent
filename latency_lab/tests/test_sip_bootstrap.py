@@ -1,0 +1,85 @@
+"""Tests for AICC inbound number routing (sip_bootstrap).
+
+Loaded directly from file so the test does not import the heavy latency_lab
+package (and its runtime dependencies).
+"""
+from __future__ import annotations
+
+import importlib.util
+import json
+import pathlib
+import unittest
+from types import SimpleNamespace
+
+_SPEC = importlib.util.spec_from_file_location(
+    "sip_bootstrap", pathlib.Path(__file__).resolve().parents[1] / "sip_bootstrap.py"
+)
+assert _SPEC is not None and _SPEC.loader is not None
+sip_bootstrap = importlib.util.module_from_spec(_SPEC)
+_SPEC.loader.exec_module(sip_bootstrap)
+
+TRUNK = "ST_TEST"
+ROUTE = {
+    "trunk_ids": [TRUNK],
+    "room_prefix": "aicc-lara-",
+    "business_id": "biz-default",
+    "config_agent_id": "agent-default",
+    "configured_agent_name": "Default",
+    "did_routes": {
+        "+233308048122": {"business_id": "biz-ghana", "config_agent_id": "agent-sonia",
+                          "configured_agent_name": "Sonia"},
+    },
+    "caller_routes": {
+        "301050": {"business_id": "biz-momo", "config_agent_id": "agent-momo",
+                   "configured_agent_name": "Amaka"},
+        "+2347000000787": {"business_id": "biz-teni", "config_agent_id": "agent-teni",
+                           "configured_agent_name": "Teni"},
+    },
+}
+
+
+def _participant(caller="", called="", trunk=TRUNK, kind="sip"):
+    attrs = {"sip.trunkID": trunk, "sip.phoneNumber": caller}
+    if called:
+        attrs["sip.h.X-Callee-Number"] = called
+    return SimpleNamespace(identity=f"sip_{caller or 'x'}", kind=kind, attributes=attrs)
+
+
+class AiccNumberRoutingTest(unittest.TestCase):
+    def _identity(self, participant):
+        route = {"trunk_ids": ROUTE["trunk_ids"], "room_prefix": ROUTE["room_prefix"],
+                 "expected_trunk_id": TRUNK, **{k: v for k, v in ROUTE.items()}}
+        return sip_bootstrap.participant_identity(route, participant, "aicc-lara-1", "sip")
+
+    def test_caller_from_number_301050_routes_to_momo(self) -> None:
+        ident = self._identity(_participant(caller="301050"))
+        self.assertEqual(ident["business_id"], "biz-momo")
+        self.assertEqual(ident["config_agent_id"], "agent-momo")
+
+    def test_called_did_takes_precedence_over_caller_route(self) -> None:
+        ident = self._identity(_participant(caller="301050", called="+233308048122"))
+        self.assertEqual(ident["config_agent_id"], "agent-sonia")
+
+    def test_known_caller_routes_to_its_agent(self) -> None:
+        ident = self._identity(_participant(caller="+2347000000787"))
+        self.assertEqual(ident["config_agent_id"], "agent-teni")
+
+    def test_unknown_numbers_fall_back_to_default(self) -> None:
+        ident = self._identity(_participant(caller="+2348000000000"))
+        self.assertEqual(ident["config_agent_id"], "agent-default")
+
+    def test_called_number_matches_on_last_ten_digits(self) -> None:
+        ident = self._identity(_participant(called="233308048122"))
+        self.assertEqual(ident["config_agent_id"], "agent-sonia")
+
+    def test_non_trunk_participant_is_rejected(self) -> None:
+        with self.assertRaises(ValueError):
+            self._identity(_participant(caller="301050", trunk="ST_OTHER"))
+
+    def test_normalize_number(self) -> None:
+        self.assertEqual(sip_bootstrap.normalize_number("sip:301050@aicc.test"), "301050")
+        self.assertEqual(sip_bootstrap.normalize_number("+233 30 804 8122"), "233308048122")
+
+
+if __name__ == "__main__":
+    unittest.main()
