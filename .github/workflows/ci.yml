@@ -42,4 +42,4 @@ jobs:
       - name: Install isolated worker dependencies
         run: pip install -r latency_lab/requirements.txt
       - name: Verify demo proofs, intent gates and worker regressions
-        run: python -m unittest latency_lab.tests.test_passkey_demo latency_lab.tests.test_engagement latency_lab.tests.test_livekit_transport latency_lab.tests.test_pidgin latency_lab.tests.test_speech_languages -v
+        run: python -m unittest latency_lab.tests.test_passkey_demo latency_lab.tests.test_passkey_diagnostics latency_lab.tests.test_engagement latency_lab.tests.test_livekit_transport latency_lab.tests.test_pidgin latency_lab.tests.test_speech_languages -v

@@ -17,7 +17,9 @@ struct PasskeyRequest {
     let promptTimeout: TimeInterval
     let userVerification: UserVerification
 
-    init(_ payload: [String: JSONValue], configuration: AttentivePasskeyConfiguration, now: Date) throws {
+    init(_ payload: [String: JSONValue], configuration: AttentivePasskeyConfiguration, now: Date,
+         check: ((PasskeyDiagnostics.Check) -> Void)? = nil) throws {
+        check?(.envelope)
         guard let id = payload["authenticationId"]?.stringValue, !id.isEmpty, id.utf8.count <= 256,
               let correlation = payload["correlationId"]?.stringValue, !correlation.isEmpty, correlation.utf8.count <= 256,
               let mode = Mode(rawValue: payload["mode"]?.stringValue ?? ""),
@@ -34,8 +36,10 @@ struct PasskeyRequest {
         let permitted: Set<String> = mode == .authenticate
             ? ["challenge", "rpId", "allowCredentials", "userVerification", "timeout", "extensions"]
             : ["challenge", "rp", "user", "pubKeyCredParams", "excludeCredentials", "authenticatorSelection", "attestation", "timeout", "extensions"]
+        check?(.options)
         guard Set(options.keys).isSubset(of: permitted) else { throw PasskeyFailure.unsupportedOptions }
         if let extensions = options["extensions"], extensions != .object([:]) { throw PasskeyFailure.unsupportedOptions }
+        check?(.challenge)
         challenge = try PasskeyEncoding.decode(options["challenge"]?.stringValue ?? "")
         var timeout = configuration.ceremonyTimeoutSeconds
         if let value = options["timeout"] {
@@ -46,14 +50,17 @@ struct PasskeyRequest {
         if mode == .authenticate {
             relyingParty = options["rpId"]?.stringValue ?? ""
             userVerification = try Self.verification(options["userVerification"])
+            check?(.credentials)
             credentialIDs = try Self.credentials(options["allowCredentials"])
             userID = nil; userName = nil; displayName = nil
         } else {
+            check?(.registrationIdentity)
             guard case .object(let rp) = options["rp"], case .object(let user) = options["user"],
                   let name = user["name"]?.stringValue, !name.isEmpty, name.utf8.count <= 256,
                   let display = user["displayName"]?.stringValue, !display.isEmpty, display.utf8.count <= 256,
                   case .array(let parameters) = options["pubKeyCredParams"], !parameters.isEmpty, parameters.count <= 16 else { throw PasskeyFailure.invalidRequest }
             guard Set(rp.keys).isSubset(of: ["id", "name"]), Set(user.keys).isSubset(of: ["id", "name", "displayName"]) else { throw PasskeyFailure.unsupportedOptions }
+            check?(.algorithms)
             let supportsPlatformKey = parameters.contains { parameter in
                 guard case .object(let fields) = parameter else { return false }
                 return fields["type"] == .string("public-key") && fields["alg"] == .number(-7)
@@ -66,6 +73,7 @@ struct PasskeyRequest {
                 return algorithm.isFinite && algorithm.rounded() == algorithm
             }) else { throw PasskeyFailure.invalidRequest }
             guard supportsPlatformKey, options["attestation"] == nil || options["attestation"] == .string("none") else { throw PasskeyFailure.unsupportedOptions }
+            check?(.authenticatorSelection)
             if let selection = options["authenticatorSelection"] {
                 guard case .object(let fields) = selection,
                       Set(fields.keys).isSubset(of: ["authenticatorAttachment", "residentKey", "requireResidentKey", "userVerification"]),
@@ -78,10 +86,13 @@ struct PasskeyRequest {
                 userVerification = try Self.verification(fields["userVerification"])
             } else { userVerification = .preferred }
             relyingParty = rp["id"]?.stringValue ?? ""
+            check?(.registrationIdentity)
             userID = try PasskeyEncoding.decode(user["id"]?.stringValue ?? "", maximum: 64)
             userName = name; displayName = display
+            check?(.credentials)
             credentialIDs = try Self.credentials(options["excludeCredentials"])
         }
+        check?(.relyingParty)
         guard configuration.relyingPartyIdentifiers.contains(where: { $0.lowercased() == relyingParty.lowercased() }),
               AttentivePasskeyConfiguration.isDomain(relyingParty) else { throw PasskeyFailure.untrustedRelyingParty }
     }

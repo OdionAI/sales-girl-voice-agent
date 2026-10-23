@@ -265,8 +265,12 @@ final class AudioInputNegotiator {
                 deadlines[id] = Task { [weak self, timeout] in
                     do { try await Task.sleep(for: timeout) } catch { return }
                     guard let self, self.waiters[id] != nil else { return }
-                    self.publish(.failed, applied: self.state.applied, error: .timedOut)
-                    self.finishWaiters(.failure(AttentiveAudioInputError.timedOut))
+                    // Discovery and the caller's deadline can wake together. Report
+                    // missing capability consistently regardless of task scheduling.
+                    let failure: AttentiveAudioInputError = self.supportsRequestedConfiguration ? .timedOut : .unsupported
+                    self.publish(failure == .unsupported ? .unsupported : .failed,
+                                 applied: self.state.applied, error: failure)
+                    self.finishWaiters(.failure(failure))
                 }
             }
         }, onCancel: { [weak self] in

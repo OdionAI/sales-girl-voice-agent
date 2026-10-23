@@ -7,6 +7,7 @@ final class RealtimeCallTransport: NSObject, CallTransport {
     var onEvent: ((CallEvent) -> Void)?
     var onPasskeyEvent: ((PasskeyTransportEvent) -> Void)?
     private var passkeysEnabled = false
+    private var passkeyDiagnostics: PasskeyDiagnostics?
     private var passkeyPeer: Participant.Identity?
     private var transportConnected = false
     private static let passkeyTopic = "attentive.fido2.v1"
@@ -109,9 +110,11 @@ final class RealtimeCallTransport: NSObject, CallTransport {
     }
 
     func setPasskeysEnabled(_ enabled: Bool) { passkeysEnabled = enabled }
+    func setPasskeyDiagnostics(_ diagnostics: PasskeyDiagnostics) { passkeyDiagnostics = diagnostics }
 
     func sendPasskeyMessage(_ data: Data) async throws {
         guard !closing, transportConnected, passkeysEnabled, let passkeyPeer, data.count <= 14_000 else {
+            passkeyDiagnostics?.record(.connection, .failed, reason: .unavailable)
             throw PasskeyFailure.unavailable
         }
         try await room.localParticipant.publish(data: data, options: DataPublishOptions(
@@ -122,6 +125,7 @@ final class RealtimeCallTransport: NSObject, CallTransport {
         guard passkeysEnabled, transportConnected, !closing else { return }
         let agents = room.remoteParticipants.values.filter { $0.kind == .agent }
         let peer = agents.count == 1 ? agents.first?.identity : nil
+        if peer == nil { passkeyDiagnostics?.record(.connection, .ignored, reason: .unavailable) }
         guard peer != passkeyPeer else { return }
         if passkeyPeer != nil { onPasskeyEvent?(.unavailable) }
         passkeyPeer = peer
@@ -227,10 +231,15 @@ extension RealtimeCallTransport: RoomDelegate {
     nonisolated func room(_ room: Room, participant: RemoteParticipant?, didReceiveData data: Data,
                           forTopic topic: String, encryptionType: EncryptionType) {
         if topic == "attentive.fido2.v1" {
-            guard participant?.kind == .agent, let identity = participant?.identity, data.count <= 14_000 else { return }
+            guard participant?.kind == .agent, let identity = participant?.identity, data.count <= 14_000 else {
+                Task { @MainActor [weak self] in self?.passkeyDiagnostics?.record(.receipt, .ignored, reason: .invalidRequest) }
+                return
+            }
             Task { @MainActor [weak self] in
                 guard let self, !self.closing, self.transportConnected, self.passkeysEnabled,
-                      identity == self.passkeyPeer else { return }
+                      identity == self.passkeyPeer else {
+                    self?.passkeyDiagnostics?.record(.receipt, .ignored, reason: .unavailable); return
+                }
                 self.onPasskeyEvent?(.message(data))
             }
             return

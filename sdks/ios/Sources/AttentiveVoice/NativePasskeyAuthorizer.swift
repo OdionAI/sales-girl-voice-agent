@@ -10,8 +10,10 @@ final class NativePasskeyAuthorizer: NSObject, PasskeyAuthorizing, ASAuthorizati
     private var continuation: CheckedContinuation<PasskeyProof, Error>?
     private var mode: PasskeyRequest.Mode?
     private var backgroundObserver: NSObjectProtocol?
+    private let diagnostics: PasskeyDiagnostics?
 
-    init(anchor: @escaping () -> UIWindow?) {
+    init(diagnostics: PasskeyDiagnostics? = nil, anchor: @escaping () -> UIWindow?) {
+        self.diagnostics = diagnostics
         self.anchor = anchor
         super.init()
         backgroundObserver = NotificationCenter.default.addObserver(
@@ -29,9 +31,13 @@ final class NativePasskeyAuthorizer: NSObject, PasskeyAuthorizing, ASAuthorizati
     }
 
     func authorize(_ request: PasskeyRequest) async throws -> PasskeyProof {
+        diagnostics?.record(.presentation, .started)
         guard controller == nil else { throw PasskeyFailure.busy }
         guard let window = anchor(), window.windowScene?.activationState == .foregroundActive,
-              !window.isHidden else { throw PasskeyFailure.presentationUnavailable }
+              !window.isHidden else {
+            diagnostics?.record(.presentation, .failed, reason: .presentationUnavailable)
+            throw PasskeyFailure.presentationUnavailable
+        }
         let authorization = try authorizationRequest(for: request)
         self.window = window
         mode = request.mode
@@ -41,6 +47,7 @@ final class NativePasskeyAuthorizer: NSObject, PasskeyAuthorizing, ASAuthorizati
         controller.presentationContextProvider = self
         return try await withCheckedThrowingContinuation { continuation in
             self.continuation = continuation
+            diagnostics?.record(.presentation, .requested)
             controller.performRequests()
         }
     }
@@ -84,6 +91,8 @@ final class NativePasskeyAuthorizer: NSObject, PasskeyAuthorizing, ASAuthorizati
 
     func authorizationController(controller: ASAuthorizationController, didCompleteWithAuthorization authorization: ASAuthorization) {
         guard self.controller === controller else { return }
+        diagnostics?.record(.presentation, .succeeded)
+        diagnostics?.record(.proof, .started)
         guard let window, anchor() === window, window.windowScene?.activationState == .foregroundActive else {
             complete(.failure(PasskeyFailure.presentationUnavailable)); return
         }
@@ -102,7 +111,10 @@ final class NativePasskeyAuthorizer: NSObject, PasskeyAuthorizing, ASAuthorizati
     func authorizationController(controller: ASAuthorizationController, didCompleteWithError error: Error) {
         guard self.controller === controller else { return }
         let cancelled = (error as? ASAuthorizationError)?.code == .canceled
-        complete(.failure(cancelled ? PasskeyFailure.cancelled : .authorizationFailed))
+        let failure: PasskeyFailure = cancelled ? .cancelled : .authorizationFailed
+        let system = PasskeySystemError(error as NSError)
+        diagnostics?.record(.presentation, cancelled ? .cancelled : .failed, reason: failure, systemError: system)
+        complete(.failure(PasskeyNativeError(failure: failure, system: system)))
     }
 
     private func complete(_ result: Result<PasskeyProof, Error>) {
