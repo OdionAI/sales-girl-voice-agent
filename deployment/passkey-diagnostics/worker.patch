@@ -61,23 +61,46 @@
          self.pending = Pending(
              authentication_id=authentication_id,
              correlation_id=f"ceremony-{operation_id}",
-@@ -100,6 +109,7 @@
+@@ -100,19 +109,25 @@
              feature=feature,
              expires=self.clock() + self.timeout,
          )
+-        await self.send(
+-            {
+-                "type": "fido2_ceremony",
+-                "authenticationId": authentication_id,
+-                "correlationId": self.pending.correlation_id,
+-                "action": int(data.get("action") or 0),
+-                "feature": feature,
+-                "mode": str(data.get("ceremony_mode") or "authenticate"),
+-                "expiresAt": _iso(time.time() + self.timeout),
+-                "options": options,
+-                "usePasskey": True,
+-            }
+-        )
 +        self.diagnostic("ceremony_send", "started")
-         await self.send(
-             {
-                 "type": "fido2_ceremony",
-@@ -113,6 +123,7 @@
-                 "usePasskey": True,
-             }
-         )
++        try:
++            await self.send(
++                {
++                    "type": "fido2_ceremony",
++                    "authenticationId": authentication_id,
++                    "correlationId": self.pending.correlation_id,
++                    "action": int(data.get("action") or 0),
++                    "feature": feature,
++                    "mode": str(data.get("ceremony_mode") or "authenticate"),
++                    "expiresAt": _iso(time.time() + self.timeout),
++                    "options": options,
++                    "usePasskey": True,
++                }
++            )
++        except Exception:
++            self.diagnostic("ceremony_send", "failed", {"reason": "send_failed"})
++            raise
 +        self.diagnostic("ceremony_send", "requested")
          return {
              "status": "ceremony_started",
              "authentication_id": authentication_id,
-@@ -125,17 +136,21 @@
+@@ -125,17 +140,21 @@
      # -- phase B -----------------------------------------------------------
      async def receive(self, raw: bytes) -> None:
          if self.closed or len(raw) > MAX_BYTES:
@@ -99,7 +122,7 @@
              return
          pending = self.pending
          if (
-@@ -144,23 +159,30 @@
+@@ -144,23 +163,30 @@
              or value.get("authenticationId") != pending.authentication_id
              or value.get("correlationId") != pending.correlation_id
          ):
@@ -130,7 +153,7 @@
          try:
              reply = await self.post_json(
                  "/v1/tools/wema_execute_prepared",
-@@ -176,6 +198,7 @@
+@@ -176,6 +202,7 @@
              isinstance(reply, dict)
              and reply.get("status") in {"ok", "success", "completed", "pending", "unknown"}
          )
@@ -138,7 +161,7 @@
          await self.send(
              {
                  "type": "fido2_result",
-@@ -205,6 +228,7 @@
+@@ -205,6 +232,7 @@
              await self.on_outcome(text, {"status": status, "reply": reply or {}})
  
      async def close(self) -> None:

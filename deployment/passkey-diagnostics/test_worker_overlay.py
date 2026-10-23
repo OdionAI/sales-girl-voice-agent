@@ -6,6 +6,19 @@ from latency_lab.passkey import PasskeyFlow
 
 
 class OverlayTests(unittest.IsolatedAsyncioTestCase):
+    async def test_send_failure_is_logged_without_exception_text(self):
+        events = []
+        async def send(packet): raise RuntimeError("private-send-details")
+        async def post(path, payload):
+            return {"status": "ok", "data": {"authentication_id": "fixture-auth",
+                "options": {"challenge": "AQID", "rpId": "example.com"}}}
+        flow = PasskeyFlow(send=send, post_json=post, diagnostic=lambda *event: events.append(event))
+        with self.assertRaises(RuntimeError):
+            await flow.start(workflow="airtime", operation_id="fixture-op", customer_id="fixture", display_name="Fixture")
+        self.assertIn(("ceremony_send", "failed", {"reason": "send_failed"}), events)
+        self.assertNotIn("private-send-details", json.dumps(events))
+        await flow.close()
+
     async def test_client_failure_is_diagnosed_and_never_executes(self):
         events, sent, calls = [], [], []
         async def send(packet): sent.append(packet)
