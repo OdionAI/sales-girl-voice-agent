@@ -15,6 +15,7 @@ protocol CallTransport: AnyObject {
     func sendText(_ text: String) async throws -> String
     var onPasskeyEvent: ((PasskeyTransportEvent) -> Void)? { get set }
     func setPasskeysEnabled(_ enabled: Bool)
+    func setPasskeyDiagnostics(_ diagnostics: PasskeyDiagnostics)
     func sendPasskeyMessage(_ data: Data) async throws
     func setAudioInputConfiguration(_ configuration: AttentiveAudioInputConfiguration) async throws
 }
@@ -22,6 +23,7 @@ protocol CallTransport: AnyObject {
 extension CallTransport {
     var onPasskeyEvent: ((PasskeyTransportEvent) -> Void)? { get { nil } set {} }
     func setPasskeysEnabled(_ enabled: Bool) {}
+    func setPasskeyDiagnostics(_ diagnostics: PasskeyDiagnostics) {}
     func sendPasskeyMessage(_ data: Data) async throws { throw PasskeyFailure.unavailable }
     var microphoneEnabled: Bool? { nil }
     func setAudioInputConfiguration(_ configuration: AttentiveAudioInputConfiguration) async throws {
@@ -45,6 +47,7 @@ public final class AttentiveCall: ObservableObject {
     @Published public private(set) var audioInputState: AttentiveAudioInputState
     public let agentAudioLevel = AgentAudioLevel()
     public let passkeyConfiguration: AttentivePasskeyConfiguration
+    private lazy var passkeyDiagnostics = PasskeyDiagnostics(enabled: passkeyConfiguration.diagnosticsEnabled)
     // Internal dependency injection for interactive tests; never a customer API.
     private let passkeyAuthorizerOverride: (any PasskeyAuthorizing)?
     #if os(iOS)
@@ -57,12 +60,12 @@ public final class AttentiveCall: ObservableObject {
             authorizer = passkeyAuthorizerOverride
         } else {
             #if os(iOS)
-            authorizer = NativePasskeyAuthorizer { [weak self] in self?.passkeyPresentationAnchor?() }
+            authorizer = NativePasskeyAuthorizer(diagnostics: passkeyDiagnostics) { [weak self] in self?.passkeyPresentationAnchor?() }
             #else
             authorizer = UnavailablePasskeyAuthorizer()
             #endif
         }
-        return PasskeyCoordinator(configuration: passkeyConfiguration, authorizer: authorizer,
+        return PasskeyCoordinator(configuration: passkeyConfiguration, authorizer: authorizer, diagnostics: passkeyDiagnostics,
             send: { [weak self] data in
                 guard let self, let transport = self.transport, self.attempt != nil else { throw PasskeyFailure.unavailable }
                 try await transport.sendPasskeyMessage(data)
@@ -178,7 +181,13 @@ public final class AttentiveCall: ObservableObject {
     private func connect(microphoneEnabled: Bool, credentials: @escaping () async throws -> CallCredentials) async throws {
         guard operation == nil, [.idle, .ended, .failed].contains(state) else { throw CallError.alreadyActive }
         try audioInputConfiguration.validate()
-        try passkeyConfiguration.validate()
+        do {
+            try passkeyConfiguration.validate()
+            passkeyDiagnostics.record(.configuration, passkeyConfiguration.isEnabled ? .succeeded : .ignored)
+        } catch {
+            passkeyDiagnostics.record(.configuration, .failed, reason: .invalidRequest)
+            throw error
+        }
         passkeyCoordinator.reset()
         transcripts = []
         toolActivity = []
@@ -194,6 +203,7 @@ public final class AttentiveCall: ObservableObject {
         let connection = makeTransport()
         transport = connection
         connection.setPasskeysEnabled(passkeyConfiguration.isEnabled)
+        connection.setPasskeyDiagnostics(passkeyDiagnostics)
         connection.onPasskeyEvent = { [weak self] event in
             guard let self, self.attempt == id else { return }
             self.passkeyCoordinator.receive(event)

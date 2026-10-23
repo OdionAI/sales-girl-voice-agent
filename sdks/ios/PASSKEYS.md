@@ -69,7 +69,44 @@ require iOS 17.
 Registration exclusion lists require iOS 17.4; older systems reject those requests
 rather than ignoring their constraints.
 
-## State and privacy
+## Diagnostics (0.1.5)
+
+Diagnostics are off by default. Enable them in the same `passkeys` configuration
+on `AttentiveAgentView` or `AttentiveCall`:
+
+```swift
+passkeys: .init(
+    relyingPartyIdentifiers: ["YOUR_APPROVED_PASSKEY_DOMAIN"],
+    deviceIdentifier: nil,
+    diagnosticsEnabled: true
+),
+```
+
+Set `diagnosticsEnabled: false` (or omit it) and rebuild to disable SDK diagnostics.
+No UI controls are added. In Xcode's debug console, filter for `passkey stage=`.
+For an attached iPhone in macOS Console, select the device, start streaming, and
+filter subsystem `ai.odion.attentive` and category `Passkeys`.
+
+Stages cover configuration, connection/context, request receipt, validation,
+native presentation, proof production/delivery, backend verification and cleanup.
+Validation failures include a fixed check label such as `challenge` or
+`relyingParty`. Native failures include a bounded system error category and numeric
+Apple error code; system descriptions and nested payloads are not logged.
+`presentation outcome=requested` means the SDK asked iOS to present, not that a
+sheet was visibly shown. `verification outcome=started` means a proof was sent,
+not accepted. Only backend acceptance verifies authentication, separately from
+transaction completion.
+
+An enabled SDK may send bounded diagnostic stage/error metadata with a failure
+to a compatible Attentive backend. Backend operator diagnostics are independently
+controlled; disabling SDK diagnostics does not turn off server operational logs
+or the existing failure reason sent for protocol correctness. No raw options,
+challenges, signatures, proofs, device/customer identifiers, keys or tokens enter
+these diagnostics. Enable before reproducing the issue and share the relevant
+stage/reason/code lines with your integration support team. This feature does not
+fix the underlying failure or guarantee that every Apple code explains its cause.
+
+## Authentication state and privacy
 
 - Existing `sessionAuthentication` / `actionAuthentication` remain the public states.
   Identity still comes from the signed-in host's backend-issued `callerToken`.

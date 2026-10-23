@@ -1,0 +1,177 @@
+--- a/latency_lab/passkey.py
++++ b/latency_lab/passkey.py
+@@ -20,6 +20,7 @@
+ import time
+ from dataclasses import dataclass, field
+ from typing import Awaitable, Callable
++from .passkey_diagnostics import client_failure, record as record_diagnostic
+ 
+ TOPIC = "attentive.fido2.v1"
+ FEATURE_BY_WORKFLOW = {"transfer": "Transfer", "airtime": "Airtime"}
+@@ -46,12 +47,14 @@
+         on_outcome: Callable[[str, dict], Awaitable[None]] | None = None,
+         timeout: float = 90.0,
+         clock: Callable[[], float] = time.monotonic,
++        diagnostic: Callable | None = None,
+     ):
+         self.send = send
+         self.post_json = post_json
+         self.on_outcome = on_outcome
+         self.timeout = timeout
+         self.clock = clock
++        self.diagnostic = diagnostic or record_diagnostic
+         self.device_id: str | None = None
+         self.pending: Pending | None = None
+         self.closed = False
+@@ -62,11 +65,13 @@
+         self, *, workflow: str, operation_id: str, customer_id: str, display_name: str
+     ) -> dict:
+         feature = FEATURE_BY_WORKFLOW.get(workflow)
++        self.diagnostic("begin", "started")
+         if feature is None:
+             return {"status": "blocked", "message": "That action cannot be confirmed with a passkey."}
+         if self.closed:
+             return {"status": "failed", "message": "This call can no longer confirm actions."}
+         if self.pending and not self.pending.consumed:
++            self.diagnostic("begin", "failed", {"reason": "busy"})
+             return {"status": "busy", "message": "A passkey confirmation is already waiting."}
+         try:
+             reply = await self.post_json(
+@@ -78,11 +83,13 @@
+                 },
+             )
+         except Exception:
++            self.diagnostic("begin", "failed", {"reason": "begin_failed"})
+             return {
+                 "status": "failed",
+                 "message": "I could not start the passkey confirmation right now.",
+             }
+         if not isinstance(reply, dict) or reply.get("status") != "ok":
++            self.diagnostic("begin", "failed", {"reason": "begin_failed"})
+             return {
+                 "status": "failed",
+                 "message": "I could not start the passkey confirmation right now.",
+@@ -91,7 +98,9 @@
+         authentication_id = str(data.get("authentication_id") or "").strip()
+         options = data.get("options")
+         if not authentication_id or not isinstance(options, dict):
++            self.diagnostic("begin", "failed", {"reason": "invalid_request"})
+             return {"status": "failed", "message": "I could not start the passkey confirmation right now."}
++        self.diagnostic("begin", "succeeded")
+         self.pending = Pending(
+             authentication_id=authentication_id,
+             correlation_id=f"ceremony-{operation_id}",
+@@ -100,6 +109,7 @@
+             feature=feature,
+             expires=self.clock() + self.timeout,
+         )
++        self.diagnostic("ceremony_send", "started")
+         await self.send(
+             {
+                 "type": "fido2_ceremony",
+@@ -113,6 +123,7 @@
+                 "usePasskey": True,
+             }
+         )
++        self.diagnostic("ceremony_send", "requested")
+         return {
+             "status": "ceremony_started",
+             "authentication_id": authentication_id,
+@@ -125,17 +136,21 @@
+     # -- phase B -----------------------------------------------------------
+     async def receive(self, raw: bytes) -> None:
+         if self.closed or len(raw) > MAX_BYTES:
++            self.diagnostic("receipt", "ignored", {"reason": "unavailable"})
+             return
+         try:
+             value = json.loads(raw)
+         except (ValueError, UnicodeError):
++            self.diagnostic("receipt", "ignored", {"reason": "invalid_request"})
+             return
+         if not isinstance(value, dict):
++            self.diagnostic("receipt", "ignored", {"reason": "invalid_request"})
+             return
+         if value.get("type") == "session_context":
+             device = value.get("deviceImei")
+             # Opaque device id from the host app; never logged, never trusted as identity.
+             self.device_id = str(device) if isinstance(device, str) and device.strip() else None
++            self.diagnostic("context", "succeeded")
+             return
+         pending = self.pending
+         if (
+@@ -144,23 +159,30 @@
+             or value.get("authenticationId") != pending.authentication_id
+             or value.get("correlationId") != pending.correlation_id
+         ):
++            self.diagnostic("receipt", "ignored", {"reason": "invalid_request"})
+             return
+         kind = value.get("type")
+         if kind in {"fido2_cancelled", "fido2_failed"}:
++            self.diagnostic("receipt", "cancelled" if kind == "fido2_cancelled" else "failed", client_failure(value))
+             pending.consumed = True
+             await self._finish(
+                 "cancelled" if kind == "fido2_cancelled" else "failed", pending
+             )
+             return
+         if kind != "fido2_proof":
++            self.diagnostic("receipt", "ignored", {"reason": "invalid_request"})
+             return
+         proof = value.get("proof")
+         if not isinstance(proof, dict) or not proof:
++            self.diagnostic("proof", "failed", {"reason": "invalid_credential"})
+             return
+         pending.consumed = True  # consume even a rejected proof: one proof, one use
++        self.diagnostic("proof", "succeeded")
+         if self.clock() >= pending.expires:
++            self.diagnostic("verification", "failed", {"reason": "expired"})
+             await self._finish("expired", pending)
+             return
++        self.diagnostic("execution", "started")
+         try:
+             reply = await self.post_json(
+                 "/v1/tools/wema_execute_prepared",
+@@ -176,6 +198,7 @@
+             isinstance(reply, dict)
+             and reply.get("status") in {"ok", "success", "completed", "pending", "unknown"}
+         )
++        self.diagnostic("execution", "succeeded" if accepted else "failed")
+         await self.send(
+             {
+                 "type": "fido2_result",
+@@ -205,6 +228,7 @@
+             await self.on_outcome(text, {"status": status, "reply": reply or {}})
+ 
+     async def close(self) -> None:
++        self.diagnostic("cleanup", "succeeded")
+         self.closed = True
+         self.pending = None
+         for task in self._tasks:
+--- a/latency_lab/livekit_worker.py
++++ b/latency_lab/livekit_worker.py
+@@ -21,6 +21,7 @@
+ from .pipeline import ConversationPipeline
+ from .passkey_demo import DemoSession, TOPIC as PASSKEY_TOPIC, enabled as passkey_demo_enabled
+ from .passkey import PasskeyFlow, TOPIC as PASSKEY_FLOW_TOPIC, enabled as passkey_flow_enabled
++from .passkey_diagnostics import record as record_passkey_diagnostic
+ from .input_noise import InputNoiseFilter
+ from .report import generate_report
+ from .session_identity import verify_session_token
+@@ -453,6 +454,8 @@
+                 })
+                 async with pipeline.http.post(base + path, json=payload, headers=headers,
+                                               timeout=aiohttp.ClientTimeout(total=15)) as response:
++                    record_passkey_diagnostic("begin" if path.endswith("/begin") else "execution",
++                        "succeeded" if response.status < 400 else "failed", {"http_status": response.status}, trace=trace)
+                     return await response.json(content_type=None)
+ 
+             async def speak_passkey_outcome(text: str, meta: dict) -> None:
+@@ -462,7 +465,8 @@
+                 await pipeline.announce(text)
+ 
+             pipeline.passkey = PasskeyFlow(
+-                send=send_passkey_flow, post_json=post_passkey, on_outcome=speak_passkey_outcome)
++                send=send_passkey_flow, post_json=post_passkey, on_outcome=speak_passkey_outcome,
++                diagnostic=lambda stage, outcome, fields=None: record_passkey_diagnostic(stage, outcome, fields, trace=trace))
+             logger.info(
+                 "passkey flow enabled for this call (business=%s agent=%s)",
+                 identity.get("business_id"), identity.get("config_agent_id"))

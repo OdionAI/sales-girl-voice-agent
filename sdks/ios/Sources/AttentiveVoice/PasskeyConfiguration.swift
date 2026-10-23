@@ -7,15 +7,19 @@ public struct AttentivePasskeyConfiguration: Equatable, Sendable, CustomStringCo
     public let deviceIdentifier: String?
     public let ceremonyTimeoutSeconds: TimeInterval
     public let verificationTimeoutSeconds: TimeInterval
+    /// Emit privacy-safe passkey stage/reason logs to the Apple unified log. Off by default.
+    public let diagnosticsEnabled: Bool
 
     public static let disabled = Self(relyingPartyIdentifiers: [])
 
     public init(relyingPartyIdentifiers: [String], deviceIdentifier: String? = nil,
-                ceremonyTimeoutSeconds: TimeInterval = 120, verificationTimeoutSeconds: TimeInterval = 30) {
+                ceremonyTimeoutSeconds: TimeInterval = 120, verificationTimeoutSeconds: TimeInterval = 30,
+                diagnosticsEnabled: Bool = false) {
         self.relyingPartyIdentifiers = relyingPartyIdentifiers
         self.deviceIdentifier = deviceIdentifier
         self.ceremonyTimeoutSeconds = ceremonyTimeoutSeconds
         self.verificationTimeoutSeconds = verificationTimeoutSeconds
+        self.diagnosticsEnabled = diagnosticsEnabled
     }
 
     var isEnabled: Bool { !relyingPartyIdentifiers.isEmpty }
