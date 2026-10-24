@@ -13,14 +13,15 @@ from latency_lab.agentic import AgentRuntimeContext
 from latency_lab.config import LabConfig, apply_runtime_overrides
 from latency_lab.pidgin import EjiroTTSClient, SBPNClient, SBPN_MODEL
 from latency_lab.pipeline import ConversationPipeline
-from latency_lab.speech_languages import CoquiTTSClient, LANGUAGES, apply_language_stack, language_code
+from latency_lab.speech_languages import CoquiTTSClient, NativeLanguageTTSClient, LANGUAGES, apply_language_stack, language_code
 from latency_lab.trace import TraceRecorder
 
 
 class SpeechLanguageTests(unittest.IsolatedAsyncioTestCase):
     def test_saved_language_selects_both_providers_and_retains_llm(self):
         base = LabConfig(llm_model="existing-llm", tts_ref_audio="old-clone.wav")
-        for code, aliases in (("yo", ("yo", "yor", "Yoruba", "Yorùbá")), ("ha", ("ha", "hau", "Hausa"))):
+        for code, aliases in (("yo", ("yo", "yor", "Yoruba", "Yorùbá")), ("ha", ("ha", "hau", "Hausa")),
+                              ("ig", ("ig", "ibo", "Igbo", " IGBO "))):
             for alias in aliases:
                 with self.subTest(alias=alias):
                     result = apply_language_stack(base, SimpleNamespace(tts_language_hint=alias))
@@ -35,7 +36,8 @@ class SpeechLanguageTests(unittest.IsolatedAsyncioTestCase):
             self.assertIs(apply_language_stack(base, SimpleNamespace(tts_language_hint=language)), base)
 
     def test_voice_lab_language_override_wins_and_can_leave_sbpn(self):
-        for selected, saved in (("yo", "Hausa"), ("ha", "Yoruba"), ("en", "Yoruba"), ("pcm", "Hausa")):
+        for selected, saved in (("yo", "Hausa"), ("ha", "Yoruba"), ("ig", "English"),
+                                ("en", "Igbo"), ("pcm", "Igbo")):
             config = apply_runtime_overrides(LabConfig(), {"tts_language_hint":selected}, language=selected)
             result = apply_language_stack(config, SimpleNamespace(tts_language_hint=saved))
             self.assertEqual(language_code(result.tts_language), selected if selected != "en" else "")
@@ -46,7 +48,7 @@ class SpeechLanguageTests(unittest.IsolatedAsyncioTestCase):
                 pipeline = ConversationPipeline(LabConfig(), TraceRecorder(Path(directory)), AsyncMock(),
                     agent_context=AgentRuntimeContext(name="Nova", tts_language_hint=profile["name"]))
                 try:
-                    self.assertIsInstance(pipeline.tts, CoquiTTSClient)
+                    self.assertIsInstance(pipeline.tts, NativeLanguageTTSClient)
                     self.assertIsInstance(pipeline.stt, SBPNClient)
                     self.assertIn(f"CALL LANGUAGE: {profile['name']} ({code})", pipeline.system_prompt)
                     self.assertEqual(pipeline.opening_greeting_text(), profile["opening"])
@@ -128,6 +130,10 @@ class SpeechLanguageTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual("".join(item["input"] for item in self.requests), text)
                 self.assertEqual(result, self.audio * len(self.requests))
                 self.assertTrue(all(item["model"] == profile["model"] and item["voice"] == profile["voice"] for item in self.requests))
+                if code == "ig":
+                    self.assertTrue(all(item["language"] == "ig" for item in self.requests))
+                else:
+                    self.assertTrue(all("language" not in item for item in self.requests))
                 self.requests.clear()
                 _, chunks = await client.stream(text)
                 await anext(chunks)

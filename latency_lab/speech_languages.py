@@ -19,6 +19,12 @@ LANGUAGES = {
            "opening": "Sannu da zuwa. Ta yaya zan iya taimaka muku yau?",
            "goodbye": "Na gode sosai. Sai an jima.",
            "acknowledgement": "Don Allah, ku ba ni ɗan lokaci in duba muku."},
+    "ig": {"name": "Igbo", "model": "qwen-igbo-cleaned5h-epoch20", "voice": "igbo",
+           "url": "http://102.88.137.124:8080/tts-igbo/v1/audio/speech",
+           "request_language": "ig",
+           "opening": "Ndeewo. Kedu ka m ga-esi nyere gị aka taa?",
+           "goodbye": "Daalụ nke ukwuu. Ka ọ dị.",
+           "acknowledgement": "Biko, chere obere oge ka m lelee ya."},
 }
 
 
@@ -30,6 +36,8 @@ def language_code(value):
         return "yo"
     if language in {"ha", "hau", "hausa"}:
         return "ha"
+    if language in {"ig", "ibo", "igbo"}:
+        return "ig"
     return ""
 
 
@@ -71,8 +79,8 @@ Keep all existing safety and business rules. Do not invent facts.
 """
 
 
-class CoquiTTSClient:
-    """Yoruba/Hausa sentence streams already use the call's 24 kHz PCM format."""
+class NativeLanguageTTSClient:
+    """Native-language HTTP streams use the call's 24 kHz mono PCM format."""
     def __init__(self, config, session):
         self.config, self.session, self.usage = config, session, None
 
@@ -81,28 +89,36 @@ class CoquiTTSClient:
             for part in split_text(text, limit=140):
                 if not part.strip():
                     continue
-                async with self.session.post(self.config.tts_url, json={
+                payload = {
                     "model": self.config.tts_model, "voice": self.config.tts_voice,
                     "input": part, "response_format": "pcm", "stream": True,
-                }, timeout=aiohttp.ClientTimeout(total=60)) as response:
+                }
+                profile = LANGUAGES.get(language_code(self.config.tts_language), {})
+                if profile.get("request_language"):
+                    payload["language"] = profile["request_language"]
+                async with self.session.post(self.config.tts_url, json=payload,
+                                            timeout=aiohttp.ClientTimeout(total=60)) as response:
                     response.raise_for_status()
                     if (response.content_type != "audio/pcm" or
                         response.headers.get("X-Audio-Sample-Rate") != "24000" or
                         response.headers.get("X-Audio-Channels") != "1"):
-                        raise ValueError("Yoruba/Hausa TTS must stream 24 kHz mono PCM16")
+                        raise ValueError("Native-language TTS must stream 24 kHz mono PCM16")
                     pending = b""
                     received = 0
                     async for block in response.content.iter_chunked(9600):
                         received += len(block)
                         if received > 30 * 24000 * 2:
-                            raise ValueError("Yoruba/Hausa audio exceeds the 30-second segment budget")
+                            raise ValueError("Native-language audio exceeds the 30-second segment budget")
                         pending += block
                         length = len(pending) // 2 * 2
                         if length:
                             yield pending[:length]
                             pending = pending[length:]
                     if not received or pending:
-                        raise ValueError("Yoruba/Hausa returned empty or truncated PCM16")
+                        raise ValueError("Native-language TTS returned empty or truncated PCM16")
                     if self.usage is not None:
                         self.usage.tts_accepted(part)
         return 24000, chunks()
+
+
+CoquiTTSClient = NativeLanguageTTSClient
