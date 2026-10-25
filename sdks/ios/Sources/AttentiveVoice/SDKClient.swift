@@ -14,15 +14,20 @@ struct SDKClient: Sendable, CustomStringConvertible, CustomDebugStringConvertibl
     private let apiKey: String
     private let agentID: String
     private let customerID: String?
+    private let voiceLanguage: VoiceAccent?
+    private let voiceGender: VoiceGender?
     private let session: URLSession
     private let baseURL: URL
 
     // Tests can inject a URLSession, but customer apps do not supply service endpoints.
-    init(apiKey: String, agentID: String, customerID: String? = nil, session: URLSession? = nil,
+    init(apiKey: String, agentID: String, customerID: String? = nil,
+         voiceLanguage: VoiceAccent? = nil, voiceGender: VoiceGender? = nil, session: URLSession? = nil,
          baseURL: URL = URL(string: "https://attentive.odion.ai/api/sdk/v1/")!) {
         self.apiKey = apiKey
         self.agentID = agentID
         self.customerID = customerID
+        self.voiceLanguage = voiceLanguage
+        self.voiceGender = voiceGender
         self.baseURL = baseURL
         let config = URLSessionConfiguration.ephemeral
         config.urlCache = nil
@@ -71,7 +76,11 @@ struct SDKClient: Sendable, CustomStringConvertible, CustomDebugStringConvertibl
         http.setValue("application/json", forHTTPHeaderField: "Content-Type")
         http.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         var body = ["agentId": agentID]
-        if path == "calls", let customerID { body["customerId"] = customerID }
+        if path == "calls" {
+            if let customerID { body["customerId"] = customerID }
+            if let voiceLanguage { body["voiceLanguage"] = voiceLanguage.rawValue }
+            if let voiceGender { body["voiceGender"] = voiceGender.rawValue }
+        }
         if let callerToken { body["callerToken"] = callerToken }
         http.httpBody = try JSONEncoder().encode(body)
         let data = try await callServiceData(http, session: session)

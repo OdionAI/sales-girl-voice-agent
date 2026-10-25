@@ -15,13 +15,14 @@ const dependency = remoteURL
   : `.package(name: "AttentiveVoice", path: ${JSON.stringify(packagePath)})`;
 const consumer = join(root, ".build", `${prefix}-consumer`);
 const markdown = await readFile(join(root, "GETTING_STARTED.md"), "utf8") + "\n" +
-  await readFile(join(root, "PASSKEYS.md"), "utf8");
+  await readFile(join(root, "PASSKEYS.md"), "utf8") + "\n" +
+  await readFile(join(root, "VOICE_SETTINGS.md"), "utf8");
 const snippets = new Map([...markdown.matchAll(
   /<!-- snippet: ([\w-]+) -->\n```swift\n([\s\S]*?)\n```/g
 )].map((match) => [match[1], match[2]]));
 const targets = {
   DocsCore: ["session", "custom-controls"],
-  DocsCallerUI: ["session", "caller-ui", "entry-button", "configure-entry", "passkey-entry"],
+  DocsCallerUI: ["session", "caller-ui", "entry-button", "configure-entry", "passkey-entry", "voice-preferences"],
 };
 
 for (const [target, names] of Object.entries(targets)) {
