@@ -64,6 +64,13 @@ The complete app is [Examples/QuickStart](Examples/QuickStart/AttentiveExampleAp
 The older `AttentiveSample` remains an advanced diagnostic/regression harness;
 customers do not need to reproduce its `SampleModel` or developer settings.
 
+## Speaking voice
+
+Set `voiceLanguage: .enNG` (Nigerian) or `.enUS` (American), and
+`voiceGender: .female` or `.male` in `AttentiveAgentView` before `callerToken:`.
+Both default to `nil`, preserving the service default and existing requests.
+These preferences add no controls. See [examples and compatibility](VOICE_SETTINGS.md).
+
 ## Your own UI
 
 Headless calls require iOS 16+. Retain one call instance on the main actor:

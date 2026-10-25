@@ -1,3 +1,4 @@
+import AttentiveVoice
 import AttentiveVoiceUI
 import Foundation
 import SwiftUI
@@ -34,6 +35,9 @@ struct AttentiveExampleApp: App {
                             relyingPartyIdentifiers: ["auth.bank.example"],
                             deviceIdentifier: "DEMO-DEVICE-ID"
                         ),
+                        // Optional speaking voice; omit both to keep the service default.
+                        voiceLanguage: .enNG,
+                        voiceGender: .female,
                         callerToken: environment["ATTENTIVE_CALLER_TOKEN"].map { token in { token } }
                     )
                 }

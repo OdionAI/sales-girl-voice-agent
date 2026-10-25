@@ -17,6 +17,18 @@ public enum ToolWaitSpeechMode: String, Codable, Sendable {
     case llmGenerated = "llm_generated"
 }
 
+/// Voice accent selection, independent of the agent's runtime language.
+public enum VoiceAccent: String, Codable, Sendable, CaseIterable {
+    case enUS = "en-US"
+    case enNG = "en-NG"
+}
+
+/// Preferred speaking voice. Available voices are selected by the service.
+public enum VoiceGender: String, Codable, Sendable, CaseIterable {
+    case male
+    case female
+}
+
 public struct CallRequest: Codable, Equatable, Sendable {
     public var businessSlug: String
     public var agentPublicId: String
@@ -24,16 +36,22 @@ public struct CallRequest: Codable, Equatable, Sendable {
     public var language: String
     public var wemaContext: CallerProfile?
     public var toolWaitSpeechMode: ToolWaitSpeechMode?
+    /// Nil preserves the service's voice selection; does not change `language`.
+    public var voiceLanguage: VoiceAccent?
+    public var voiceGender: VoiceGender?
 
     public init(businessSlug: String, agentPublicId: String, endUserContact: String,
                 language: String = "en", profile: CallerProfile? = nil,
-                toolWaitSpeechMode: ToolWaitSpeechMode? = nil) {
+                toolWaitSpeechMode: ToolWaitSpeechMode? = nil,
+                voiceLanguage: VoiceAccent? = nil, voiceGender: VoiceGender? = nil) {
         self.businessSlug = businessSlug
         self.agentPublicId = agentPublicId
         self.endUserContact = endUserContact
         self.language = language
         self.wemaContext = profile
         self.toolWaitSpeechMode = toolWaitSpeechMode
+        self.voiceLanguage = voiceLanguage
+        self.voiceGender = voiceGender
     }
 
     func validate() throws {

@@ -1,10 +1,29 @@
 import Combine
 import XCTest
+#if os(iOS)
+import SwiftUI
+#endif
 @testable import AttentiveVoice
 @testable import AttentiveVoiceUI
 
 final class CallerControlsTests: XCTestCase {
     #if os(iOS)
+    @available(iOS 17, *)
+    @MainActor
+    func testVoicePreferencesCompileForEverySuppliedCallerInitializer() {
+        _ = AttentiveAgentView(apiKey: "YOUR_API_KEY", agentID: "agt_example",
+                               voiceLanguage: .enNG, voiceGender: .female)
+        _ = AttentiveAgentView(apiKey: "YOUR_API_KEY", agentID: "agt_example", customerID: "CUSTOMER_1",
+                               voiceLanguage: .enUS, voiceGender: .male, callerToken: { "test-token" })
+        _ = AttentiveAgentView(apiKey: "YOUR_API_KEY", agentID: "agt_example", startsAutomatically: false,
+                               voiceLanguage: .enNG, voiceGender: .male)
+        // Existing initializers remain available without either preference.
+        _ = AttentiveAgentView(apiKey: "YOUR_API_KEY", agentID: "agt_example")
+        _ = AttentiveCall(apiKey: "YOUR_API_KEY", agentID: "agt_example", voiceLanguage: .enUS, voiceGender: .female)
+        _ = AttentiveCall(apiKey: "YOUR_API_KEY", agentID: "agt_example", customerID: "CUSTOMER_1",
+                          voiceLanguage: .enNG, voiceGender: .male)
+    }
+
     @available(iOS 17, *)
     func testDefaultCallerHidesAccountAndSettingsMenus() {
         let configuration = CallerUIConfiguration()

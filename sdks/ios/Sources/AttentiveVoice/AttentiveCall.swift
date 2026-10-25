@@ -93,15 +93,19 @@ public final class AttentiveCall: ObservableObject {
 
     /// Uses your dashboard calling key and agent. No endpoint or transport setup is required.
     public convenience init(apiKey: String, agentID: String, audioInput: AttentiveAudioInputConfiguration = .standard,
-                            passkeys: AttentivePasskeyConfiguration = .disabled) {
-        self.init(apiKey: apiKey, agentID: agentID, customerID: nil, audioInput: audioInput, passkeys: passkeys)
+                            passkeys: AttentivePasskeyConfiguration = .disabled,
+                            voiceLanguage: VoiceAccent? = nil, voiceGender: VoiceGender? = nil) {
+        self.init(apiKey: apiKey, agentID: agentID, customerID: nil, audioInput: audioInput, passkeys: passkeys,
+                  voiceLanguage: voiceLanguage, voiceGender: voiceGender)
     }
 
     /// Customer selection must match the identity in a backend-issued caller token.
     public convenience init(apiKey: String, agentID: String, customerID: String?, audioInput: AttentiveAudioInputConfiguration = .standard,
-                            passkeys: AttentivePasskeyConfiguration = .disabled) {
+                            passkeys: AttentivePasskeyConfiguration = .disabled,
+                            voiceLanguage: VoiceAccent? = nil, voiceGender: VoiceGender? = nil) {
         self.init(credentialProvider: nil, allowsInsecureDevelopmentConnections: false, audioInput: audioInput, passkeys: passkeys)
-        sdkClient = SDKClient(apiKey: apiKey, agentID: agentID, customerID: customerID)
+        sdkClient = SDKClient(apiKey: apiKey, agentID: agentID, customerID: customerID,
+                              voiceLanguage: voiceLanguage, voiceGender: voiceGender)
     }
 
     /// Refresh dashboard display settings without requesting microphone access or starting a call.
