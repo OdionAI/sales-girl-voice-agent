@@ -363,10 +363,13 @@ runtime never forwards this credential to a different scheme, host, or port.
 ## CI and deployment
 
 - dependency install/build sanity checks run on `dev`, `staging`, and `main`
-- pushes to `staging` and `main` deploy both language workers to the matching
-  Huawei node-B Compose stack through node A as an SSH bastion
-- the workflow runs unit and Docker-build gates, uploads the exact commit,
-  serializes Compose changes, and rolls back the source target if startup fails
+- the older Huawei node-B workers deploy only through an explicit manual run
+  of `deploy.yml`
+- `main` pushes deploy the active Lagos `voice` worker only when the GitHub
+  Actions repository variable `LAGOS_VOICE_AUTO_DEPLOY` is `true` and the
+  commit message omits `[skip deploy]`; `dev` and `staging` do not deploy Lagos
+- `deploy-lagos.yml` tests the worker, uploads the exact commit, builds its
+  image on Lagos, recreates only `voice`, checks health and retains a rollback image
 - it does not authenticate to GCP, publish to Artifact Registry, or use IAP
 - the approved personal-GCP dependency is the external NG/Odion TTS endpoint;
   Huawei MaaS `glm-5.2` remains the live and post-call text model
@@ -377,9 +380,10 @@ source was captured from image `attentive/voice:msgfix-20261026-1` and imported
 into this repository's `latency_lab` on 2026-10-26. The image and source
 fingerprints are recorded in
 [`deployment/lagos/live-source-20261026.md`](deployment/lagos/live-source-20261026.md).
-The `deploy.yml` workflow above targets the older Huawei node-B workers; it
-does not update Lagos. See [`deployment/lagos/README.md`](deployment/lagos/README.md)
-for the current Lagos release procedure.
+The `deploy.yml` workflow targets the older Huawei node-B workers and is
+manual only. The Lagos auto-deploy gate remains off while the pipeline is
+prepared without changing the running VM. See
+[`deployment/lagos/README.md`](deployment/lagos/README.md) for release details.
 
 Branch convention:
 

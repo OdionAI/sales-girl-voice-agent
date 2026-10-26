@@ -22,21 +22,12 @@ docker build -f deployment/lagos/Dockerfile \
   -t attentive/voice:lagos-$(git rev-parse --short HEAD) .
 ```
 
-## Deploy (Lagos box, manual / scripted fallback)
+## Active stack
 The Lagos stack is a Compose project on the private app VM reached through the jump host:
 `odion-recovery-lagos`, release dir `/opt/attentive/releases/recovery-20261009`, service `voice`.
 
-1. Stage the source on the box: `sources/voice-<short-sha>/`.
-2. Build there with the release recipe (same Dockerfile), tag `attentive/voice:lagos-<short-sha>-N`.
-3. Pin it with a trailing override and recreate **only** voice, keeping the whole active `-f` chain:
-   ```
-   printf 'services:\n  voice:\n    image: attentive/voice:lagos-<short-sha>-N\n' \
-     > voice-lagos-<date>.override.yaml
-   # read the ACTIVE chain from the running container and append the new override LAST
-   docker compose -p odion-recovery-lagos -f <every active file> -f ./voice-lagos-<date>.override.yaml up -d voice
-   ```
-4. Verify: container healthy, worker registered as `rvc-livekit-comparison`, and a real call
-   shows `input_noise_filter_ready {enabled:true, implementation:rnnoise}`.
+Agents should pull GitHub `main`, make changes on a branch, and promote through
+`dev` and `staging` before merging to `main`. Do not deploy directly to the VM.
 
 ## Must-not-lose behavior (verify on every release)
 - **RNNoise input-noise suppression** — `latency_lab/input_noise.py` (with the `*` global
@@ -50,10 +41,18 @@ The Lagos stack is a Compose project on the private app VM reached through the j
 Keep the previous image tag and the exact `-f` chain. Rollback = recreate `voice` from the
 previous chain (or the earlier override). Do not prune rollback images.
 
-## Automated deploy (pending)
-There is currently no Lagos deploy workflow in `.github/workflows/`. The existing
-`deploy.yml` targets the older Huawei node-B voice workers. A future Lagos
-workflow must build from a reviewed Git commit, preserve the active Compose
-configuration, verify the registered worker and call path, and retain the prior
-image for rollback. Until that workflow is installed and verified, use the
-manual release procedure above.
+## GitHub release
+`.github/workflows/deploy-lagos.yml` is the Lagos path. A `main` push starts a
+release only when `LAGOS_VOICE_AUTO_DEPLOY=true` is set in the repository and
+the commit message does not contain `[skip deploy]`. The gate is currently off:
+installing this workflow does not restart the running worker. Manual workflow
+dispatch defaults to `verify_only=true` and checks the pinned SSH route,
+Compose project, active file chain and container health without a release.
+
+For a release, the workflow tests the source, uploads an immutable commit-SHA
+archive, builds from `deployment/lagos/Dockerfile`, checks `pyrnnoise` and worker
+imports, and adds an image-only override to the active Compose chain. It
+recreates only `voice`, checks the new image and container health, environment
+and mounts, and restores the prior image if verification fails. A post-release
+real call still needs to confirm worker registration and the RNNoise trace.
+`deploy.yml` remains available only for an explicit legacy node-B run.

@@ -1,0 +1,61 @@
+name: Deploy Lagos voice worker
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      verify_only:
+        description: Check the current Lagos worker and SSH route without deploying
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lagos-voice-release
+  cancel-in-progress: false
+
+jobs:
+  lagos:
+    if: github.ref_name == 'main' && ((github.event_name == 'push' && vars.LAGOS_VOICE_AUTO_DEPLOY == 'true' && !contains(github.event.head_commit.message, '[skip deploy]')) || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Test worker release
+        if: github.event_name == 'push' || !inputs.verify_only
+        run: |
+          python -m pip install -r requirements.txt -r latency_lab/requirements.txt
+          python -m unittest discover -s tests -p 'test_*.py'
+          python -m unittest discover -s latency_lab/tests -p 'test_*.py'
+      - name: Configure pinned Lagos SSH route
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.LAGOS_SSH_PRIVATE_KEY || secrets.HUAWEI_SSH_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "$SSH_PRIVATE_KEY"
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/lagos_deploy_key
+          chmod 600 ~/.ssh/lagos_deploy_key
+          cp deployment/lagos/known_hosts ~/.ssh/lagos_known_hosts
+          cp deployment/lagos/ssh_config ~/.ssh/config
+          chmod 600 ~/.ssh/config ~/.ssh/lagos_known_hosts
+          ssh-keygen -y -f ~/.ssh/lagos_deploy_key >/dev/null
+          ssh lagos-app python3 - --verify-only < deployment/lagos/deploy.py
+      - name: Build and deploy exact Git revision
+        if: github.event_name == 'push' || !inputs.verify_only
+        run: |
+          set -euo pipefail
+          release="/opt/attentive/releases/voice-ci/${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          ssh lagos-app "install -d -m 700 '$release'"
+          git archive HEAD | ssh lagos-app "tar -xf - --no-same-owner -C '$release'"
+          ssh lagos-app python3 "$release/deployment/lagos/deploy.py" --release "$release" --revision "$GITHUB_SHA"
+          printf 'Lagos voice revision `%s` is deployed.\n' "$GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"
+      - name: Remove runner SSH key
+        if: always()
+        run: rm -f ~/.ssh/lagos_deploy_key

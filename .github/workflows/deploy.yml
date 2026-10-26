@@ -1,10 +1,6 @@
 name: Deploy Voice Agent to Huawei
 
 on:
-  push:
-    branches:
-      - staging
-      - main
   workflow_dispatch:
 
 permissions:
@@ -20,8 +16,8 @@ env:
 
 jobs:
   deploy:
-    # Allow an explicit code-only promotion without touching the legacy stack.
-    if: github.event_name == 'workflow_dispatch' || !contains(github.event.head_commit.message, '[skip deploy]')
+    # The older node-B worker stack is retained for explicit operator releases.
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:

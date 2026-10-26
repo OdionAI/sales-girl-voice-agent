@@ -1,0 +1,24 @@
+Host lagos-jump
+  HostName 83.101.50.32
+  User root
+  IdentityFile ~/.ssh/lagos_deploy_key
+  IdentitiesOnly yes
+  BatchMode yes
+  StrictHostKeyChecking yes
+  UserKnownHostsFile ~/.ssh/lagos_known_hosts
+  ConnectTimeout 15
+  ServerAliveInterval 15
+  ServerAliveCountMax 2
+
+Host lagos-app
+  HostName 10.40.40.131
+  User root
+  ProxyJump lagos-jump
+  IdentityFile ~/.ssh/lagos_deploy_key
+  IdentitiesOnly yes
+  BatchMode yes
+  StrictHostKeyChecking yes
+  UserKnownHostsFile ~/.ssh/lagos_known_hosts
+  ConnectTimeout 15
+  ServerAliveInterval 15
+  ServerAliveCountMax 2
