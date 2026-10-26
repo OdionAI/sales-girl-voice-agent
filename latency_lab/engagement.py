@@ -31,7 +31,8 @@ the output gate; only the current caller generation's tool can. A timer never
 overrides silence or interprets a resume instruction itself.
 For until_user, speak must be false. For until_result, speak only on tool_completed.
 Choose silence for natural pauses, a question already awaiting an answer, or if
-another nudge would be repetitive. An initial gentle context-specific check-in is
+another nudge would be repetitive. Never repeat or rephrase anything listed in
+recent_updates; if you have nothing new, stay silent. An initial gentle context-specific check-in is
 allowed after a long pause; never repeatedly pressure the caller to answer.
 For tool_started, briefly acknowledge the actual pending request if not already
 acknowledged. For tool_wait, decide whether a short contextual update is useful.
@@ -169,6 +170,25 @@ class Engagement:
         if self.operation:
             state["last_operation_do_not_resubmit"] = self.operation.snapshot()
         return state
+
+    def register_operation(self, call, attempt, task) -> "Operation":
+        """Track a tool the pipeline runs itself (background), so the interim
+        'still working' updates still fire while it is in flight."""
+        op = Operation(call, attempt, task=task)
+        if not self.enabled:
+            return op
+        self.operation = op
+        self.tool_checks = 0
+        self.next_check = self.clock() + self.config.engagement_ack_seconds
+        return op
+
+    def finish_operation(self, op) -> None:
+        """Stop offering updates for a finished tool. The pipeline owns the real
+        result message (it has the data), so we drop the operation here."""
+        if self.operation is op:
+            self.operation = None
+        self.invalidate()
+        self.next_check = self.clock() + self.config.engagement_idle_seconds
 
     async def run_tool(self, attempt, call, invoke):
         if not self.enabled:

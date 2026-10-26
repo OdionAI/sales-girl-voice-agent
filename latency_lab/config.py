@@ -66,6 +66,10 @@ def _bool(name: str, default: bool) -> bool:
 class LabConfig:
     speech_language_override: str = ""
     engagement_enabled: bool = _bool("RVC_LAB_ENGAGEMENT_ENABLED", False)
+    # Run bank tools as background tasks so a long or failing call never blocks the
+    # conversation: the agent acknowledges naturally and delivers the result later.
+    # Opt-in (deployments enable it with RVC_LAB_BACKGROUND_TOOLS=true).
+    background_tools: bool = _bool("RVC_LAB_BACKGROUND_TOOLS", False)
     engagement_ack_seconds: float = _float("RVC_LAB_ENGAGEMENT_ACK_SECONDS", 0.3)
     engagement_tool_seconds: float = _float("RVC_LAB_ENGAGEMENT_TOOL_SECONDS", 8.0)
     engagement_idle_seconds: float = _float("RVC_LAB_ENGAGEMENT_IDLE_SECONDS", 18.0)
@@ -108,6 +112,17 @@ class LabConfig:
     stt_batch_timeout_seconds: float = _float(
         "RVC_LAB_STT_BATCH_TIMEOUT_SECONDS", 8.0
     )
+    # Hint-capable authoritative final (Qwen3-ASR chat endpoint). When stt_chat_url
+    # is set the committed final comes from there WITH a vocabulary hint
+    # (stt_context); the realtime socket still supplies speculative partials.
+    stt_chat_url: str = os.getenv("RVC_LAB_STT_CHAT_URL", "").strip()
+    stt_chat_model: str = os.getenv("RVC_LAB_STT_CHAT_MODEL", "Qwen3-ASR")
+    stt_context: str = os.getenv("RVC_LAB_STT_CONTEXT", "").strip()
+    # Only agents/businesses in this list receive the hinted chat final; empty
+    # means "every agent". Keeps a Wema-specific hint off other tenants.
+    stt_chat_scope: tuple[str, ...] = tuple(
+        item.strip() for item in os.getenv("RVC_LAB_STT_CHAT_SCOPE", "").replace(",", " ").split() if item.strip()
+    )
     stt_model: str = os.getenv("RVC_LAB_STT_MODEL", "Qwen3-ASR")
     stt_recovery_buffer_seconds: float = _float(
         "RVC_LAB_STT_RECOVERY_BUFFER_SECONDS", 12.0
@@ -123,6 +138,21 @@ class LabConfig:
     llm_model: str = os.getenv("RVC_LAB_LLM_MODEL", "qwen3.8-27b")
     llm_api_key: str = os.getenv("RVC_LAB_LLM_API_KEY", "local-npu")
     llm_enable_thinking: bool = _bool("RVC_LAB_LLM_ENABLE_THINKING", False)
+    # If the provider returns a 200 with no spoken text and no tool call, re-issue
+    # the request a few times before giving up. Off by default; deployments turn it
+    # on with RVC_LAB_LLM_EMPTY_RETRIES.
+    llm_empty_retries: int = int(_float("RVC_LAB_LLM_EMPTY_RETRIES", 0))
+    llm_empty_retry_delay_seconds: float = _float("RVC_LAB_LLM_EMPTY_RETRY_DELAY_SECONDS", 0.4)
+    # A stalling or empty provider attempt must not leave the caller in dead air:
+    # abandon a request that has produced no usable output for this many seconds.
+    llm_first_output_timeout_seconds: float = _float("RVC_LAB_LLM_FIRST_OUTPUT_TIMEOUT_SECONDS", 5.0)
+    # When a committed caller turn still yields nothing after the retries, speak a
+    # short graceful line instead of going silent. Off by default.
+    empty_response_fallback_enabled: bool = _bool("RVC_LAB_EMPTY_RESPONSE_FALLBACK", False)
+    empty_response_fallback_text: str = os.getenv(
+        "RVC_LAB_EMPTY_RESPONSE_FALLBACK_TEXT",
+        "I'm sorry, I'm not able to help with that right now. Please try again in a moment.",
+    ).strip()
     memory_compaction_enabled: bool = _bool("RVC_LAB_MEMORY_COMPACTION_ENABLED", True)
     memory_compaction_interval_seconds: float = _float("RVC_LAB_MEMORY_COMPACTION_INTERVAL_SECONDS", 60.0)
     memory_recent_exchanges: int = int(_float("RVC_LAB_MEMORY_RECENT_EXCHANGES", 8))
@@ -136,6 +166,7 @@ class LabConfig:
     tts_ref_audio: str = os.getenv("RVC_LAB_TTS_REF_AUDIO", "")
     tts_ref_text: str = os.getenv("RVC_LAB_TTS_REF_TEXT", "")
     tts_language: str = os.getenv("RVC_LAB_TTS_LANGUAGE", "English")
+    tts_seed: str = os.getenv("RVC_LAB_TTS_SEED", "")
     tts_initial_codec_chunk_frames: int = int(
         _float("RVC_LAB_TTS_INITIAL_CODEC_CHUNK_FRAMES", 16)
     )
@@ -251,6 +282,7 @@ def apply_runtime_overrides(
     tts_base_url = str(payload.get("tts_base_url") or "").strip()
     tts_voice = str(payload.get("tts_voice_id") or payload.get("tts_voice") or "").strip()
     tts_frames = str(payload.get("tts_initial_codec_chunk_frames") or "").strip()
+    tts_seed = str(payload.get("tts_seed") or "").strip()
     thinking = str(payload.get("llm_disable_thinking") or "").strip().lower()
 
     if stt_model:
@@ -261,6 +293,9 @@ def apply_runtime_overrides(
         updates["stt_batch_url"] = derive_stt_batch_url(ws_url)
     if uses_realtime_stt_final(config, model=stt_model, ws_url=stt_base_url):
         updates["stt_batch_url"] = ""
+    stt_context = str(payload.get("stt_context") or "").strip()
+    if stt_context:
+        updates["stt_context"] = stt_context
     if llm_model:
         updates["llm_model"] = llm_model
     if llm_base_url:
@@ -277,6 +312,8 @@ def apply_runtime_overrides(
         updates["tts_url"] = tts_base_url
     if tts_voice:
         updates["tts_voice"] = tts_voice
+    if tts_seed:
+        updates["tts_seed"] = tts_seed
     if tts_frames.isdigit():
         updates["tts_initial_codec_chunk_frames"] = int(tts_frames)
     if language:

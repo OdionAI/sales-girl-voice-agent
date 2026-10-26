@@ -30,6 +30,7 @@ from latency_lab.providers import (
     clean_transcript,
     frame_pcm16_chunks,
     pcm16_wav,
+    resolve_tts_seed,
     tts_token_budget,
 )
 from latency_lab.report import generate_report
@@ -225,6 +226,7 @@ class TTSTokenBudgetTest(unittest.IsolatedAsyncioTestCase):
             "stream_format": "audio",
             "initial_codec_chunk_frames": 4,
             "max_new_tokens": tts_token_budget(text),
+            "seed": resolve_tts_seed(config),
             "task_type": "Base",
             "voice": "test-voice",
             "x_vector_only_mode": False,

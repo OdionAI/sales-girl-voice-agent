@@ -371,6 +371,16 @@ runtime never forwards this credential to a different scheme, host, or port.
 - the approved personal-GCP dependency is the external NG/Odion TTS endpoint;
   Huawei MaaS `glm-5.2` remains the live and post-call text model
 
+The public `attentive.odion.ai` calls currently use the separate Lagos
+`odion-recovery-lagos` Compose project's `voice` service. Its running worker
+source was captured from image `attentive/voice:msgfix-20261026-1` and imported
+into this repository's `latency_lab` on 2026-10-26. The image and source
+fingerprints are recorded in
+[`deployment/lagos/live-source-20261026.md`](deployment/lagos/live-source-20261026.md).
+The `deploy.yml` workflow above targets the older Huawei node-B workers; it
+does not update Lagos. See [`deployment/lagos/README.md`](deployment/lagos/README.md)
+for the current Lagos release procedure.
+
 Branch convention:
 
 - `dev` = active work

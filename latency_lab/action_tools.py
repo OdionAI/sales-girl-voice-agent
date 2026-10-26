@@ -17,7 +17,39 @@ from .provider_directory import definitions as directory_definitions
 from .directory_email import definitions as directory_email_definitions
 
 
-SUPPORTED_ACTION_TOOLS = {"create_ticket", "send_email", "end_call"}
+SUPPORTED_ACTION_TOOLS = {"create_ticket", "send_email", "end_call", "transfer_to_aicc"}
+
+# Human hand-off behaviour. The model asks for the transfer in THIS turn; the
+# application owns the announcement and the result, so the agent never claims a
+# human answered before a successful transfer result.
+TRANSFER_RULES = """
+Human transfer behaviour: When the current caller asks to speak to a human, person,
+colleague, adviser or customer-care representative, call transfer_to_aicc in THIS turn.
+Their request is sufficient permission: never ask if they want the transfer again,
+never reply with just an offer to connect, and never require a particular exact phrase.
+Interpret natural phrasing and obvious ASR spelling errors in context. If they accept
+your previous offer of a human, call the tool immediately. A question about whether you
+are human, a refusal, a hypothetical/future request or unclear intent is not permission.
+Call the tool without a separate spoken preamble; the application says exactly
+"All right, I'll connect you now." once and starts the transfer. Do not claim the human
+has answered before a successful transfer result. Never call end_call to transfer.
+"""
+
+
+async def suppress_transfer_preamble(stream):
+    """Wait for the tool decision before allowing speculative transfer speech."""
+    events = [event async for event in stream]
+    transferring = any(isinstance(event, ActionToolCall) and event.name == TRANSFER_TO_AICC_TOOL
+                       for event in events)
+    for event in events:
+        if not transferring or isinstance(event, ActionToolCall):
+            yield event
+# Single-purpose trigger for the isolation/debug agent: the worker turns a call to
+# this tool straight into the real device-passkey ceremony (no banking step).
+PASSKEY_START_TOOL = "wema_start_passkey"
+# Human hand-off tool. Agents configured with a `transfer_to_aicc` row advertise it;
+# the worker bridges the caller through the proven aicc_transfer module.
+TRANSFER_TO_AICC_TOOL = "transfer_to_aicc"
 
 
 def explicit_end_call_intent(text: str) -> bool:
@@ -87,10 +119,13 @@ class ActionToolCall:
     arguments: dict[str, Any]
 
 
-@dataclass(frozen=True)
+@dataclass
 class PendingAction:
     call: ActionToolCall
     confirmation_prompt: str
+    # How many times we have repeated this prompt after an unclear reply. Bounded so
+    # an ambiguous caller can never be trapped in a confirmation loop.
+    reasks: int = 0
 
 
 @dataclass(frozen=True)
@@ -119,6 +154,59 @@ def _is_enabled_internal_tool(tool: dict[str, Any] | None, name: str) -> bool:
         "end_call": "builtin://end_call",
     }[name]
     return url == expected
+
+
+def passkey_tool_definitions(context: AgentRuntimeContext) -> list[dict[str, Any]]:
+    """Advertise the dedicated passkey trigger when the agent is configured with it."""
+    tool = _tool_by_name(context, PASSKEY_START_TOOL)
+    if not tool or tool.get("is_active") is False:
+        return []
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": PASSKEY_START_TOOL,
+                "description": (
+                    "Start the caller's device passkey verification (Face ID / fingerprint). "
+                    "Takes no arguments. Use only after the caller agrees to run the passkey check."
+                ),
+                "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
+            },
+        }
+    ]
+
+
+def transfer_tool_definitions(context: AgentRuntimeContext) -> list[dict[str, Any]]:
+    """Advertise the human hand-off tool when the agent is configured with it."""
+    tool = _tool_by_name(context, TRANSFER_TO_AICC_TOOL)
+    if not tool or tool.get("is_active") is False:
+        return []
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": TRANSFER_TO_AICC_TOOL,
+                "description": (
+                    "Immediately connect this caller to a human colleague when requested or "
+                    "when they accept an offered escalation. Their request is sufficient: do "
+                    "not ask for confirmation again or merely offer a transfer. Give a factual "
+                    "reason; never choose a destination. Call without a spoken preamble: the "
+                    "application announces the connection once and reports failure honestly."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "reason_summary": {
+                            "type": "string",
+                            "description": "Short summary of why the caller needs a human agent.",
+                        },
+                    },
+                    "required": ["reason_summary"],
+                    "additionalProperties": False,
+                },
+            },
+        }
+    ]
 
 
 def action_tool_definitions(context: AgentRuntimeContext) -> list[dict[str, Any]]:
@@ -197,7 +285,7 @@ def action_tool_definitions(context: AgentRuntimeContext) -> list[dict[str, Any]
                 },
             }
         )
-    return definitions + bank_tool_definitions(context) + directory_definitions(context) + directory_email_definitions(context)
+    return definitions + bank_tool_definitions(context) + directory_definitions(context) + directory_email_definitions(context) + passkey_tool_definitions(context) + transfer_tool_definitions(context)
 
 
 def parse_tool_arguments(raw: str) -> dict[str, Any]:

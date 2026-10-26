@@ -188,7 +188,8 @@ class BankingTest(unittest.IsolatedAsyncioTestCase):
                                 {**identity(), "voice_auth_required": value})
             try:
                 self.assertTrue(bank.voice_auth_required)
-                self.assertIn("Both voice checks must pass", bank.prompt())
+                self.assertIn("Voice verification runs in the background", bank.prompt())
+                self.assertIn("must pass before any banking action", bank.prompt())
                 self.assertTrue((await bank.execute(self.call()))["auth_required"])
             finally:
                 await bank.close()
@@ -348,7 +349,8 @@ class BankingTest(unittest.IsolatedAsyncioTestCase):
                         elif len(calls) == 2:
                             owner.assertIn("wema_get_balance", {t["function"]["name"] for t in tools})
                             owner.assertIn("never invent values or placeholders", messages[0]["content"])
-                            owner.assertIn("Both voice checks must pass", messages[0]["content"])
+                            owner.assertIn("Voice verification runs in the background", messages[0]["content"])
+                            owner.assertIn("must pass before any banking action", messages[0]["content"])
                             owner.assertIn("test-customer", messages[0]["content"])
                             yield owner.call()
                         else:

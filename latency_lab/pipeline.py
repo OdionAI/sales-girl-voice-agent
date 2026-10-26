@@ -4,11 +4,13 @@ import asyncio
 import base64
 import json
 import math
+import random
 import re
 import struct
 import time
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from datetime import datetime, timezone
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any, Protocol
@@ -26,12 +28,16 @@ from .agentic import (
 from .action_tools import (
     ActionToolCall,
     ActionToolExecutor,
+    PASSKEY_START_TOOL,
+    TRANSFER_TO_AICC_TOOL,
+    TRANSFER_RULES,
     PendingAction,
     action_tool_definitions,
     confirmation_decision,
     confirmation_prompt,
     explicit_end_call_intent,
     localized_action_text,
+    suppress_transfer_preamble,
 )
 from .providers import RLLMClient, RSTTClient, RTTSClient, tts_token_budget
 from .pidgin import EjiroTTSClient, SBPNClient, is_pidgin
@@ -119,6 +125,8 @@ class Attempt:
     speech_control: ActionToolCall | None = None
     speech_control_applied: bool = False
     end_call_requested: bool = False
+    transfer_requested: bool = False
+    transfer_reason_summary: str = ""
     tool_messages: list[dict[str, Any]] = field(default_factory=list)
     turn_id: str | None = None
     audio_sent: bool = False
@@ -145,17 +153,29 @@ class ConversationPipeline:
         self.send = send
         self.http = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=120))
         self.llm = RLLMClient(config, self.http)
+        self.llm.trace = trace
         tts_client = (CoquiTTSClient if language_code(config.tts_language) in LANGUAGES
                       else EjiroTTSClient if is_pidgin(config.tts_language) else RTTSClient)
         self.tts = tts_client(config, self.http)
-        self.stt = (SBPNClient if uses_sbpn(config.tts_language) else RSTTClient)(config, self.on_partial, self.on_final, self._provider_event)
+        # Hint-capable Qwen chat final is scoped: only the listed agents/businesses
+        # get it (empty scope = all). Everything else keeps the realtime final.
+        stt_config = config
+        if config.stt_chat_url and config.stt_chat_scope:
+            scope = set(config.stt_chat_scope)
+            if (agent_context is not None and agent_context.agent_id not in scope
+                    and agent_context.business_id not in scope):
+                stt_config = replace(config, stt_chat_url="", stt_context="")
+        self.stt = (SBPNClient if uses_sbpn(config.tts_language) else RSTTClient)(stt_config, self.on_partial, self.on_final, self._provider_event)
         self.agent_context = agent_context or AgentRuntimeContext()
         self.banking = BankingTools(self.http, self.agent_context, trace.session_id, send, session_identity)
         self.system_prompt = self.agent_context.system_prompt(config.system_prompt) + self.banking.prompt() + CONVERSATION_RULES
         self.system_prompt += language_rules(config.tts_language)
         self.knowledge = KnowledgeClient(config, self.http, self.agent_context)
         self.passkey_demo = None  # Provisioned only by the trusted call worker.
+        self.passkey = None  # Real device-passkey flow; provisioned by the trusted worker.
         self.action_tools = action_tool_definitions(self.agent_context)
+        if any(t.get("function", {}).get("name") == TRANSFER_TO_AICC_TOOL for t in self.action_tools):
+            self.system_prompt += TRANSFER_RULES
         self.directory_enabled = provider_directory.enabled(self.agent_context)
         self.pending_directory = None
         self.directory_email = directory_email.DirectoryEmail(self.agent_context, session_identity, trace.session_id)
@@ -191,6 +211,10 @@ class ConversationPipeline:
         self.pending_action: PendingAction | None = None
         self.transport = transport
         self.state = "idle"
+        # Bank calls running right now (tool id -> state) so the agent always knows
+        # what it is doing, and the background tasks themselves so close() can stop them.
+        self.inflight_tools: dict[str, dict] = {}
+        self._background_tasks: set[asyncio.Task] = set()
         self.turn_id: str | None = None
         self.turn_number = 0
         self.speech_ms = 0.0
@@ -458,6 +482,68 @@ class ConversationPipeline:
             await asyncio.sleep(0.05)
         return self.stt.ready
 
+    def _passkey_workflow(self) -> str:
+        preview = (self.banking.prepared or {}).get("preview") or {}
+        return "airtime" if preview.get("execution_endpoint_id") == "D1" else "transfer"
+
+    def _passkey_tool_configured(self) -> bool:
+        return any(str(tool.get("name") or "") == PASSKEY_START_TOOL
+                   for tool in (self.agent_context.tools or ()))
+
+    def _passkey_feature(self) -> str | None:
+        from .passkey import FEATURE_BY_WORKFLOW
+
+        if not self.banking.prepared:
+            return None
+        return FEATURE_BY_WORKFLOW.get(self._passkey_workflow())
+
+    async def announce(self, text: str) -> None:
+        """Speak one application-generated line outside a caller turn.
+
+        Used for the passkey outcome (Phase B), which arrives after the ceremony
+        turn has ended. It does not consume caller speech and never approves anything.
+        """
+        clean = str(text or "").strip()
+        if not clean or self.state == "ended":
+            return
+        attempt = Attempt(
+            id=f"passkey-{uuid.uuid4().hex[:8]}",
+            hypothesis="",
+            speculative=False,
+            authorized=True,
+            turn_id=self.turn_id or f"turn-{self.turn_number:04d}",
+        )
+        attempt.authorization_event.set()
+        await self._speak_text(attempt, clean, phase="passkey_outcome")
+
+    async def _start_passkey_ceremony(self, attempt: Attempt, operation_id: str, tool_name: str) -> None:
+        """Phase A: start the device passkey ceremony for a money-move attempt."""
+        started = await self.passkey.start(
+            workflow=self._passkey_workflow(),
+            operation_id=str(operation_id or ""),
+            customer_id=str(self.banking.profile.get("customer_id") or ""),
+            display_name=str(self.banking.profile.get("account_name") or ""),
+        )
+        self.pending_action = None
+        self.trace.record(
+            "passkey_ceremony_started",
+            turn_id=self.turn_id,
+            attempt_id=attempt.id,
+            tool_name=tool_name,
+            status=started.get("status", ""),
+        )
+        if started.get("status") == "ceremony_started":
+            # Deterministic policy signal for the client: a passkey ceremony is
+            # pending right now. Set by our code, never by the model, and cleared
+            # when the ceremony resolves (see the outcome handler).
+            await self.banking.emit("odion.auth.action_status", {
+                "status": "required", "usePasskey": True,
+                "tool_name": tool_name, "operation_id": str(operation_id),
+            })
+        await self._speak_text(
+            attempt, started.get("message", ""), phase="passkey_ceremony_started"
+        )
+
     async def _run_opening_greeting(self) -> None:
         await self._wait_for_stt_ready()
         spoken = False
@@ -510,6 +596,8 @@ class ConversationPipeline:
         client_sent_ms: float | None = None,
         client_network_ms: float | None = None,
     ) -> None:
+        if getattr(self, "handoff_active", False) or getattr(self, "handoff_in_progress", False):
+            return
         self.banking.ingest_pcm(pcm)
         if self.state == "recovering_stt":
             return
@@ -896,6 +984,8 @@ class ConversationPipeline:
 
     async def text(self, text: str) -> None:
         """Submit committed chat through the same final/authorization path as speech."""
+        if getattr(self, "handoff_active", False) or getattr(self, "handoff_in_progress", False):
+            return
         text = text.strip()
         if not text:
             return
@@ -1027,7 +1117,15 @@ class ConversationPipeline:
         ]
         try:
             from .passkey_demo import requested as demo_requested, TOOL as DEMO_TOOL
-            if self.passkey_demo is not None and demo_requested(attempt.hypothesis):
+            from .passkey import start_requested as passkey_start_requested
+            if (self.passkey is not None and self._passkey_tool_configured()
+                    and passkey_start_requested(attempt.hypothesis)):
+                # Deterministic trigger for the isolation agent: the caller clearly
+                # agreed, so the worker starts the ceremony itself instead of letting
+                # the model merely claim that it did.
+                attempt.tool_calls = [
+                    ActionToolCall("passkey-" + attempt.id, PASSKEY_START_TOOL, {})]
+            elif self.passkey_demo is not None and demo_requested(attempt.hypothesis):
                 # Selection may be speculative; the common gate below still requires
                 # the committed final, and the handler checks explicit intent again.
                 attempt.tool_calls = [ActionToolCall("demo-" + attempt.id, DEMO_TOOL, {})]
@@ -1088,6 +1186,33 @@ class ConversationPipeline:
                         result = await self.passkey_demo.run(demo_progress)
                         if not attempt.cancelled:
                             await self._speak_text(attempt, result, phase="passkey_demo_result")
+                elif call.name == PASSKEY_START_TOOL and self.passkey is not None:
+                    if attempt.authorized:
+                        # Dedicated single-purpose trigger: the caller agreed, so start
+                        # the real device-passkey ceremony directly — no banking step.
+                        await self._start_passkey_ceremony(
+                            attempt,
+                            str(call.arguments.get("operation_id")
+                                or f"passkey-{uuid.uuid4().hex[:8]}"),
+                            call.name,
+                        )
+                elif call.name == "knowledge_lookup":
+                    # The model can emit an explicit knowledge lookup. Run it against
+                    # the KB — never let it reach the side-effect confirmation path and
+                    # the action executor, which reject it as "not available".
+                    await self._run_knowledge_lookup(attempt, call)
+                elif call.name == TRANSFER_TO_AICC_TOOL:
+                    # The application owns the hand-off: drop the model's speculative
+                    # text, say the connection line once, and run the transfer after the
+                    # committed answer so the result can be reported honestly.
+                    attempt.held_audio.clear()
+                    attempt.answer = ""
+                    attempt.transfer_requested = True
+                    attempt.transfer_reason_summary = str(
+                        call.arguments.get("reason_summary") or "Caller requested a colleague."
+                    )[:240]
+                    await self._speak_text(attempt, "All right, I'll connect you now.",
+                                           phase="transfer_hold")
                 elif call.name in BANK_TOOLS:
                     await self._run_banking_tools(attempt, messages, attempt.tool_calls)
                 elif call.name == "end_call":
@@ -1304,6 +1429,29 @@ class ConversationPipeline:
                 )
                 if attempt.tool_calls:
                     await self._run_banking_tools(attempt, followup_messages, attempt.tool_calls)
+            if (self.config.empty_response_fallback_enabled and attempt.authorized
+                    and self.engagement.speech_enabled and not attempt.speech_control
+                    and not attempt.tool_calls and not str(attempt.answer).strip()
+                    and self.pending_action is None):
+                # The committed turn produced neither words nor an action (e.g. the
+                # provider returned an empty completion that the retries could not
+                # recover). Never leave the caller in silence: say one short line.
+                self.trace.record(
+                    "empty_generation_fallback",
+                    turn_id=self.turn_id,
+                    attempt_id=attempt.id,
+                    reason="committed_turn_yielded_no_text_or_tool_call",
+                )
+                await self._speak_text(
+                    attempt,
+                    localized_action_text(
+                        self.config.empty_response_fallback_text,
+                        "Je suis désolé, je ne peux pas vous aider pour le moment. Veuillez réessayer dans un instant.",
+                        self.agent_context.tts_language_hint,
+                    ),
+                    phase="empty_generation_fallback",
+                )
+                attempt.initial_answer = attempt.answer.strip()
             await self._finish_speech(attempt)
             attempt.audio_complete = True
             if attempt.cancelled:
@@ -1323,7 +1471,31 @@ class ConversationPipeline:
             if attempt.authorized:
                 await self._commit_attempt_text(attempt)
                 await self.send({"type": "tts_end"})
-                if attempt.end_call_requested:
+                if attempt.transfer_requested:
+                    self.handoff_in_progress = True
+                    try:
+                        result = await self.send({
+                            "type": "transfer_to_aicc",
+                            "reason_summary": attempt.transfer_reason_summary,
+                        })
+                        self.handoff_active = (
+                            isinstance(result, dict) and result.get("status") == "connected"
+                        )
+                        if not self.handoff_active:
+                            failure = (
+                                "I'm sorry, I couldn't connect you just now. I'm still here to "
+                                "help, or you can try the customer care number."
+                            )
+                            attempt.answer = ""
+                            await self._speak_text(attempt, failure, phase="transfer_failure")
+                            await self._finish_speech(attempt)
+                            self.conversations.spawn(self.conversations.add_assistant(
+                                failure, turn_id=attempt.turn_id + "-transfer-failed"))
+                            await self.send({"type": "final_assistant_answer", "content": failure})
+                            await self.send({"type": "tts_end"})
+                    finally:
+                        self.handoff_in_progress = False
+                elif attempt.end_call_requested:
                     self.trace.record(
                         "end_call_playout_complete",
                         turn_id=self.last_closed_turn_id or self.turn_id,
@@ -1403,7 +1575,11 @@ class ConversationPipeline:
                 return
             evidence = self.final_text or attempt.hypothesis
             if pending.call.name == "wema_execute_prepared":
-                decision = self._bank_confirmation(evidence)
+                # Natural language, never an exact phrase: the same classifier every
+                # other tool uses understands indirect agreement and revisions, so a
+                # caller is never trapped into repeating a magic word.
+                decision = await confirmation_decision(
+                    self.llm, evidence, pending.call, pending.confirmation_prompt)
             elif pending.call.name == directory_email.TOOL_NAME:
                 decision = await directory_email.confirmation_decision(
                     self.llm, evidence, pending.confirmation_prompt,
@@ -1473,10 +1649,36 @@ class ConversationPipeline:
                             phase="tool_confirmation_unavailable",
                         )
                 else:
-                    await self._speak_text(
-                        attempt, pending.confirmation_prompt,
-                        phase="tool_confirmation_repeated",
-                    )
+                    if pending.reasks < 2:
+                        pending.reasks += 1
+                        await self._speak_text(
+                            attempt, pending.confirmation_prompt,
+                            phase="tool_confirmation_repeated",
+                        )
+                    else:
+                        # Never loop: stop repeating, drop the pending action, and let
+                        # the caller carry on. They can ask for it again any time.
+                        self.pending_action = None
+                        if pending.call.name.startswith("wema_"):
+                            self.banking.prepared = None
+                        await self._speak_text(
+                            attempt,
+                            localized_action_text(
+                                "I won't go ahead with that one — just tell me if you'd like to try it again.",
+                                "Je ne vais pas donner suite à cette demande — dites-moi si vous voulez réessayer.",
+                                self.agent_context.tts_language_hint,
+                            ),
+                            phase="tool_confirmation_abandoned",
+                        )
+            elif (self.passkey is not None and self.banking.prepared
+                    and self._passkey_feature() is not None
+                    and (pending.call.name == "wema_execute_prepared"
+                         or pending.call.name.startswith("wema_prepare_"))):
+                # The caller approved the preview: start the device passkey
+                # ceremony (Phase A). The proof, not the speech, releases the money.
+                await self._start_passkey_ceremony(
+                    attempt, str(self.banking.prepared.get("operation_id", "")), pending.call.name
+                )
             else:
                 self.pending_action = None
                 if pending.call.name in BANK_TOOLS:
@@ -1529,6 +1731,10 @@ class ConversationPipeline:
                                                      and prepared_email.get("alternate") is True),
                             )
                             result = ActionResult(outcome["status"], outcome["message"], outcome["data"], 0)
+                        elif pending.call.name == "knowledge_lookup":
+                            from .action_tools import ActionResult
+                            await self._run_knowledge_lookup(attempt, pending.call)
+                            result = ActionResult("success", "", {}, 0)
                         else:
                             result = await self.action_executor.execute(pending.call)
                         body = {"status": result.status, "message": result.message, "data": result.data}
@@ -1609,6 +1815,8 @@ class ConversationPipeline:
                 "tool": self.pending_action.call.name,
                 "arguments": self.pending_action.call.arguments,
             }
+        if self.inflight_tools:
+            state["tools_running_now"] = list(self.inflight_tools.values())
         if state:
             messages.append({"role": "user", "content": (
                 "Current application task state (reference, not caller confirmation):\n" + json.dumps(state)
@@ -1689,7 +1897,7 @@ class ConversationPipeline:
         if (messages is not None and body["status"] == "needs_input"
                 and self.directory_email.filters is None and self.directory_email.has_contact()):
             messages.extend([request, reply])
-            messages.append({"role": "system", "content": "The caller requested a hospital email before a search was selected. First call lookup_provider_directory using the plan, provider and location already supplied by the caller. Do not ask again for details they already gave. After a successful search, send the requested list immediately; do not offer it or ask for permission again. If essential details are missing, ask only for those details."})
+            await self._append_system_guidance(messages, "The caller requested a hospital email before a search was selected. First call lookup_provider_directory using the plan, provider and location already supplied by the caller. Do not ask again for details they already gave. After a successful search, send the requested list immediately; do not offer it or ask for permission again. If essential details are missing, ask only for those details.")
             followups = await self._stream_llm_and_tts(attempt, messages,
                 phase="directory_email_search", tools=provider_directory.definitions(self.agent_context))
             if followups and followups[0].name == provider_directory.TOOL_NAME:
@@ -1795,7 +2003,7 @@ class ConversationPipeline:
             return
         messages.extend([request, reply])
         if remote:
-            messages.append({"role": "system", "content": "You have already said you are checking. Now give the result or clarification directly. Do not say directory, spreadsheet, database or tool. If the source failed, say checking is temporarily unavailable, not that the caller gave a wrong name. If offering nearby options, state their actual areas and keep the same plan. Do not claim a closest distance or journey time."})
+            await self._append_system_guidance(messages, "You have already said you are checking. Now give the result or clarification directly. Do not say directory, spreadsheet, database or tool. If the source failed, say checking is temporarily unavailable, not that the caller gave a wrong name. If offering nearby options, state their actual areas and keep the same plan. Do not claim a closest distance or journey time.")
         if attempt.answer:
             attempt.answer = attempt.answer.rstrip() + " "
         followups = await self._stream_llm_and_tts(
@@ -1814,8 +2022,27 @@ class ConversationPipeline:
             for call in calls:
                 if call.name not in BANK_TOOLS:
                     continue
+                if call.name == "wema_execute_prepared" and self.passkey is not None:
+                    # Money-moves are approved on the device, not by posting to the
+                    # bank. Intercept at the point the tool is actually called, so
+                    # the ceremony starts whether or not the confirmation turn ran.
+                    if self.banking.prepared and self._passkey_feature() is not None:
+                        await self._start_passkey_ceremony(
+                            attempt, str(call.arguments.get("operation_id", "")), call.name)
+                        return
+                    self.trace.record(
+                        "passkey_ceremony_skipped",
+                        turn_id=self.turn_id, attempt_id=attempt.id, tool_name=call.name,
+                        reason="no_prepared_operation" if not self.banking.prepared else "no_feature",
+                    )
                 if call.name == "wema_execute_prepared" and self.banking.prepared:
                     await self._request_bank_confirmation(attempt)
+                    return
+                if self.config.background_tools:
+                    # Never block the conversation on a bank call: acknowledge the
+                    # request naturally right now, then deliver the outcome when it
+                    # lands. The caller can keep talking in the meantime.
+                    await self._dispatch_background_tool(attempt, call)
                     return
                 body = await self.engagement.run_tool(
                     attempt, call, lambda call=call: self.banking.execute(
@@ -1888,6 +2115,163 @@ class ConversationPipeline:
                 return
         await self._speak_text(attempt, "Please tell me which request you would like to handle next.", phase="tool_limit")
 
+    async def _natural_line(self, kind: str, context: dict[str, Any]) -> str:
+        """One short, contextual line written by the model — varied, never canned.
+
+        Used for tool acknowledgements, completions and failures so the agent sounds
+        like itself at that moment instead of repeating a fixed phrase.
+        """
+        policy = (
+            "You are mid-call with a caller. Write ONE short natural sentence (at most "
+            "24 words) for the situation described in the JSON. Sound like a person, "
+            "vary your wording, never use a stock phrase. No tool names, no markdown, "
+            "no promises of success, no invented facts, balances or ETAs."
+        )
+        try:
+            async with asyncio.timeout(6):
+                text = "".join([piece async for piece in self.llm.stream(
+                    [{"role": "system", "content": self.system_prompt + "\n" + policy},
+                     {"role": "user", "content": json.dumps({"situation": kind, **context}, default=str)}],
+                    max_tokens=60, temperature=0.4) if isinstance(piece, str)])
+            text = " ".join(str(text).split()).strip().strip('"')
+            if text and len(text.split()) <= 32 and not any(ch in text for ch in "{}<>"):
+                return text
+        except Exception:
+            self.trace.record("natural_line_failed", reason=kind)
+        # Only if the model is unavailable; rotate so it is not the same line twice.
+        return random.choice({
+            "acknowledge_tool_start": ["Let me check that for you.", "One moment, I'll look into that.",
+                                       "Alright, checking that now.", "Let me take a look at that."],
+            "report_result": ["That's done.", "I've got that for you.", "Here's what I found."],
+            "ask_missing_detail": ["I just need one more detail from you."],
+            "tool_failed_offer_ticket": ["I couldn't get that through just now — I can raise a ticket so the team follows up."],
+            "ask_confirmation": ["Shall I go ahead?"],
+        }.get(kind, ["One moment."]))
+
+    async def _dispatch_background_tool(self, attempt: Attempt, call) -> None:
+        """Acknowledge naturally, start the bank call in the background, return at once."""
+        # Acknowledge the request. When the engagement is on it writes this line
+        # itself (contextually, at tool start) so we must not duplicate it; only
+        # fall back to our own line when the engagement is disabled.
+        if not self.engagement.enabled:
+            ack = await self._natural_line("acknowledge_tool_start",
+                                           {"tool": call.name, "arguments": call.arguments})
+            if ack:
+                await self._speak_text(attempt, ack, phase="tool_acknowledged")
+        self.inflight_tools[call.id] = {"tool": call.name, "arguments": dict(call.arguments),
+                                        "started_utc": datetime.now(timezone.utc).isoformat()}
+        self.trace.record("background_tool_started", turn_id=self.turn_id,
+                          attempt_id=attempt.id, tool_name=call.name)
+
+        async def run() -> None:
+            try:
+                body = await self.banking.execute(
+                    call, on_result=lambda b: self._retain_tool_result(attempt, call, b))
+            except Exception as exc:
+                body = {"status": "failed", "message": f"{type(exc).__name__}", "data": {}}
+            finally:
+                self.inflight_tools.pop(call.id, None)
+                # Stop interim updates for this tool; the result is delivered below.
+                self.engagement.finish_operation(op)
+            self.trace.record("background_tool_finished", turn_id=self.turn_id,
+                              attempt_id=attempt.id, tool_name=call.name,
+                              status=str((body or {}).get("status", "")))
+            try:
+                await self._deliver_tool_result(call, body or {})
+            except Exception as exc:  # never lose the call because delivery failed
+                self.trace.record("background_tool_delivery_failed",
+                                  tool_name=call.name, reason=type(exc).__name__)
+
+        task = asyncio.create_task(run(), name=f"bg-tool-{call.id}")
+        # Let the engagement see the tool while it runs, so it can say something
+        # natural after a few seconds of silence instead of leaving dead air.
+        op = self.engagement.register_operation(call, attempt, task)
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
+
+    async def _deliver_tool_result(self, call, body: dict) -> None:
+        """Speak the outcome of a background tool — naturally, and never a dead end."""
+        status = str(body.get("status") or "")
+        if call.name.startswith("wema_prepare_") and self.banking.prepared:
+            await self._announce_bank_confirmation()
+            return
+        if status in {"ok", "success", "completed"}:
+            text = await self._natural_line("report_result", {
+                "tool": call.name, "caller_asked": dict(call.arguments),
+                "result_message": body.get("message"), "result_data": body.get("data")})
+        elif status == "needs_input":
+            text = await self._natural_line("ask_missing_detail", {
+                "tool": call.name, "missing": body.get("message")})
+        else:
+            # Graceful failure: say what happened and offer the follow-up path.
+            text = await self._natural_line("tool_failed_offer_ticket", {
+                "tool": call.name, "message": body.get("message")})
+        if text:
+            await self.announce(text)
+
+    async def _run_knowledge_lookup(self, attempt: Attempt, call: ActionToolCall) -> None:
+        """Run an explicit knowledge lookup the model asked for, then answer from it.
+
+        The model can emit a `knowledge_lookup` call; it must run against the knowledge
+        service, never through the side-effect confirmation + action-executor path
+        (which rejects it as "not available from this agent right now").
+        """
+        query = str(call.arguments.get("query") or self.final_text or attempt.hypothesis).strip()
+        self.trace.record(
+            "knowledge_lookup_executed",
+            turn_id=self.turn_id,
+            attempt_id=attempt.id,
+            query=query,
+            knowledge_base_count=len(self.agent_context.knowledge_base_ids),
+        )
+        result = await self.knowledge.search(query)
+        self._retain_tool_result(
+            attempt, call, {"status": result.status, "context": result.prompt_context()})
+        knowledge_prompt = self.agent_context.knowledge_followup_prompt(
+            self.config.system_prompt, result.prompt_context()
+        ) + CONVERSATION_RULES
+        knowledge_prompt += language_rules(self.config.tts_language)
+        followup_messages = [
+            {"role": "system", "content": knowledge_prompt},
+            *self._recent_history(attempt),
+            {"role": "user", "content": self.final_text or attempt.hypothesis},
+        ]
+        attempt.answer = ""
+        await self._stream_llm_and_tts(
+            attempt, followup_messages, phase="knowledge_followup", tools=None)
+
+    async def _append_system_guidance(self, messages: list[dict[str, Any]], guidance: str) -> None:
+        """Add guidance WITHOUT placing a system message mid-conversation.
+
+        The provider rejects a system message that is not at the beginning
+        ("System message must be at the beginning."), which used to make every
+        tool follow-up fail with HTTP 400 and leave the agent silent.
+        """
+        if messages and isinstance(messages[0], dict) and messages[0].get("role") == "system":
+            messages[0] = {
+                **messages[0],
+                "content": str(messages[0].get("content") or "") + "\n\n" + guidance,
+            }
+        else:
+            messages.insert(0, {"role": "system", "content": guidance})
+
+    async def _announce_bank_confirmation(self) -> None:
+        data = self.banking.prepared
+        preview = data["preview"]
+        digits = lambda value: ". ".join(str(value))
+        if "recipient_account" in preview:
+            details = (f"Transfer {preview['amount']} naira to {preview['recipient_name']}, "
+                       f"{preview['bank_name']}, account {digits(preview['recipient_account'])}.")
+        else:
+            details = (f"{preview['package_name']} on {preview['network']}, "
+                       f"for {digits(preview['phone_number'])}.")
+        ask = await self._natural_line("ask_confirmation", {"details": details})
+        prompt = f"{details} {ask}".strip()
+        self.pending_action = PendingAction(
+            ActionToolCall(f"call-{uuid.uuid4().hex[:12]}", "wema_execute_prepared",
+                           {"operation_id": data["operation_id"]}), prompt)
+        await self.announce(prompt)
+
     async def _request_bank_confirmation(self, attempt: Attempt) -> None:
         data = self.banking.prepared
         preview = data["preview"]
@@ -1896,7 +2280,7 @@ class ConversationPipeline:
             details = (f"Transfer {preview['amount']} naira to {preview['recipient_name']}, "
                        f"{preview['bank_name']}, account {digits(preview['recipient_account'])}.")
         else:
-            details = (f"Buy {preview['package_name']} on {preview['network']} for {preview['amount']} naira, "
+            details = (f"{preview['package_name']} on {preview['network']}, "
                        f"for {digits(preview['phone_number'])}.")
         prompt = details + " Do you confirm?"
         self.pending_action = PendingAction(
@@ -1929,7 +2313,15 @@ class ConversationPipeline:
                            and not self.engagement.speech_enabled else {})
             if getattr(self, "directory_enabled", False) and phase in {"prompt_first", "directory_email_search"} and self.engagement.speech_enabled:
                 gate_choice = {"tool_choice": "required"}
-            async for event in self.llm.stream(messages, tools=tools, **gate_choice):
+            stream = self.llm.stream(messages, tools=tools, **gate_choice)
+            if any(
+                (tool.get("function", {}) or {}).get("name") == TRANSFER_TO_AICC_TOOL
+                for tool in (tools or [])
+            ):
+                # Do not let speculative speech precede the transfer decision: the
+                # application announces the connection once, then reports the result.
+                stream = suppress_transfer_preamble(stream)
+            async for event in stream:
                 if attempt.cancelled:
                     raise asyncio.CancelledError
                 if isinstance(event, ActionToolCall):
@@ -2326,6 +2718,11 @@ class ConversationPipeline:
     async def close(self) -> None:
         self.conversations.mark_disconnected()
         await self.engagement.close()
+        for task in list(self._background_tasks):
+            task.cancel()
+        if self._background_tasks:
+            await asyncio.gather(*list(self._background_tasks), return_exceptions=True)
+        self.inflight_tools.clear()
         tasks = [task for task in (self._memory_loop_task, self._compaction_task) if task]
         for task in tasks:
             task.cancel()

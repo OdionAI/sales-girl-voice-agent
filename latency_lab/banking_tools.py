@@ -20,7 +20,8 @@ from jsonschema import Draft202012Validator, SchemaError
 BANK_TOOLS = frozenset({
     "wema_get_balance", "wema_get_transactions", "wema_list_data_plans",
     "wema_list_transfer_banks", "wema_prepare_data_purchase",
-    "wema_prepare_transfer", "wema_execute_prepared",
+    "wema_prepare_airtime_purchase", "wema_prepare_transfer",
+    "wema_execute_prepared",
 })
 AUTH_FIELDS = frozenset({"authenticated", "auth_status", "skip_auth", "voice_auth_authorized"})
 
@@ -76,7 +77,9 @@ class BankingTools:
         self.identity = identity or {}
         # Only verified dashboard claims reach this constructor. Missing policy
         # keeps both voice checks; raw browser/model flags are never consulted.
-        self.voice_auth_required = self.identity.get("voice_auth_required") is not False
+        # VOICE_AUTH_DISABLED=1 is the operator kill switch for non-auth testing.
+        auth_disabled = str(os.getenv("VOICE_AUTH_DISABLED", "")).strip().lower() in {"1", "true", "yes", "on"}
+        self.voice_auth_required = (self.identity.get("voice_auth_required") is not False) and not auth_disabled
         self.records = bank_records(context)
         profile = self.identity.get("wema_context")
         self.profile = profile if isinstance(profile, dict) else {}
@@ -90,6 +93,12 @@ class BankingTools:
         self.check_lock = asyncio.Lock()
         self.tasks: set[asyncio.Task] = set()
         self.prepared: dict | None = None
+        # Periodic background voice re-checks. The immediate first check comes
+        # from utterance(); this monitor re-verifies every interval thereafter so
+        # a later mismatch cannot slip a transaction through.
+        self.auth_interval = float(os.getenv("VOICE_AUTH_INTERVAL_SECONDS", "12") or 12)
+        self.auth_monitor: asyncio.Task | None = None
+        self.last_reason = ""
 
     async def emit(self, topic: str, payload: dict) -> None:
         await self.send({"type": topic, "payload": {"type": topic, **payload}})
@@ -111,6 +120,7 @@ class BankingTools:
             return
         self.audio_buffer.extend(pcm)
         del self.audio_buffer[:-8 * 16000 * 2]
+        self._ensure_monitor()
 
     def utterance(self, pcm: bytes) -> None:
         if not self.voice_auth_required:
@@ -123,6 +133,41 @@ class BankingTools:
             task = asyncio.create_task(self.check_session(self.generation, self.clip))
             self.tasks.add(task)
             task.add_done_callback(self.tasks.discard)
+
+    def _ensure_monitor(self) -> None:
+        # Continuous verification: start once the caller's audio is flowing.
+        if not self.voice_auth_required or not self.records or not self.identity:
+            return
+        if self.auth_monitor is not None and not self.auth_monitor.done():
+            return
+        self.auth_monitor = asyncio.create_task(self._voice_auth_monitor())
+        self.tasks.add(self.auth_monitor)
+        self.auth_monitor.add_done_callback(self.tasks.discard)
+
+    async def _voice_auth_monitor(self) -> None:
+        interval = max(3.0, float(self.auth_interval or 12))
+        min_bytes = int(1.2 * 16000 * 2)
+        while True:
+            await asyncio.sleep(interval)
+            clip = bytes(self.audio_buffer)
+            if len(clip) < min_bytes:
+                continue
+            await self._periodic_check(clip)
+
+    async def _periodic_check(self, clip: bytes) -> None:
+        result = await self.compare(clip)
+        matched = result.get("matched") is True
+        async with self.check_lock:
+            previous = self.session_status
+            self.session_status = "verified" if matched else "failed"
+            self.last_reason = str(result.get("reason") or "")
+            changed = self.session_status != previous
+        if changed or not matched:
+            await self.emit("odion.auth.status", {
+                "status": self.session_status,
+                "authenticated": self.session_status == "verified",
+                "reason": self.last_reason, "source": "interval",
+            })
 
     async def compare(self, clip: bytes) -> dict:
         if not self.owner or not self.sidecar or len(clip) < 1.2 * 16000 * 2:
@@ -155,9 +200,10 @@ class BankingTools:
             result = await self.compare(clip)
             self.checked_generation = generation
             self.session_status = "verified" if result.get("matched") is True else "failed"
+            self.last_reason = str(result.get("reason") or "")
             await self.emit("odion.auth.status", {
                 "status": self.session_status, "authenticated": self.session_status == "verified",
-                "reason": result.get("reason", ""),
+                "reason": self.last_reason,
             })
 
     async def authorize(self) -> bool:
@@ -239,8 +285,9 @@ class BankingTools:
                     or confirmed_operation != args["operation_id"]):
                 return failed("The latest preview must be confirmed in a separate caller turn.")
         if not await self.authorize():
-            return failed("Voice verification has not passed both checks. Please speak again so I can retry.",
-                          auth_required=True, auth_status=self.session_status)
+            return failed("Voice verification has not passed, so this transaction cannot be authorised on this call.",
+                          auth_required=True, auth_status=self.session_status,
+                          auth_reason=self.last_reason)
         record = self.records[call.name]
         headers = {str(k): str(v) for k, v in (record.get("headers") or {}).items()}
         headers.update({
@@ -274,7 +321,11 @@ class BankingTools:
         if not self.records:
             return ""
         voice_policy = (
-            "Both voice checks must pass. If verification fails ask for another spoken utterance. "
+            "Voice verification runs in the background and must pass before any banking "
+            "action; never mention the check itself. If it has not passed, or has failed, "
+            "do not carry out or claim the transaction: calmly tell the caller you are not "
+            "authorised to handle this transaction on this call, offer general help "
+            "instead, and do not keep asking them to repeat themselves. "
             if self.voice_auth_required else
             "For this demo session, the application has disabled voice verification. "
             "This session policy overrides any generic instruction requiring voice checks. "

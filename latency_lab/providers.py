@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import codecs
+import hashlib
 import io
 import json
 import re
@@ -103,6 +104,7 @@ class RSTTClient:
         self._drop_hypothesis = False
         self._batch_tasks: set[asyncio.Task[None]] = set()
         self._realtime_skip_reported = False
+        self._force_realtime_final_once = False
         self._closing = False
         self.usage = None
 
@@ -112,6 +114,10 @@ class RSTTClient:
 
     @property
     def uses_realtime_final(self) -> bool:
+        # When a hint-capable chat final is configured the realtime socket is
+        # partials-only and the authoritative text comes from _transcribe_chat.
+        if self.config.stt_chat_url:
+            return False
         return uses_realtime_stt_final(self.config)
 
     async def warmup(self, duration_ms: float = 800.0) -> bool:
@@ -258,6 +264,21 @@ class RSTTClient:
     async def commit(self, pcm16: bytes) -> None:
         """Finish the current utterance on the provider that can actually decode it."""
         audio = bytes(pcm16)
+        if self.config.stt_chat_url:
+            self.on_provider_event(
+                "stt_chat_final_requested",
+                {
+                    "pcm_bytes": len(audio),
+                    "audio_ms": round(len(audio) / 2 / 16000 * 1000, 1),
+                    "has_context": bool(self.config.stt_context),
+                },
+            )
+            task = asyncio.create_task(
+                self._run_authoritative_chat(audio), name="rvc-lab-stt-chat-final"
+            )
+            self._batch_tasks.add(task)
+            task.add_done_callback(self._batch_tasks.discard)
+            return
         if self.uses_realtime_final:
             await self._commit_realtime_final(audio)
             return
@@ -448,6 +469,130 @@ class RSTTClient:
                 },
             )
 
+    async def _run_authoritative_chat(self, pcm16: bytes) -> None:
+        """Committed final via the hint-capable Qwen chat endpoint.
+
+        The realtime socket is quiesced first (it shares one Qwen/vLLM engine),
+        then reopened for the next turn. If the chat call yields nothing we fall
+        back to the realtime answer for this turn so a turn is never lost.
+        """
+        async with self._inference_mode_lock:
+            self.on_provider_event(
+                "stt_inference_handoff_start",
+                {"from": "realtime", "to": "chat", "reason": "authoritative_final"},
+            )
+            await self._quiesce_realtime_locked()
+            produced = False
+            try:
+                produced = await self._transcribe_chat(pcm16)
+            finally:
+                if not self._closing:
+                    try:
+                        await self._open_socket_locked()
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as exc:
+                        self.on_provider_event(
+                            "stt_realtime_resume_degraded",
+                            {"error": str(exc), "error_type": type(exc).__name__},
+                        )
+            if not produced and not self._closing:
+                self.on_provider_event(
+                    "stt_chat_final_fallback_realtime", {"reason": "chat_final_empty_or_failed"},
+                )
+                ws = self.ws
+                if ws and not ws.closed:
+                    self._reset_decoder_state()
+                    step = 16000 * 2 // 5
+                    for offset in range(0, len(pcm16), step):
+                        await ws.send_json({
+                            "type": "input_audio_buffer.append",
+                            "audio": base64.b64encode(pcm16[offset:offset + step]).decode("ascii"),
+                        })
+                    self._force_realtime_final_once = True
+                    await ws.send_json({"type": "input_audio_buffer.commit", "final": True})
+
+    async def _transcribe_chat(self, pcm16: bytes) -> bool:
+        started = time.monotonic()
+        if not pcm16:
+            self.on_provider_event(
+                "stt_chat_error",
+                {"error": "local utterance buffer was empty", "error_type": "EmptyAudio"},
+            )
+            return False
+        if not self.session or self.session.closed:
+            self.session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=None))
+        wav_audio = pcm16_wav(pcm16)
+        messages: list[dict[str, Any]] = []
+        if self.config.stt_context:
+            messages.append({"role": "system", "content": self.config.stt_context})
+        messages.append({
+            "role": "user",
+            "content": [{
+                "type": "input_audio",
+                "input_audio": {
+                    "data": base64.b64encode(wav_audio).decode("ascii"),
+                    "format": "wav",
+                },
+            }],
+        })
+        body = {
+            "model": self.config.stt_chat_model,
+            "messages": messages,
+            "max_tokens": 256,
+            "temperature": 0.0,
+        }
+        self.on_provider_event(
+            "stt_chat_request_start",
+            {
+                "url": self.config.stt_chat_url,
+                "wav_bytes": len(wav_audio),
+                "context": bool(self.config.stt_context),
+            },
+        )
+        try:
+            timeout = aiohttp.ClientTimeout(total=self.config.stt_batch_timeout_seconds)
+            async with self.session.post(
+                self.config.stt_chat_url, json=body, timeout=timeout
+            ) as response:
+                response.raise_for_status()
+                if self.usage is not None:
+                    self.usage.stt_submitted(len(pcm16))
+                payload = await response.json()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self.on_provider_event(
+                "stt_chat_error",
+                {
+                    "error": str(exc),
+                    "error_type": type(exc).__name__,
+                    "elapsed_ms": round((time.monotonic() - started) * 1000, 1),
+                },
+            )
+            return False
+        content = ""
+        if isinstance(payload, dict):
+            try:
+                content = payload["choices"][0]["message"]["content"]
+            except (KeyError, IndexError, TypeError):
+                content = str(payload.get("text") or "")
+        final = clean_transcript(content or "")
+        elapsed_ms = (time.monotonic() - started) * 1000
+        self.on_provider_event(
+            "stt_chat_final",
+            {"elapsed_ms": round(elapsed_ms, 1), "text": final, "authoritative": True},
+        )
+        if final:
+            await self.on_final(final)
+            return True
+        self.on_provider_event(
+            "stt_chat_error",
+            {"error": "chat endpoint returned an empty transcript", "error_type": "EmptyTranscript",
+             "elapsed_ms": round(elapsed_ms, 1)},
+        )
+        return False
+
     async def _receive(self, ws: aiohttp.ClientWebSocketResponse) -> None:
         try:
             async for msg in ws:
@@ -492,7 +637,9 @@ class RSTTClient:
                     self.accumulated = ""
                     self._in_language_preamble = False
                     self._drop_hypothesis = False
-                    if self.uses_realtime_final:
+                    authoritative = self.uses_realtime_final or self._force_realtime_final_once
+                    self._force_realtime_final_once = False
+                    if authoritative:
                         self.on_provider_event(
                             "stt_realtime_final",
                             {"text": final, "authoritative": True},
@@ -592,6 +739,28 @@ class RLLMClient:
         self.config = config
         self.session = session
         self.usage = None
+        self.trace = None
+
+    @staticmethod
+    def _normalize_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Keep system content at index 0 only.
+
+        Some call sites added guidance as a system message mid-conversation; the
+        provider answers 400 ("System message must be at the beginning."), which
+        left the agent silent right after a tool result. Fold any such message
+        into the leading system message so the request stays valid.
+        """
+        if not any(m.get("role") == "system" for m in messages[1:]):
+            return messages
+        system_parts: list[str] = []
+        rest: list[dict[str, Any]] = []
+        for message in messages:
+            if message.get("role") == "system":
+                system_parts.append(str(message.get("content") or ""))
+            else:
+                rest.append(message)
+        merged = "\n\n".join(part for part in system_parts if part)
+        return ([{"role": "system", "content": merged}] if merged else []) + rest
 
     async def stream(
         self,
@@ -604,7 +773,7 @@ class RLLMClient:
     ) -> AsyncIterator[str | ActionToolCall]:
         payload = {
             "model": self.config.llm_model,
-            "messages": messages,
+            "messages": self._normalize_messages(messages),
             "stream": True,
             "stream_options": {"include_usage": True},
             "temperature": temperature,
@@ -621,10 +790,14 @@ class RLLMClient:
             payload["tools"] = tools
             payload["tool_choice"] = tool_choice
         headers = {"Authorization": f"Bearer {self.config.llm_api_key}"}
+        max_empty_retries = max(0, int(self.config.llm_empty_retries))
+        max_attempts = len(self._retry_delays_seconds) + 1 + max_empty_retries
+        empty_retries_used = 0
         pending_calls: dict[int, dict[str, str]] = {}
         emitted_output = False
-        for request_index in range(len(self._retry_delays_seconds) + 1):
+        for request_index in range(max_attempts):
             pending_calls = {}
+            produced_this_request = False
             usage_request = self.usage.llm_started() if self.usage is not None else None
             try:
                 async with self.session.post(
@@ -644,7 +817,42 @@ class RLLMClient:
                     decoder = codecs.getincrementaldecoder("utf-8")()
                     spoken = SpokenTextFilter()
                     done = False
-                    async for raw_line in response.content.iter_any():
+                    # Guard against dead air: while no usable output has arrived, read
+                    # with a deadline so a stalling provider is abandoned quickly and the
+                    # caller hears the graceful fallback instead of ~20s of silence.
+                    first_output_deadline = asyncio.get_running_loop().time() + max(
+                        0.2, float(self.config.llm_first_output_timeout_seconds)
+                    )
+                    stream_iter = response.content.iter_any().__aiter__()
+                    while True:
+                        if produced_this_request or done:
+                            read_timeout = None
+                        else:
+                            read_timeout = max(
+                                0.05,
+                                first_output_deadline - asyncio.get_running_loop().time(),
+                            )
+                        try:
+                            if read_timeout is None:
+                                raw_line = await stream_iter.__anext__()
+                            else:
+                                raw_line = await asyncio.wait_for(
+                                    stream_iter.__anext__(), read_timeout
+                                )
+                        except StopAsyncIteration:
+                            break
+                        except asyncio.TimeoutError:
+                            if self.trace is not None:
+                                self.trace.record(
+                                    "llm_first_output_timeout",
+                                    reason="no_output_within_deadline",
+                                    seconds=round(
+                                        float(self.config.llm_first_output_timeout_seconds), 2
+                                    ),
+                                    attempt=request_index + 1,
+                                    model=self.config.llm_model,
+                                )
+                            break
                         buffered += decoder.decode(raw_line)
                         lines = buffered.split("\n")
                         buffered = lines.pop()
@@ -682,9 +890,35 @@ class RLLMClient:
                                 text = spoken.push(str(delta))
                                 if text:
                                     emitted_output = True
+                                    produced_this_request = True
                                     yield text
                         if done:
                             break
+                # A 200 response that carried neither spoken text nor a tool call is
+                # an empty completion. Re-issue the request a bounded number of times
+                # before letting the caller-facing fallback take over.
+                got_tool_calls = any(str(call.get("name") or "") for call in pending_calls.values())
+                if not produced_this_request and not got_tool_calls:
+                    if empty_retries_used < max_empty_retries:
+                        empty_retries_used += 1
+                        if self.trace is not None:
+                            self.trace.record(
+                                "llm_empty_completion_retry",
+                                reason="provider_returned_no_text_or_tool_call",
+                                attempt=empty_retries_used,
+                                max_retries=max_empty_retries,
+                                model=self.config.llm_model,
+                            )
+                        await asyncio.sleep(self.config.llm_empty_retry_delay_seconds)
+                        continue
+                    if self.trace is not None and max_empty_retries:
+                        self.trace.record(
+                            "llm_empty_completion_exhausted",
+                            reason="provider_still_empty_after_retries",
+                            attempts=empty_retries_used + 1,
+                            max_retries=max_empty_retries,
+                            model=self.config.llm_model,
+                        )
                 break
             except (aiohttp.ClientConnectionError, asyncio.TimeoutError):
                 if emitted_output or request_index >= len(self._retry_delays_seconds):
@@ -706,6 +940,19 @@ def tts_token_budget(text: str) -> int:
         len(digits) - 1 for digits in re.findall(r"[0-9]+", text)
     )
     return max(24, min(360, int((spoken_words / 2.5 + 0.5) * 12.5) + 8))
+
+
+def resolve_tts_seed(config: LabConfig) -> str:
+    """Return the seed to pin a TTS voice.
+
+    An explicit configured seed wins; otherwise derive a stable per-voice seed
+    from the voice id so the voice never drifts between generations.
+    """
+    seed = str(getattr(config, "tts_seed", "") or "").strip()
+    voice = str(getattr(config, "tts_voice", "") or "").strip()
+    if not seed and voice:
+        seed = str(int(hashlib.sha256(voice.encode("utf-8")).hexdigest()[:8], 16))
+    return seed
 
 
 class RTTSClient:
@@ -747,6 +994,10 @@ class RTTSClient:
                 task_type="VoiceDesign",
                 instructions="A warm, clear female conversational voice. Natural pacing and no exaggerated emotion.",
             )
+        # Pin the voice so it does not drift between generations.
+        seed = resolve_tts_seed(self.config)
+        if seed:
+            payload["seed"] = seed
         response = await self.session.post(self.config.tts_url, json=payload)
         response.raise_for_status()
         if self.usage is not None:

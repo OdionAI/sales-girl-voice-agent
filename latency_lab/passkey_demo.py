@@ -37,11 +37,14 @@ def requested(text: str) -> bool:
 
 def enabled(identity: dict) -> bool:
     """Only authenticated server dispatch can select an enabled agent and test subject."""
-    businesses = set(os.getenv("ATTENTIVE_PASSKEY_DEMO_BUSINESS_IDS", "").split(","))
-    agents = set(os.getenv("ATTENTIVE_PASSKEY_DEMO_AGENT_IDS", "").split(","))
-    subjects = set(os.getenv("ATTENTIVE_PASSKEY_DEMO_SUBJECTS", "").split(","))
-    return bool(identity.get("business_id") in businesses and identity.get("config_agent_id") in agents
-                and identity.get("end_user_id") in subjects)
+    def canon(value) -> str:
+        return str(value or "").strip().lower().replace("-", "")
+
+    businesses = {canon(x) for x in os.getenv("ATTENTIVE_PASSKEY_DEMO_BUSINESS_IDS", "").split(",") if x.strip()}
+    agents = {canon(x) for x in os.getenv("ATTENTIVE_PASSKEY_DEMO_AGENT_IDS", "").split(",") if x.strip()}
+    subjects = {canon(x) for x in os.getenv("ATTENTIVE_PASSKEY_DEMO_SUBJECTS", "").split(",") if x.strip()}
+    return bool(canon(identity.get("business_id")) in businesses and canon(identity.get("config_agent_id")) in agents
+                and canon(identity.get("end_user_id")) in subjects)
 
 
 @dataclass

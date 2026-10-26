@@ -51,7 +51,9 @@ Keep the previous image tag and the exact `-f` chain. Rollback = recreate `voice
 previous chain (or the earlier override). Do not prune rollback images.
 
 ## Automated deploy (pending)
-`.github/workflows/lagos-voice-release.yml` builds + labels + smoke-tests the image on every
-push to `main`. The **deploy** job is gated and disabled until the Lagos SSH credentials are
-stored as repository/environment secrets (the jump host's key). Until then, use the manual
-recipe above.
+There is currently no Lagos deploy workflow in `.github/workflows/`. The existing
+`deploy.yml` targets the older Huawei node-B voice workers. A future Lagos
+workflow must build from a reviewed Git commit, preserve the active Compose
+configuration, verify the registered worker and call path, and retain the prior
+image for rollback. Until that workflow is installed and verified, use the
+manual release procedure above.

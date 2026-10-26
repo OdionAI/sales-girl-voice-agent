@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import aiohttp
 import asyncio
 import base64
 import json
@@ -19,9 +20,11 @@ from .agentic import load_agent_runtime_context, session_routing_context
 from .config import apply_runtime_overrides, lab_config_from_environ, load_platform_env
 from .pipeline import ConversationPipeline
 from .passkey_demo import DemoSession, TOPIC as PASSKEY_TOPIC, enabled as passkey_demo_enabled
+from .passkey import PasskeyFlow, TOPIC as PASSKEY_FLOW_TOPIC, enabled as passkey_flow_enabled
 from .input_noise import InputNoiseFilter
 from .report import generate_report
 from .session_identity import verify_session_token
+from .aicc_transfer import bridge_call
 from .sip_bootstrap import resolve_route as resolve_sip_route, participant_identity as sip_participant_identity
 from .trace import TraceRecorder
 from .live_metrics import LiveMetricPublisher
@@ -74,12 +77,14 @@ class LiveKitPCMTransport:
         sample_rate: int = 24000,
         local_participant: Any | None = None,
         end_call_handler: Callable[[str], Awaitable[None]] | None = None,
+        transfer_handler: Callable[[dict[str, Any]], Awaitable[dict]] | None = None,
     ) -> None:
         self.source = source
         self.trace = trace
         self.sample_rate = sample_rate
         self.local_participant = local_participant
         self.end_call_handler = end_call_handler
+        self.transfer_handler = transfer_handler
         self.pipeline: ConversationPipeline | None = None
         self.playing = False
         self.frame_count = 0
@@ -159,6 +164,10 @@ class LiveKitPCMTransport:
             if kind == "lab_ready":
                 await self.set_state("listening")
             return
+        if kind == "transfer_to_aicc":
+            if self.transfer_handler is None:
+                return {"status": "failed", "error": "transfer_handler_unavailable"}
+            return await self.transfer_handler(message)
         if kind == "end_call":
             reason = str(message.get("reason") or "configured_end_call")
             self.trace.record(
@@ -404,6 +413,42 @@ async def entrypoint(ctx: JobContext) -> None:
             )
             disconnected.set()
 
+        async def transfer_handler(message: dict[str, Any]) -> dict:
+            from livekit import api
+            if not any(
+                t.get("name") == "transfer_to_aicc" and t.get("url") == "builtin://transfer_to_aicc"
+                for t in (agent_context.tools or [])
+            ):
+                return {"status": "failed", "error": "tool_not_enabled"}
+            reason = str(message.get("reason_summary") or "Caller requested a colleague.")[:240]
+            await pipeline.conversations.mark_transfer(reason, {"status": "connecting"})
+            transfer_config = None
+            if identity.get("transfer_target_number") or identity.get("transfer_from_number"):
+                transfer_config = dict(os.environ)
+                if identity.get("transfer_target_number"):
+                    transfer_config["AICC_TRANSFER_TARGET_NUMBER"] = identity["transfer_target_number"]
+                if identity.get("transfer_from_number"):
+                    transfer_config["AICC_TRANSFER_FROM_NUMBER"] = identity["transfer_from_number"]
+            async with api.LiveKitAPI(
+                os.environ["LIVEKIT_URL"], os.environ["LIVEKIT_API_KEY"], os.environ["LIVEKIT_API_SECRET"]
+            ) as client:
+                result = await bridge_call(
+                    client,
+                    room_name=ctx.room.name,
+                    session_id=pipeline.conversations.session_id or trace.session_id,
+                    reason_summary=reason,
+                    caller_phone=(
+                        identity.get("caller_phone", "")
+                        if sip_route and identity.get("sip_caller_verified")
+                        else ""
+                    ),
+                    config=transfer_config,
+                )
+            await pipeline.conversations.mark_transfer(reason, result)
+            pipeline.handoff_active = result.get("status") == "connected"
+            trace.record("livekit_transfer_result", **result)
+            return result
+
         source = rtc.AudioSource(sample_rate=24000, num_channels=1, queue_size_ms=240)
         output_track = rtc.LocalAudioTrack.create_audio_track("rvc-tts", source)
         options = rtc.TrackPublishOptions()
@@ -415,6 +460,7 @@ async def entrypoint(ctx: JobContext) -> None:
             sample_rate=24000,
             local_participant=ctx.room.local_participant,
             end_call_handler=end_call_handler,
+            transfer_handler=transfer_handler,
         )
         transport.publication_sid = str(publication.sid or "")
         pipeline = ConversationPipeline(
@@ -432,6 +478,55 @@ async def entrypoint(ctx: JobContext) -> None:
                     destination_identities=[participant.identity])
             pipeline.passkey_demo = DemoSession(
                 send_passkey, rp_id="docs.odion.ai", origin="https://docs.odion.ai")
+        if not sip_route and passkey_flow_enabled(identity):
+            async def send_passkey_flow(payload: dict) -> None:
+                await ctx.room.local_participant.publish_data(
+                    json.dumps(payload), topic=PASSKEY_FLOW_TOPIC, reliable=True,
+                    destination_identities=[participant.identity])
+
+            async def post_passkey(path: str, payload: dict) -> dict:
+                record = pipeline.banking.records.get("wema_execute_prepared") or {}
+                base = str(record.get("url") or "").split("/v1/tools/")[0]
+                if not base:
+                    # Agents with no bank tool records (the isolated passkey agent)
+                    # still reach the connector through the worker's own env.
+                    base = os.getenv("WEMA_TOOLS_BASE_URL", "").rstrip("/")
+                headers = {str(k): str(v) for k, v in (record.get("headers") or {}).items()}
+                if not headers and os.getenv("WEMA_TOOLS_SERVICE_TOKEN"):
+                    headers["X-Service-Token"] = os.environ["WEMA_TOOLS_SERVICE_TOKEN"]
+                headers.update({
+                    "X-Agent-Id": pipeline.banking.context.agent_id,
+                    "X-Business-Id": pipeline.banking.context.business_id,
+                    "X-Session-Id": pipeline.banking.session_id,
+                    "X-End-User-Id": pipeline.banking.context.end_user_id,
+                    "X-Wema-Customer-Id": str(pipeline.banking.profile.get("customer_id") or ""),
+                })
+                async with pipeline.http.post(base + path, json=payload, headers=headers,
+                                              timeout=aiohttp.ClientTimeout(total=15)) as response:
+                    return await response.json(content_type=None)
+
+            async def speak_passkey_outcome(text: str, meta: dict) -> None:
+                await pipeline.banking.emit("odion.auth.action_status", {
+                    "status": "verified" if str(meta.get("status") or "") == "verified" else "failed",
+                    "usePasskey": False})
+                await pipeline.announce(text)
+
+            pipeline.passkey = PasskeyFlow(
+                send=send_passkey_flow, post_json=post_passkey,
+                on_outcome=speak_passkey_outcome, trace=pipeline.trace)
+            logger.info(
+                "passkey flow enabled for this call (business=%s agent=%s)",
+                identity.get("business_id"), identity.get("config_agent_id"))
+        else:
+            logger.info(
+                "passkey flow not enabled (sip=%s business=%s agent=%s)",
+                bool(sip_route), identity.get("business_id"), identity.get("config_agent_id"))
+        _wc = identity.get("wema_context") or {}
+        logger.info(
+            "session identity context: wema_keys=%s customer=%r account_present=%s phone_present=%s",
+            sorted(_wc), str(_wc.get("customer_id") or ""),
+            bool(str(_wc.get("account_number") or "").strip()),
+            bool(str(_wc.get("phone_number") or "").strip()))
         transport.bind(pipeline)
         transport.user_identity = participant.identity
         transport.user_participant = participant
@@ -465,6 +560,16 @@ async def entrypoint(ctx: JobContext) -> None:
         ctx.room.register_text_stream_handler("lk.chat", on_text)
 
         def on_data_received(packet: rtc.DataPacket) -> None:
+            if (packet.topic == PASSKEY_FLOW_TOPIC and getattr(pipeline, "passkey", None) is not None
+                    and packet.participant is not None and packet.participant.identity == participant.identity):
+                task = asyncio.create_task(pipeline.passkey.receive(packet.data))
+                tasks.add(task)
+                def passkey_flow_completed(task: asyncio.Task) -> None:
+                    tasks.discard(task)
+                    if not task.cancelled() and task.exception() is not None:
+                        logger.error("Passkey flow packet handling failed")
+                task.add_done_callback(passkey_flow_completed)
+                return
             if (packet.topic == PASSKEY_TOPIC and getattr(pipeline, "passkey_demo", None) is not None
                     and packet.participant is not None and packet.participant.identity == participant.identity):
                 task = asyncio.create_task(pipeline.passkey_demo.receive(packet.data))
@@ -566,6 +671,8 @@ async def entrypoint(ctx: JobContext) -> None:
             ctx.room.off("participant_disconnected", participant_handler)
         ctx.room.unregister_text_stream_handler("lk.chat")
         if pipeline is not None:
+            if getattr(pipeline, "passkey", None) is not None:
+                await pipeline.passkey.close()
             if getattr(pipeline, "passkey_demo", None) is not None:
                 await pipeline.passkey_demo.close()
             await pipeline.close()
