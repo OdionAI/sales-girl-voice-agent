@@ -43,9 +43,7 @@ previous chain (or the earlier override). Do not prune rollback images.
 
 ## GitHub release
 `.github/workflows/deploy-lagos.yml` is the Lagos path. A `main` push starts a
-release only when `LAGOS_VOICE_AUTO_DEPLOY=true` is set in the repository and
-the commit message does not contain `[skip deploy]`. The gate is currently off:
-installing this workflow does not restart the running worker. Manual workflow
+release unless the commit message contains `[skip deploy]`. Manual workflow
 dispatch defaults to `verify_only=true` and checks the pinned SSH route,
 Compose project, active file chain and container health without a release.
 
