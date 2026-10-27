@@ -36,11 +36,20 @@ has answered before a successful transfer result. Never call end_call to transfe
 """
 
 
-async def suppress_transfer_preamble(stream):
-    """Wait for the tool decision before allowing speculative transfer speech."""
-    events = [event async for event in stream]
+async def suppress_transfer_preamble(stream, *, on_decision=None):
+    """A late transfer call can invalidate any preceding text; retain the guard."""
+    events = []
+    first_text_ns = None
+    async for event in stream:
+        if isinstance(event, str) and event and first_text_ns is None:
+            first_text_ns = time.perf_counter_ns()
+        events.append(event)
     transferring = any(isinstance(event, ActionToolCall) and event.name == TRANSFER_TO_AICC_TOOL
                        for event in events)
+    if on_decision is not None:
+        on_decision(suppressed=transferring, buffered_events=len(events),
+                    text_buffer_ms=(round((time.perf_counter_ns() - first_text_ns) / 1e6, 3)
+                                    if first_text_ns is not None else None))
     for event in events:
         if not transferring or isinstance(event, ActionToolCall):
             yield event

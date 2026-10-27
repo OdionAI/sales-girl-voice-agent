@@ -40,6 +40,7 @@ class MetricMapper:
             "livekit_audio_frame_enqueued", "speculation_start", "speculation_cancel",
             "playback_release_authorized",
             "generation_cancel", "turn_close", "tool_call_prepared",
+            "llm_provider_first_text", "llm_provider_request_complete", "llm_transfer_guard_decision",
         }
         if item.event not in supported or not item.turn_id or not item.turn_id.startswith("turn-"):
             return None
@@ -73,8 +74,20 @@ class MetricMapper:
             payload["event"] = f"{kind}_request_started"
         elif event == "llm_first_token":
             key = ("llm", item.attempt_id, data.get("phase"), None)
-            payload.update(llm_ttft_ms=elapsed(item.mono_ns, turn.requests.get(key)),
-                           boundary="llm_request_to_first_text_delta")
+            payload.update(event="llm_text_released",
+                           post_guard_ms=elapsed(item.mono_ns, turn.requests.get(key)),
+                           boundary="llm_dispatch_to_post_guard_text")
+        elif event == "llm_provider_first_text":
+            payload.update(event="llm_first_token", llm_ttft_ms=data.get("provider_ttft_ms"),
+                           request_id=data.get("request_id"),
+                           boundary="provider_request_to_first_usable_text_before_guard")
+        elif event == "llm_provider_request_complete":
+            payload.update({key: data[key] for key in (
+                "request_id", "request_index", "completed", "first_text_observed", "total_ms",
+                "input_tokens", "output_tokens", "cached_tokens") if key in data})
+        elif event == "llm_transfer_guard_decision":
+            payload.update({key: data[key] for key in (
+                "suppressed", "buffered_events", "text_buffer_ms") if key in data})
         elif event in {"tts_first_audio_chunk", "tts_request_complete"}:
             key = ("tts", item.attempt_id, data.get("phase"), data.get("phrase_index"))
             start = turn.requests.get(key)
