@@ -141,10 +141,12 @@ English replies, including indirect approval, without requiring a phrase list.
 French-agent spoken fallbacks do not use fixed English text when the language
 model is unavailable; other agents keep their existing response paths.
 
-Generic HTTP tools, transfers, and transactional banking actions remain outside
-this increment. Trace events record tool preparation, final-authority waiting,
-confirmation classification, API start/completion, elapsed time, and result
-keys without recording email bodies or other argument values.
+Generic HTTP tools and transactional banking actions remain outside this
+increment. Transfer routing stays on its dedicated path; French-agent transfer
+updates are phrased by the model. Trace events record tool preparation,
+final-authority waiting, confirmation classification, API start/completion,
+elapsed time, and result keys without recording email bodies or other argument
+values.
 
 ### Increment 4: AICC number routing and end-call
 
