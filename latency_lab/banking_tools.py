@@ -338,8 +338,9 @@ class BankingTools:
             "Use source_account from the caller profile when omitted. For the caller's own line "
             "use recipient_scope=self and the saved phone; for another person use recipient_scope=other "
             "and ask only for their missing phone number. Bank names may be misheard: search the returned "
-            "bank list and confirm a close match, never invent a bank code. Speak naira, megabytes and "
-            "gigabytes in full, and read phone/account digits individually. "
+            "bank list and confirm a close match, never invent a bank code. Write every amount in "
+            "figures, never in words (e.g. \"5000 naira\", not \"five thousand naira\"), and express "
+            "phone and account numbers as separate digits. "
             "Preparation is not execution. Read the actual returned preview and ask confirmation. "
             "The application requires a separate confirmation before execution. "
             + voice_policy +
