@@ -84,8 +84,10 @@ class LiveKitPCMTransportTests(unittest.IsolatedAsyncioTestCase):
             await pipeline._stream_llm_and_tts(pipeline.attempt, [], phase="prompt_first")
             await self.transport.metrics.queue.join()
             packets = [json.loads(call.args[0]) for call in participant.publish_data.call_args_list]
-            self.assertTrue({"stt_final", "llm_first_token", "tts_first_audio", "tts_done"}
+            self.assertTrue({"stt_final", "llm_text_released", "tts_first_audio", "tts_done"}
                             <= {packet["event"] for packet in packets})
+            released = next(packet for packet in packets if packet["event"] == "llm_text_released")
+            self.assertNotIn("llm_ttft_ms", released)
             done = next(packet for packet in packets if packet["event"] == "tts_done")
             self.assertEqual(done["audio_seconds"], 0.1)
             self.assertIsNotNone(done["rtf"])
