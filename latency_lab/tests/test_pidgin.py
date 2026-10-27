@@ -12,8 +12,9 @@ from aiohttp import web
 
 from latency_lab.config import LabConfig, apply_runtime_overrides
 from latency_lab.agentic import AgentRuntimeContext
+from latency_lab.action_tools import ActionToolCall, confirmation_prompt
 from latency_lab.pidgin import (
-    EJIRO_MODEL, SBPN_MODEL, SBPN_WS_URL, EjiroTTSClient, SBPNClient,
+    EJIRO_MODEL, LANGUAGE_RULES, PIDGIN_VOICE, SBPN_MODEL, SBPN_WS_URL, EjiroTTSClient, SBPNClient,
     apply_pidgin_stack, ejiro_spoken_text, is_pidgin, split_text, wav_to_call_pcm,
 )
 from latency_lab.pipeline import ConversationPipeline
@@ -29,12 +30,15 @@ class PidginTests(unittest.IsolatedAsyncioTestCase):
         for language in ("pcm", "pd", "Pidgin", "Nigerian Pidgin"):
             result = apply_pidgin_stack(base, SimpleNamespace(tts_language_hint=language))
             self.assertEqual(result.tts_model, EJIRO_MODEL)
+            self.assertEqual(result.tts_model, "qwen-pidgin-f1-cleaned-epoch5")
+            self.assertEqual(result.tts_voice, "favour")
+            self.assertEqual(result.tts_seed, "17")
             self.assertEqual(result.stt_model, SBPN_MODEL)
             self.assertEqual(result.stt_ws_url, SBPN_WS_URL)
             self.assertEqual(result.tts_ref_audio, "")
             for key in ("llm_model", "llm_base_url", "llm_api_key", "llm_enable_thinking"):
                 self.assertEqual(getattr(base, key), getattr(result, key))
-        for language in ("English", "French", ""):
+        for language in ("English", "French", "Yoruba", "Hausa", "Igbo", ""):
             self.assertIs(apply_pidgin_stack(base, SimpleNamespace(tts_language_hint=language)), base)
 
     def test_explicit_lab_language_overrides_saved_agent_language(self):
@@ -49,13 +53,15 @@ class PidginTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual("".join(parts), text)
             self.assertTrue(all(0 < len(part) <= 240 for part in parts))
 
-    def test_mms_numbers_preserve_every_digit_and_decimal(self):
+    def test_spoken_numbers_preserve_every_digit_and_decimal(self):
         self.assertEqual(ejiro_spoken_text("006789"), " zero zero six seven eight nine ")
         self.assertIn("point", ejiro_spoken_text("12.50"))
         self.assertIn("naira", ejiro_spoken_text("\u20a612.50"))
         self.assertEqual(ejiro_spoken_text("How you dey?"), "How you dey?")
+        self.assertEqual(ejiro_spoken_text("Confirm Labs: https://example.com/confirm"),
+                         "Confirm Labs: https://example.com/confirm")
 
-    async def test_mms_numeric_expansion_is_split_before_sending(self):
+    async def test_numeric_expansion_is_split_before_sending(self):
         text = "Account 0067891234. Amount 65.20 naira. " * 15
         async with aiohttp.ClientSession() as session:
             _, chunks = await EjiroTTSClient(self.config, session).stream(text)
@@ -81,7 +87,11 @@ class PidginTests(unittest.IsolatedAsyncioTestCase):
             body = await request.json()
             self.requests.append(body)
             self.assertLessEqual(len(body["input"]), 240)
-            self.assertEqual(set(body), {"input", "model", "voice", "response_format", "stream"})
+            self.assertEqual(set(body), {"input", "model", "voice", "response_format", "stream", "seed", "speed"})
+            self.assertEqual(body["model"], "qwen-pidgin-f1-cleaned-epoch5")
+            self.assertEqual(body["voice"], PIDGIN_VOICE)
+            self.assertEqual(body["seed"], 17)
+            self.assertEqual(body["speed"], 1)
             self.assertTrue(body["stream"])
             self.assertEqual(body["response_format"], "pcm")
             self.assertNotIn("Authorization", request.headers)
@@ -212,8 +222,42 @@ class PidginTests(unittest.IsolatedAsyncioTestCase):
                 self.assertIsInstance(pipeline.stt, SBPNClient)
                 self.assertIsInstance(pipeline.tts, EjiroTTSClient)
                 self.assertIn("not standard English", pipeline.system_prompt)
+                self.assertIn("konfam, with K", pipeline.system_prompt)
+                self.assertNotIn("Do not imitate an accent with misspellings", pipeline.system_prompt)
                 self.assertIn("How I fit help", pipeline.opening_greeting_text())
                 self.assertIn("well well", pipeline.closing_goodbye_text())
+            finally:
+                await pipeline.close()
+
+    async def test_confirmation_has_untruncated_pidgin_rules_and_unchanged_structured_details(self):
+        messages = []
+        class LLM:
+            async def stream(self, sent, **kwargs):
+                messages.extend(sent)
+                yield "Abeg, konfam say make I go ahead?"
+        details = {"customer": "Confirm Labs", "account": "0012345678", "amount": 1250.50,
+                   "status": "confirmed", "url": "https://example.com/confirm"}
+        call = ActionToolCall("test-only", "transfer_money", details)
+        question = await confirmation_prompt(LLM(), call, language_hint="pcm", instructions="x" * 5000)
+        self.assertIn("konfam", question)
+        self.assertIn(LANGUAGE_RULES, messages[0]["content"])
+        import json
+        payload = json.loads(messages[1]["content"])
+        self.assertEqual(payload["details"], details)
+        self.assertEqual(payload["action"], "transfer_money")
+
+    async def test_pidgin_fallback_stays_pidgin_when_the_model_is_unavailable(self):
+        class UnavailableLLM:
+            async def stream(self, *args, **kwargs):
+                raise RuntimeError("offline test")
+                yield
+        with TemporaryDirectory() as directory:
+            pipeline = ConversationPipeline(self.config, TraceRecorder(Path(directory)), AsyncMock())
+            pipeline.llm = UnavailableLLM()
+            try:
+                self.assertIn("konfam", await pipeline._natural_line("ask_confirmation", {}))
+                self.assertIn(await pipeline._natural_line("acknowledge_tool_start", {}),
+                              ["Make I check am for you.", "Give me small time, abeg."])
             finally:
                 await pipeline.close()
 
