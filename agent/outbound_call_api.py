@@ -8,13 +8,13 @@ from urllib.parse import quote
 import httpx
 
 
-BASE_URL = (
-    os.getenv("CONVERSATION_API_BASE_URL")
-    or os.getenv("CONVERSATION_SERVICE_BASE_URL")
-    or ""
-).rstrip("/")
-SERVICE_TOKEN = os.getenv("CONVERSATION_SERVICE_TOKEN", "")
-TIMEOUT_SECONDS = float(os.getenv("CONVERSATION_API_TIMEOUT_SECONDS", "8"))
+def _settings() -> tuple[str, str, float]:
+    # The Lagos worker loads its platform environment when a job starts.
+    return (
+        (os.getenv("CONVERSATION_API_BASE_URL") or os.getenv("CONVERSATION_SERVICE_BASE_URL") or "").rstrip("/"),
+        os.getenv("CONVERSATION_SERVICE_TOKEN", ""),
+        float(os.getenv("CONVERSATION_API_TIMEOUT_SECONDS", "8")),
+    )
 
 
 class OutboundCallError(RuntimeError):
@@ -22,20 +22,59 @@ class OutboundCallError(RuntimeError):
 
 
 def is_enabled() -> bool:
-    return bool(BASE_URL and SERVICE_TOKEN)
+    base_url, service_token, _ = _settings()
+    return bool(base_url and service_token)
 
 
 async def claim_call(*, call_ref: str, room_name: str) -> dict[str, Any]:
-    if not is_enabled():
+    base_url, service_token, timeout_seconds = _settings()
+    if not base_url or not service_token:
         raise OutboundCallError("Outbound call context service is not configured.")
-    url = f"{BASE_URL}/v1/internal/outbound/sessions/{quote(call_ref, safe='')}/claim"
-    async with httpx.AsyncClient(timeout=TIMEOUT_SECONDS) as client:
+    url = f"{base_url}/v1/internal/outbound/sessions/{quote(call_ref, safe='')}/claim"
+    async with httpx.AsyncClient(timeout=timeout_seconds) as client:
         response = await client.post(
             url,
             json={"room_name": room_name},
             headers={
                 "Content-Type": "application/json",
-                "X-Service-Token": SERVICE_TOKEN,
+                "X-Service-Token": service_token,
+                "X-Service-Name": "sales-girl-voice-agent",
+            },
+        )
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = {}
+    if response.status_code >= 400 or not isinstance(payload, dict):
+        raise OutboundCallError(
+            str(payload.get("detail") or f"Call context request failed ({response.status_code}).")
+        )
+    return payload
+
+
+async def claim_call_by_recipient(
+    *, business_id: str, recipient_phone: str, room_name: str
+) -> dict[str, Any]:
+    """Bind the prepared call for a customer number to this room.
+
+    AICC identifies the call by the customer's phone number, so the worker
+    claims by number rather than an opaque reference.
+    """
+    base_url, service_token, timeout_seconds = _settings()
+    if not base_url or not service_token:
+        raise OutboundCallError("Outbound call context service is not configured.")
+    url = f"{base_url}/v1/internal/outbound/sessions/claim-by-recipient"
+    async with httpx.AsyncClient(timeout=timeout_seconds) as client:
+        response = await client.post(
+            url,
+            json={
+                "business_id": business_id,
+                "recipient_phone": recipient_phone,
+                "room_name": room_name,
+            },
+            headers={
+                "Content-Type": "application/json",
+                "X-Service-Token": service_token,
                 "X-Service-Name": "sales-girl-voice-agent",
             },
         )
@@ -58,10 +97,11 @@ async def finish_call(
     summary: str | None = None,
     conversation_id: str | None = None,
 ) -> dict[str, Any]:
-    if not is_enabled():
+    base_url, service_token, timeout_seconds = _settings()
+    if not base_url or not service_token:
         return {"status": "disabled"}
-    url = f"{BASE_URL}/v1/internal/outbound/sessions/{quote(call_ref, safe='')}/finish"
-    async with httpx.AsyncClient(timeout=TIMEOUT_SECONDS) as client:
+    url = f"{base_url}/v1/internal/outbound/sessions/{quote(call_ref, safe='')}/finish"
+    async with httpx.AsyncClient(timeout=timeout_seconds) as client:
         response = await client.post(
             url,
             json={
@@ -72,7 +112,7 @@ async def finish_call(
             },
             headers={
                 "Content-Type": "application/json",
-                "X-Service-Token": SERVICE_TOKEN,
+                "X-Service-Token": service_token,
                 "X-Service-Name": "sales-girl-voice-agent",
             },
         )
