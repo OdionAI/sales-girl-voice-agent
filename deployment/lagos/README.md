@@ -49,8 +49,18 @@ Compose project, active file chain and container health without a release.
 
 For a release, the workflow tests the source, uploads an immutable commit-SHA
 archive, builds from `deployment/lagos/Dockerfile`, checks `pyrnnoise` and worker
-imports, and adds an image-only override to the active Compose chain. It
+imports, and adds an image override to the active Compose chain. It
 recreates only `voice`, checks the new image and container health, environment
 and mounts, and restores the prior image if verification fails. A post-release
 real call still needs to confirm worker registration and the RNNoise trace.
 `deploy.yml` remains available only for an explicit legacy node-B run.
+
+For the explicitly opted-in noncommercial Hausa research pilot, set the GitHub
+repository variable `ENABLE_HAUSA_TWB_VOICES=true` before promoting to `main`.
+That release adds only `RVC_LAB_ENABLE_HAUSA_TWB_VOICES=true` to the worker's
+environment; all other environment values and mounts must remain identical.
+Failed releases restore both the prior image and the prior toggle value (or
+remove it if previously absent). Without that repository variable the workflow
+preserves the current environment. Pair this with the dashboard production
+build flag `NEXT_PUBLIC_ENABLE_HAUSA_TWB_VOICES=true`. These are account-wide
+research controls, not commercial licensing clearance.

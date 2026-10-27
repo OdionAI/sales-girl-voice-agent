@@ -167,6 +167,7 @@ class LabConfig:
     tts_ref_text: str = os.getenv("RVC_LAB_TTS_REF_TEXT", "")
     tts_language: str = os.getenv("RVC_LAB_TTS_LANGUAGE", "English")
     tts_seed: str = os.getenv("RVC_LAB_TTS_SEED", "")
+    hausa_twb_voices_enabled: bool = _bool("RVC_LAB_ENABLE_HAUSA_TWB_VOICES", False)
     tts_initial_codec_chunk_frames: int = int(
         _float("RVC_LAB_TTS_INITIAL_CODEC_CHUNK_FRAMES", 16)
     )
@@ -325,6 +326,7 @@ def apply_runtime_overrides(
 def lab_config_from_environ() -> LabConfig:
     """Build a config after platform env files have been loaded."""
     return LabConfig(
+        hausa_twb_voices_enabled=_bool("RVC_LAB_ENABLE_HAUSA_TWB_VOICES", False),
         agent_config_api_base_url=_url(
             "AGENT_CONFIG_API_BASE_URL", "AGENT_CONFIG_SERVICE_BASE_URL"
         ),
