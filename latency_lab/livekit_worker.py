@@ -28,6 +28,8 @@ from .aicc_transfer import bridge_call
 from .sip_bootstrap import resolve_route as resolve_sip_route, participant_identity as sip_participant_identity
 from .trace import TraceRecorder
 from .live_metrics import LiveMetricPublisher
+from .outbound import apply_outbound_context, claim_for_route, sip_remote_headers
+from agent import outbound_call_api
 
 
 logger = logging.getLogger("rvc-livekit-transport")
@@ -354,6 +356,9 @@ async def entrypoint(ctx: JobContext) -> None:
     participant_handler = None
     ready = asyncio.Event()
     input_lock = asyncio.Lock()
+    outbound_call_ref = ""
+    outbound_claim: dict[str, Any] = {}
+    failure_reason = ""
     try:
         sip_route = resolve_sip_route(ctx.job.metadata, ctx.room.name)
         identity = {} if sip_route else resolve_dispatch(ctx.job.metadata, ctx.room.name, config.agent_config_service_token)
@@ -369,8 +374,21 @@ async def entrypoint(ctx: JobContext) -> None:
             participant = await asyncio.wait_for(
                 ctx.wait_for_participant(kind=rtc.ParticipantKind.PARTICIPANT_KIND_SIP), timeout=30,
             )
+            sip_headers = await sip_remote_headers(ctx, participant)
             identity = sip_participant_identity(sip_route, participant, ctx.room.name,
-                                               rtc.ParticipantKind.PARTICIPANT_KIND_SIP)
+                                               rtc.ParticipantKind.PARTICIPANT_KIND_SIP,
+                                               called_override=sip_headers.get("to", ""))
+            outbound_required = bool(identity.get("outbound_required"))
+            outbound_recipient = str(identity.get("caller_number") or "").strip()
+            if outbound_required and not outbound_recipient:
+                raise RuntimeError("The SIP To route requires the customer's phone number on the INVITE.")
+            if outbound_required:
+                outbound_claim = await claim_for_route(
+                    recipient_phone=outbound_recipient, room_name=ctx.room.name, identity=identity,
+                )
+                outbound_call_ref = str(outbound_claim.get("call_ref") or "")
+                identity["end_user_id"] = str(outbound_claim.get("recipient_phone") or "")
+                identity["caller_phone"] = identity["end_user_id"]
         else:
             participant = await asyncio.wait_for(
                 ctx.wait_for_participant(identity=identity["participant_identity"]), timeout=30,
@@ -388,6 +406,8 @@ async def entrypoint(ctx: JobContext) -> None:
         )
         if not agent_context.loaded:
             raise RuntimeError("Configured agent could not be loaded; refusing an unconfigured call.")
+        if outbound_claim:
+            agent_context = apply_outbound_context(agent_context, outbound_claim)
 
         async def end_call_handler(reason: str) -> None:
             trace.record(
@@ -649,6 +669,7 @@ async def entrypoint(ctx: JobContext) -> None:
     except asyncio.CancelledError:
         raise
     except Exception as exc:
+        failure_reason = str(exc)[:255]
         trace.record(
             "livekit_transport_error",
             turn_id=pipeline.turn_id if pipeline else None,
@@ -678,6 +699,16 @@ async def entrypoint(ctx: JobContext) -> None:
             await pipeline.close()
         else:
             trace.record("session_close", reason="livekit_startup_failed")
+        if outbound_claim:
+            try:
+                await outbound_call_api.finish_call(
+                    call_ref=outbound_call_ref,
+                    status="failed" if failure_reason else "completed",
+                    failure_reason=failure_reason or None,
+                    conversation_id=(pipeline.conversations.conversation_id if pipeline else None),
+                )
+            except Exception:
+                logger.exception("Could not finalize prepared outbound call")
         if transport is not None:
             await transport.close()
         if source is not None:
