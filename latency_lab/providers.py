@@ -9,6 +9,7 @@ import json
 import re
 import time
 import wave
+from contextvars import ContextVar
 from collections.abc import AsyncIterator, Awaitable, Callable
 from pathlib import Path
 from typing import Any
@@ -29,6 +30,31 @@ _LANGUAGE_NAMES = {
     "pidgin", "none",
 }
 _CJK = re.compile(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
+
+_llm_trace_scope: ContextVar[dict | None] = ContextVar("llm_trace_scope", default=None)
+
+
+async def scoped_llm_stream(stream, *, turn_id, attempt_id, phase):
+    """Scope observations to this iterator, including concurrent/background turns."""
+    context = dict(turn_id=turn_id, attempt_id=attempt_id, phase=phase)
+    iterator = stream.__aiter__()
+    try:
+        while True:
+            token = _llm_trace_scope.set(context)
+            try:
+                event = await anext(iterator)
+            except StopAsyncIteration:
+                break
+            finally:
+                _llm_trace_scope.reset(token)
+            yield event
+    finally:
+        token = _llm_trace_scope.set(context)
+        try:
+            if hasattr(iterator, "aclose"):
+                await iterator.aclose()
+        finally:
+            _llm_trace_scope.reset(token)
 
 
 def pcm16_wav(pcm16: bytes, *, sample_rate: int = 16000) -> bytes:
@@ -741,6 +767,10 @@ class RLLMClient:
         self.usage = None
         self.trace = None
 
+    def _observe(self, event, **data):
+        if self.trace is not None:
+            self.trace.record(event, **(_llm_trace_scope.get() or {}), **data)
+
     @staticmethod
     def _normalize_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Keep system content at index 0 only.
@@ -796,6 +826,14 @@ class RLLMClient:
         pending_calls: dict[int, dict[str, str]] = {}
         emitted_output = False
         for request_index in range(max_attempts):
+            request_id = f"llm-{time.perf_counter_ns()}"
+            request_started = time.perf_counter_ns()
+            request_finished_ns = None
+            first_text_ns = None
+            provider_done = False
+            observed_usage = {}
+            self._observe("llm_provider_request_start", request_id=request_id,
+                          request_index=request_index + 1)
             pending_calls = {}
             produced_this_request = False
             usage_request = self.usage.llm_started() if self.usage is not None else None
@@ -810,6 +848,7 @@ class RLLMClient:
                         and request_index < len(self._retry_delays_seconds)
                     ):
                         await response.read()
+                        request_finished_ns = time.perf_counter_ns()
                         await asyncio.sleep(self._retry_delays_seconds[request_index])
                         continue
                     response.raise_for_status()
@@ -865,6 +904,14 @@ class RLLMClient:
                                 break
                             try:
                                 item = json.loads(data)
+                                if isinstance(item.get("usage"), dict):
+                                    usage = item["usage"]
+                                    cached = usage.get("prompt_tokens_details") or {}
+                                    observed_usage.update({key: value for key, value in {
+                                        "input_tokens": usage.get("prompt_tokens"),
+                                        "output_tokens": usage.get("completion_tokens"),
+                                        "cached_tokens": cached.get("cached_tokens") if isinstance(cached, dict) else None,
+                                    }.items() if isinstance(value, int) and not isinstance(value, bool) and value >= 0})
                                 if self.usage is not None and item.get("usage") is not None:
                                     self.usage.llm_usage(usage_request, item["usage"])
                                 if not item.get("choices"):
@@ -889,11 +936,18 @@ class RLLMClient:
                             if delta:
                                 text = spoken.push(str(delta))
                                 if text:
+                                    if first_text_ns is None:
+                                        first_text_ns = time.perf_counter_ns()
+                                        self._observe("llm_provider_first_text", request_id=request_id,
+                                            request_index=request_index + 1,
+                                            provider_ttft_ms=round((first_text_ns - request_started) / 1e6, 3))
                                     emitted_output = True
                                     produced_this_request = True
                                     yield text
                         if done:
+                            provider_done = True
                             break
+                request_finished_ns = time.perf_counter_ns()
                 # A 200 response that carried neither spoken text nor a tool call is
                 # an empty completion. Re-issue the request a bounded number of times
                 # before letting the caller-facing fallback take over.
@@ -921,9 +975,16 @@ class RLLMClient:
                         )
                 break
             except (aiohttp.ClientConnectionError, asyncio.TimeoutError):
+                request_finished_ns = time.perf_counter_ns()
                 if emitted_output or request_index >= len(self._retry_delays_seconds):
                     raise
                 await asyncio.sleep(self._retry_delays_seconds[request_index])
+            finally:
+                self._observe("llm_provider_request_complete", request_id=request_id,
+                    request_index=request_index + 1, completed=provider_done,
+                    first_text_observed=first_text_ns is not None,
+                    total_ms=round(((request_finished_ns or time.perf_counter_ns()) - request_started) / 1e6, 3),
+                    **observed_usage)
         for index in sorted(pending_calls):
             call = pending_calls[index]
             if call["name"]:

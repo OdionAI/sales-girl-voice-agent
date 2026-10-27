@@ -43,3 +43,5 @@ jobs:
         run: pip install -r latency_lab/requirements.txt
       - name: Verify demo proofs, intent gates and worker regressions
         run: python -m unittest latency_lab.tests.test_passkey_demo latency_lab.tests.test_passkey_diagnostics latency_lab.tests.test_engagement latency_lab.tests.test_livekit_transport latency_lab.tests.test_pidgin latency_lab.tests.test_speech_languages -v
+      - name: Verify provider timing and transfer release invariants
+        run: python -m unittest latency_lab.tests.test_llm_observability latency_lab.tests.test_llm_stall_timeout latency_lab.tests.test_live_metrics -v
