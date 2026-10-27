@@ -142,6 +142,7 @@ def participant_identity(route, participant, room_name, sip_kind, *, called_over
         "entry_surface": "aicc_inbound",
         "language": "en",
         "caller_phone": attrs.get("sip.phoneNumber", ""),
+        "caller_number": caller,
         "called_phone": called,
         "outbound_required": chosen.get("outbound_required") is True,
         "sip_attribute_keys": sorted(str(key) for key in attrs.keys()),

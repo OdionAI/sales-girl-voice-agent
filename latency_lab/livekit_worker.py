@@ -28,7 +28,7 @@ from .aicc_transfer import bridge_call
 from .sip_bootstrap import resolve_route as resolve_sip_route, participant_identity as sip_participant_identity
 from .trace import TraceRecorder
 from .live_metrics import LiveMetricPublisher
-from .outbound import apply_outbound_context, claim_for_route, sip_call_reference, sip_remote_headers
+from .outbound import apply_outbound_context, claim_for_route, sip_remote_headers
 from agent import outbound_call_api
 
 
@@ -378,17 +378,15 @@ async def entrypoint(ctx: JobContext) -> None:
             identity = sip_participant_identity(sip_route, participant, ctx.room.name,
                                                rtc.ParticipantKind.PARTICIPANT_KIND_SIP,
                                                called_override=sip_headers.get("to", ""))
-            outbound_call_ref = sip_call_reference(
-                participant, sip_headers,
-            )
-            if identity.get("outbound_required") and not outbound_call_ref:
-                raise RuntimeError("The SIP To route requires a prepared outbound call reference.")
-            if outbound_call_ref and not identity.get("outbound_required"):
-                raise RuntimeError("The SIP To route is not configured for outbound calls.")
-            if outbound_call_ref:
+            outbound_required = bool(identity.get("outbound_required"))
+            outbound_recipient = str(identity.get("caller_number") or "").strip()
+            if outbound_required and not outbound_recipient:
+                raise RuntimeError("The SIP To route requires the customer's phone number on the INVITE.")
+            if outbound_required:
                 outbound_claim = await claim_for_route(
-                    call_ref=outbound_call_ref, room_name=ctx.room.name, identity=identity,
+                    recipient_phone=outbound_recipient, room_name=ctx.room.name, identity=identity,
                 )
+                outbound_call_ref = str(outbound_claim.get("call_ref") or "")
                 identity["end_user_id"] = str(outbound_claim.get("recipient_phone") or "")
                 identity["caller_phone"] = identity["end_user_id"]
         else:

@@ -68,6 +68,8 @@ class AiccNumberRoutingTest(unittest.TestCase):
         ident = self._identity(p)
         self.assertEqual(ident["config_agent_id"], "agent-feedback")
         self.assertTrue(ident["outbound_required"])
+        # The customer's (from) number is exposed for outbound context matching.
+        self.assertEqual(ident["caller_number"], "+2348012345678")
 
     def test_remote_to_header_overrides_trunk_number(self) -> None:
         p = _participant(caller="+2348012345678", called="030105")

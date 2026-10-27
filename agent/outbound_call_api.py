@@ -52,6 +52,43 @@ async def claim_call(*, call_ref: str, room_name: str) -> dict[str, Any]:
     return payload
 
 
+async def claim_call_by_recipient(
+    *, business_id: str, recipient_phone: str, room_name: str
+) -> dict[str, Any]:
+    """Bind the prepared call for a customer number to this room.
+
+    AICC identifies the call by the customer's phone number, so the worker
+    claims by number rather than an opaque reference.
+    """
+    base_url, service_token, timeout_seconds = _settings()
+    if not base_url or not service_token:
+        raise OutboundCallError("Outbound call context service is not configured.")
+    url = f"{base_url}/v1/internal/outbound/sessions/claim-by-recipient"
+    async with httpx.AsyncClient(timeout=timeout_seconds) as client:
+        response = await client.post(
+            url,
+            json={
+                "business_id": business_id,
+                "recipient_phone": recipient_phone,
+                "room_name": room_name,
+            },
+            headers={
+                "Content-Type": "application/json",
+                "X-Service-Token": service_token,
+                "X-Service-Name": "sales-girl-voice-agent",
+            },
+        )
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = {}
+    if response.status_code >= 400 or not isinstance(payload, dict):
+        raise OutboundCallError(
+            str(payload.get("detail") or f"Call context request failed ({response.status_code}).")
+        )
+    return payload
+
+
 async def finish_call(
     *,
     call_ref: str,
