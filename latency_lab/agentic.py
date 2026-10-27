@@ -135,6 +135,9 @@ class AgentRuntimeContext:
     loaded: bool = False
     tts_language_hint: str = ""
     tts_voice_id: str = ""
+    outbound_enabled: bool = False
+    outbound_instructions: str = ""
+    outbound_context_fields: tuple[dict[str, Any], ...] = ()
 
     def _capability_rules(self) -> str:
         enabled = {
@@ -324,6 +327,12 @@ async def load_agent_runtime_context(
         instructions=str(payload.get("instructions") or "").strip(),
         tts_language_hint=str(payload.get("tts_language_hint") or "").strip(),
         tts_voice_id=str(payload.get("tts_voice_id") or "").strip(),
+        outbound_enabled=payload.get("outbound_enabled") is True,
+        outbound_instructions=str(payload.get("outbound_instructions") or "").strip(),
+        outbound_context_fields=tuple(
+            field for field in (payload.get("outbound_context_fields") or [])
+            if isinstance(field, dict)
+        ),
         knowledge_base_ids=knowledge_base_ids,
         tools=tools,
         loaded=True,
