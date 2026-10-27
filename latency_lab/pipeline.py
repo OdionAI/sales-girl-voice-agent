@@ -2313,22 +2313,36 @@ class ConversationPipeline:
     async def _deliver_tool_result(self, call, body: dict) -> None:
         """Speak the outcome of a background tool — naturally, and never a dead end."""
         status = str(body.get("status") or "")
-        if call.name.startswith("wema_prepare_") and self.banking.prepared:
-            await self._announce_bank_confirmation()
-            return
-        if status in {"ok", "success", "completed"}:
-            text = await self._natural_line("report_result", {
-                "tool": call.name, "caller_asked": dict(call.arguments),
-                "result_message": body.get("message"), "result_data": body.get("data")})
-        elif status == "needs_input":
-            text = await self._natural_line("ask_missing_detail", {
-                "tool": call.name, "missing": body.get("message")})
-        else:
-            # Graceful failure: say what happened and offer the follow-up path.
-            text = await self._natural_line("tool_failed_offer_ticket", {
-                "tool": call.name, "message": body.get("message")})
-        if text:
-            await self.announce(text)
+        try:
+            if call.name.startswith("wema_prepare_") and (self.banking.prepared or status == "prepared"):
+                await self._announce_bank_confirmation()
+                return
+            if status in {"ok", "success", "completed", "prepared"}:
+                text = await self._natural_line("report_result", {
+                    "tool": call.name, "caller_asked": dict(call.arguments),
+                    "result_message": body.get("message"), "result_data": body.get("data")})
+            elif status == "needs_input":
+                text = await self._natural_line("ask_missing_detail", {
+                    "tool": call.name, "missing": body.get("message")})
+            else:
+                # Graceful failure: say what happened and offer the follow-up path.
+                text = await self._natural_line("tool_failed_offer_ticket", {
+                    "tool": call.name, "message": body.get("message")})
+            if text:
+                await self.announce(text)
+                return
+        except Exception as exc:  # delivery must never leave the caller in dead air
+            self.trace.record("background_tool_delivery_failed", tool_name=call.name,
+                              reason=type(exc).__name__)
+        # Last resort: still say something natural so the turn never ends in silence.
+        try:
+            fallback = await self._natural_line("report_result", {
+                "tool": call.name, "result_message": body.get("message"),
+                "result_data": body.get("data")})
+            if fallback:
+                await self.announce(fallback)
+        except Exception:
+            pass
 
     async def _run_knowledge_lookup(self, attempt: Attempt, call: ActionToolCall) -> None:
         """Run an explicit knowledge lookup the model asked for, then answer from it.
