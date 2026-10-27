@@ -19,9 +19,8 @@ from .directory_email import definitions as directory_email_definitions
 
 SUPPORTED_ACTION_TOOLS = {"create_ticket", "send_email", "end_call", "transfer_to_aicc"}
 
-# Human hand-off behaviour. The model asks for the transfer in THIS turn; the
-# application owns the announcement and the result, so the agent never claims a
-# human answered before a successful transfer result.
+# Human hand-off behaviour. The model asks for the transfer in THIS turn. The
+# application owns routing and reports the outcome to the model for natural wording.
 TRANSFER_RULES = """
 Human transfer behaviour: When the current caller asks to speak to a human, person,
 colleague, adviser or customer-care representative, call transfer_to_aicc in THIS turn.
@@ -30,9 +29,10 @@ never reply with just an offer to connect, and never require a particular exact 
 Interpret natural phrasing and obvious ASR spelling errors in context. If they accept
 your previous offer of a human, call the tool immediately. A question about whether you
 are human, a refusal, a hypothetical/future request or unclear intent is not permission.
-Call the tool without a separate spoken preamble; the application says exactly
-"All right, I'll connect you now." once and starts the transfer. Do not claim the human
-has answered before a successful transfer result. Never call end_call to transfer.
+Call the tool without a separate spoken preamble. The application will report the
+transfer outcome so you can explain it naturally in the configured agent language.
+Do not claim the human has answered before a successful transfer result. Never call
+end_call to transfer.
 """
 
 
@@ -314,6 +314,11 @@ def localized_action_text(english: str, french: str, language_hint: str) -> str:
     return french if uses_french(language_hint) else english
 
 
+def action_feedback_text(english: str, french: str, language_hint: str) -> str:
+    """Keep French spoken feedback model-generated; retain legacy text elsewhere."""
+    return "" if uses_french(language_hint) else localized_action_text(english, french, language_hint)
+
+
 async def confirmation_prompt(
     llm: Any, call: ActionToolCall, *, instructions: str = "", language_hint: str = "",
     previous_prompt: str = "", caller_reply: str = "",
@@ -431,7 +436,7 @@ class ActionToolExecutor:
         if not self.available(call.name):
             return ActionResult(
                 status="failed",
-                message=localized_action_text(
+                message=action_feedback_text(
                     "That action is not available from this agent right now.",
                     "Cette action n’est pas disponible pour le moment.",
                     self.context.tts_language_hint,
@@ -445,9 +450,8 @@ class ActionToolExecutor:
             return await self._send_email(call, started_ns)
         return ActionResult(
             "failed",
-            localized_action_text(
-                "That action is not supported.",
-                "Cette action n’est pas prise en charge.",
+            action_feedback_text(
+                "That action is not supported.", "Cette action n’est pas prise en charge.",
                 self.context.tts_language_hint,
             ),
             {},
@@ -471,7 +475,7 @@ class ActionToolExecutor:
         if not title or not description:
             return ActionResult(
                 "failed",
-                localized_action_text(
+                action_feedback_text(
                     "I still need the ticket details before I can create it.",
                     "Il me manque encore des détails pour créer le ticket.",
                     self.context.tts_language_hint,
@@ -495,7 +499,7 @@ class ActionToolExecutor:
         if status >= 400:
             return ActionResult(
                 "failed",
-                localized_action_text(
+                action_feedback_text(
                     "I couldn't create the ticket right now.",
                     "Je n’ai pas pu créer le ticket pour le moment.",
                     self.context.tts_language_hint,
@@ -504,15 +508,13 @@ class ActionToolExecutor:
                 elapsed,
             )
         code = str(body.get("ticket_code") or body.get("id") or "").strip()
-        message = localized_action_text(
+        message = action_feedback_text(
             "The support ticket has been created.",
-            "Le ticket d’assistance a été créé.",
-            self.context.tts_language_hint,
+            "Le ticket d’assistance a été créé.", self.context.tts_language_hint,
         )
         if code:
-            message += localized_action_text(
-                f" The reference is {code}.",
-                f" La référence est {code}.",
+            message += action_feedback_text(
+                f" The reference is {code}.", f" La référence est {code}.",
                 self.context.tts_language_hint,
             )
         return ActionResult("success", message, body, elapsed)
@@ -526,7 +528,7 @@ class ActionToolExecutor:
         if not recipient or "@" not in recipient or not subject or not body_text:
             return ActionResult(
                 "failed",
-                localized_action_text(
+                action_feedback_text(
                     "I still need a valid email address and message details.",
                     "Il me faut une adresse e-mail valide et le contenu du message.",
                     self.context.tts_language_hint,
@@ -545,7 +547,7 @@ class ActionToolExecutor:
         if status >= 400 or bool(body.get("mocked")) or not bool(body.get("sent")):
             return ActionResult(
                 "failed",
-                localized_action_text(
+                action_feedback_text(
                     str(body.get("message") or "I couldn't send the email right now."),
                     "Je n’ai pas pu envoyer l’e-mail pour le moment.",
                     self.context.tts_language_hint,
@@ -555,10 +557,9 @@ class ActionToolExecutor:
             )
         return ActionResult(
             "success",
-            localized_action_text(
+            action_feedback_text(
                 f"The email has been sent to {recipient}.",
-                f"L’e-mail a été envoyé à {recipient}.",
-                self.context.tts_language_hint,
+                f"L’e-mail a été envoyé à {recipient}.", self.context.tts_language_hint,
             ),
             body,
             elapsed,
@@ -567,7 +568,7 @@ class ActionToolExecutor:
     def _failed(self, exc: Exception, started_ns: int) -> ActionResult:
         return ActionResult(
             "failed",
-            localized_action_text(
+            action_feedback_text(
                 "I couldn't complete that action right now.",
                 "Je n’ai pas pu effectuer cette action pour le moment.",
                 self.context.tts_language_hint,
