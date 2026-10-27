@@ -42,8 +42,13 @@ class MapperTests(unittest.TestCase):
         self.assertEqual(final["transcript_delay_ms"], 150)
         self.assertNotIn("secret", json.dumps(final))
         mapper.map(event("llm_request_start", 270, phase="prompt_first"))
-        llm = mapper.map(event("llm_first_token", 570, phase="prompt_first"))
+        llm = mapper.map(event("llm_provider_first_text", 570, phase="prompt_first",
+                               provider_ttft_ms=300, request_id="r1"))
         self.assertEqual(llm["llm_ttft_ms"], 300)
+        released = mapper.map(event("llm_first_token", 1070, phase="prompt_first"))
+        self.assertEqual(released["post_guard_ms"], 800)
+        self.assertEqual(released["event"], "llm_text_released")
+        self.assertNotIn("llm_ttft_ms", released)
         mapper.map(event("tts_request_start", 600, phase="prompt_first", phrase_index=1))
         tts = mapper.map(event("tts_first_audio_chunk", 900, phase="prompt_first", phrase_index=1))
         self.assertEqual(tts["ttfa_ms"], 300)
@@ -63,7 +68,7 @@ class MapperTests(unittest.TestCase):
     def test_missing_boundaries_never_become_zero(self):
         mapper = MetricMapper()
         self.assertIsNone(mapper.map(event("stt_final", 100, text="Typed"))["transcript_delay_ms"])
-        self.assertIsNone(mapper.map(event("llm_first_token", 200))["llm_ttft_ms"])
+        self.assertIsNone(mapper.map(event("llm_first_token", 200))["post_guard_ms"])
         self.assertIsNone(mapper.map(event("tts_first_audio_chunk", 300))["ttfa_ms"])
         self.assertIsNone(mapper.map(event("tts_request_complete", 400, audio_seconds=0))["rtf"])
         self.assertIsNone(mapper.map(event("tts_request_start", 50, turn="opening-0000")))
@@ -73,9 +78,25 @@ class MapperTests(unittest.TestCase):
         mapper.map(event("llm_request_start", 10, phase="first"))
         mapper.map(event("llm_request_start", 100, phase="tool"))
         mapper.map(event("llm_request_start", 200, phase="first", attempt="b"))
-        self.assertEqual(mapper.map(event("llm_first_token", 210, phase="tool"))["llm_ttft_ms"], 110)
-        self.assertEqual(mapper.map(event("llm_first_token", 220, phase="first", attempt="b"))["llm_ttft_ms"], 20)
-        self.assertIsNone(mapper.map(event("llm_first_token", 230, turn="turn-0002", phase="first"))["llm_ttft_ms"])
+        self.assertEqual(mapper.map(event("llm_first_token", 210, phase="tool"))["post_guard_ms"], 110)
+        self.assertEqual(mapper.map(event("llm_first_token", 220, phase="first", attempt="b"))["post_guard_ms"], 20)
+        self.assertIsNone(mapper.map(event("llm_first_token", 230, turn="turn-0002", phase="first"))["post_guard_ms"])
+
+    def test_provider_usage_and_guard_metadata_do_not_forward_private_payloads(self):
+        mapper = MetricMapper()
+        item = mapper.map(event("llm_provider_request_complete", 800, request_id="r1",
+            input_tokens=9000, output_tokens=20, completed=True,
+            prompt="private", headers={"Authorization": "secret"}, cached_tokens=0))
+        self.assertEqual(item["cached_tokens"], 0)
+        self.assertEqual(item["input_tokens"], 9000)
+        self.assertNotIn("private", json.dumps(item))
+        self.assertNotIn("secret", json.dumps(item))
+        unknown = mapper.map(event("llm_provider_request_complete", 900, input_tokens=100))
+        self.assertNotIn("cached_tokens", unknown)
+        guard = mapper.map(event("llm_transfer_guard_decision", 910, suppressed=True,
+                                 text_buffer_ms=500, text="private"))
+        self.assertEqual(guard["text_buffer_ms"], 500)
+        self.assertNotIn("private", json.dumps(guard))
 
     def test_speculative_audio_is_not_reported_as_caller_output(self):
         mapper = MetricMapper()
