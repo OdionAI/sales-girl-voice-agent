@@ -27,6 +27,20 @@ LANGUAGES = {
            "acknowledgement": "Biko, chere obere oge ka m lelee ya."},
 }
 
+# CLEAR Global TWB Voice Hausa 1.0 is CC-BY-NC-4.0, for opted-in research only.
+HAUSA_TWB_VOICES = {"haisha": "spk_f_1", "adamu": "spk_m_1", "muhammad": "spk_m_2"}
+HAUSA_LEGACY_VOICES = {"", "default", "hausa", "musa", "coqui-hausa-vits", "hausa-twb-voice-1.0"}
+
+
+def hausa_voice(value):
+    selected = str(value or "").strip().lower()
+    if selected in HAUSA_LEGACY_VOICES:
+        return "haisha"
+    for name, speaker in HAUSA_TWB_VOICES.items():
+        if selected in {name, speaker}:
+            return name
+    raise ValueError("Unknown Hausa voice selection")
+
 
 def language_code(value):
     language = str(value or "").strip().lower()
@@ -52,8 +66,21 @@ def apply_language_stack(config, context=None, identity=None):
     profile = LANGUAGES.get(language_code(selected))
     if profile is None:
         return apply_pidgin_stack(config, context, identity)
-    return replace(config, tts_language=profile["name"], tts_model=profile["model"],
-                   tts_voice=profile["voice"], tts_url=profile["url"], tts_ref_audio="",
+    model, voice = profile["model"], profile["voice"]
+    if language_code(selected) == "ha":
+        saved = (getattr(context, "tts_voice_id", "")
+                 if language_code(getattr(context, "tts_language_hint", "")) == "ha" else "")
+        configured = str(config.tts_voice or "").strip().lower()
+        if configured not in HAUSA_TWB_VOICES and configured not in HAUSA_TWB_VOICES.values():
+            configured = ""
+        requested = overrides.get("tts_voice_id") or overrides.get("tts_voice") or saved or configured
+        chosen = hausa_voice(requested)
+        if config.hausa_twb_voices_enabled:
+            model, voice = "hausa", chosen
+        elif str(requested or "").strip().lower() not in HAUSA_LEGACY_VOICES:
+            raise ValueError("Hausa research voices are not enabled")
+    return replace(config, tts_language=profile["name"], tts_model=model,
+                   tts_voice=voice, tts_url=profile["url"], tts_ref_audio="",
                    stt_model=SBPN_MODEL, stt_ws_url=SBPN_WS_URL, stt_batch_url=SBPN_URL,
                    stt_batch_timeout_seconds=120.0)
 
@@ -94,6 +121,10 @@ class NativeLanguageTTSClient:
                     "input": part, "response_format": "pcm", "stream": True,
                 }
                 profile = LANGUAGES.get(language_code(self.config.tts_language), {})
+                if language_code(self.config.tts_language) == "ha" and self.config.hausa_twb_voices_enabled:
+                    selected = hausa_voice(self.config.tts_voice)
+                    payload.update(model="hausa", voice=selected, speaker_id=HAUSA_TWB_VOICES[selected],
+                                   stream_format="audio", speed=1, seed=17)
                 if profile.get("request_language"):
                     payload["language"] = profile["request_language"]
                 async with self.session.post(self.config.tts_url, json=payload,

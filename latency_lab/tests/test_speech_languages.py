@@ -9,11 +9,11 @@ from unittest.mock import AsyncMock
 import aiohttp
 from aiohttp import web
 
-from latency_lab.agentic import AgentRuntimeContext
+from latency_lab.agentic import AgentRuntimeContext, load_agent_runtime_context, session_routing_context
 from latency_lab.config import LabConfig, apply_runtime_overrides
 from latency_lab.pidgin import EjiroTTSClient, SBPNClient, SBPN_MODEL
 from latency_lab.pipeline import ConversationPipeline
-from latency_lab.speech_languages import CoquiTTSClient, NativeLanguageTTSClient, LANGUAGES, apply_language_stack, language_code
+from latency_lab.speech_languages import CoquiTTSClient, NativeLanguageTTSClient, HAUSA_TWB_VOICES, LANGUAGES, apply_language_stack, language_code
 from latency_lab.trace import TraceRecorder
 
 
@@ -77,6 +77,7 @@ class SpeechLanguageTests(unittest.IsolatedAsyncioTestCase):
         self.requests = []
         self.release = asyncio.Event()
         self.delay = False
+        self.failure_status = 0
         self.audio = b"\x01\x00" * 4800
         self.headers = {"Content-Type":"audio/pcm", "X-Audio-Sample-Rate":"24000", "X-Audio-Channels":"1"}
         async def speech(request):
@@ -85,6 +86,8 @@ class SpeechLanguageTests(unittest.IsolatedAsyncioTestCase):
             self.assertLessEqual(len(body["input"]), 140)
             self.assertTrue(body["stream"])
             self.assertEqual(body["response_format"], "pcm")
+            if self.failure_status:
+                return web.json_response({"detail": "Speaker unavailable"}, status=self.failure_status)
             response = web.StreamResponse(headers=self.headers)
             await response.prepare(request)
             if self.delay:
@@ -97,6 +100,9 @@ class SpeechLanguageTests(unittest.IsolatedAsyncioTestCase):
             return response
         app = web.Application()
         app.router.add_post("/speech", speech)
+        async def runtime_config(request):
+            return web.json_response(self.runtime_payload)
+        app.router.add_get("/v1/agents/internal/agents/{agent_id}/runtime-config", runtime_config)
         self.runner = web.AppRunner(app)
         await self.runner.setup()
         site = web.TCPSite(self.runner, "127.0.0.1", 0)
@@ -149,3 +155,69 @@ class SpeechLanguageTests(unittest.IsolatedAsyncioTestCase):
                 _, chunks = await CoquiTTSClient(config, session).stream("Sannu.")
                 with self.assertRaises(ValueError):
                     _ = [part async for part in chunks]
+
+    async def test_saved_hausa_speaker_reaches_every_streaming_turn(self):
+        for voice, speaker_id in HAUSA_TWB_VOICES.items():
+            with self.subTest(voice=voice), TemporaryDirectory() as directory:
+                self.runtime_payload = {"name": "Research agent", "tts_language_hint": "Hausa",
+                                        "tts_voice_id": voice, "instructions": "Speak Hausa."}
+                base = LabConfig(hausa_twb_voices_enabled=True, llm_model="unchanged-llm",
+                                 agent_config_api_base_url=self.url.removesuffix("/speech"),
+                                 agent_config_service_token="test-service-token")
+                context = await load_agent_runtime_context(room_name="", config=base,
+                    trace=TraceRecorder(Path(directory)),
+                    routing_context=session_routing_context({"business_id": "test-business", "config_agent_id": "test-agent"}))
+                self.assertTrue(context.loaded)
+                self.assertEqual(context.tts_voice_id, voice)
+                config = replace(apply_language_stack(base, context), tts_url=self.url)
+                self.assertEqual(config.llm_model, "unchanged-llm")
+                self.assertEqual(config.stt_model, SBPN_MODEL)
+                self.requests.clear()
+                async with aiohttp.ClientSession() as session:
+                    client = NativeLanguageTTSClient(config, session)
+                    for text in ("Sannu da zuwa. " * 20, "Ta yaya zan iya taimaka muku?"):
+                        _, chunks = await client.stream(text)
+                        self.assertTrue(b"".join([block async for block in chunks]))
+                self.assertGreater(len(self.requests), 2)
+                for payload in self.requests:
+                    self.assertEqual(payload["model"], "hausa")
+                    self.assertEqual(payload["voice"], voice)
+                    self.assertEqual(payload["speaker_id"], speaker_id)
+                    self.assertEqual(payload["seed"], 17)
+                    self.assertEqual(payload["speed"], 1)
+                    self.assertEqual(payload["stream_format"], "audio")
+
+    def test_hausa_opt_in_legacy_and_override_selection(self):
+        for legacy in ("", "default", "hausa", "musa", "coqui-hausa-vits"):
+            context = AgentRuntimeContext(tts_language_hint="Hausa", tts_voice_id=legacy)
+            self.assertEqual(apply_language_stack(LabConfig(hausa_twb_voices_enabled=False), context).tts_voice, "hausa")
+            self.assertEqual(apply_language_stack(LabConfig(hausa_twb_voices_enabled=True), context).tts_voice, "haisha")
+        for voice, native_id in HAUSA_TWB_VOICES.items():
+            context = AgentRuntimeContext(tts_language_hint="Hausa", tts_voice_id=voice)
+            with self.assertRaisesRegex(ValueError, "not enabled"):
+                apply_language_stack(LabConfig(hausa_twb_voices_enabled=False), context)
+            identity = {"runtime_overrides": {"tts_voice_id": native_id, "tts_language_hint": "ha"}}
+            selected = apply_language_stack(LabConfig(hausa_twb_voices_enabled=True), context, identity)
+            self.assertEqual(selected.tts_voice, voice)
+        saved = AgentRuntimeContext(tts_language_hint="Hausa", tts_voice_id="adamu")
+        result = apply_language_stack(LabConfig(hausa_twb_voices_enabled=True), saved,
+                                     {"runtime_overrides": {"tts_voice_id": "muhammad"}})
+        self.assertEqual(result.tts_voice, "muhammad")
+        with self.assertRaisesRegex(ValueError, "Unknown Hausa"):
+            apply_language_stack(LabConfig(hausa_twb_voices_enabled=True), saved,
+                                 {"runtime_overrides": {"tts_voice_id": "not-a-speaker"}})
+        with self.assertRaisesRegex(ValueError, "Unknown Hausa"):
+            apply_language_stack(LabConfig(hausa_twb_voices_enabled=True),
+                                 AgentRuntimeContext(tts_language_hint="Hausa", tts_voice_id="not-a-speaker"))
+
+    async def test_hausa_error_does_not_retry_another_speaker(self):
+        self.failure_status = 400
+        config = replace(apply_language_stack(LabConfig(hausa_twb_voices_enabled=True),
+            AgentRuntimeContext(tts_language_hint="Hausa", tts_voice_id="adamu")), tts_url=self.url)
+        async with aiohttp.ClientSession() as session:
+            _, chunks = await NativeLanguageTTSClient(config, session).stream("Sannu. " * 50)
+            with self.assertRaises(aiohttp.ClientResponseError):
+                _ = [part async for part in chunks]
+        self.assertEqual(len(self.requests), 1)
+        self.assertEqual(self.requests[0]["voice"], "adamu")
+        self.assertEqual(self.requests[0]["speaker_id"], "spk_m_1")
