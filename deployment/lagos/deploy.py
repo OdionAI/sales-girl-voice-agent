@@ -14,6 +14,7 @@ STACK = Path('/opt/attentive/releases/recovery-20261009')
 PROJECT = 'odion-recovery-lagos'
 CONTAINER = 'odion-recovery-lagos-voice-1'
 RELEASE_ROOT = Path('/opt/attentive/releases/voice-ci')
+HAUSA_RESEARCH_KEY = 'RVC_LAB_ENABLE_HAUSA_TWB_VOICES'
 
 
 def run(*args, **kwargs):
@@ -54,11 +55,14 @@ def wait_healthy():
     raise RuntimeError('New voice container did not become healthy')
 
 
-def image_override(path, image):
-    path.write_text(json.dumps({'services': {'voice': {'image': image}}}) + '\n')
+def image_override(path, image, environment=None):
+    service = {'image': image}
+    if environment:
+        service['environment'] = environment
+    path.write_text(json.dumps({'services': {'voice': service}}) + '\n')
 
 
-def deploy(release, revision):
+def deploy(release, revision, enable_hausa_research=False):
     if not re.fullmatch(r'[0-9a-f]{40}', revision):
         raise ValueError('Expected a full Git commit SHA')
     if (release.parent != RELEASE_ROOT
@@ -66,6 +70,9 @@ def deploy(release, revision):
             or (release / 'plan.json').exists()):
         raise ValueError('Unexpected or reused release directory')
     previous, files = inspect_voice()
+    previous_env = dict(item.split('=', 1) for item in previous['Config']['Env'])
+    updates = {HAUSA_RESEARCH_KEY: 'true'} if enable_hausa_research else {}
+    expected_env = [f'{key}={value}' for key, value in (previous_env | updates).items()]
     old_image = f'attentive/voice:before-{release.name}'
     new_image = f'attentive/voice:ci-{release.name}'
     run('docker', 'tag', previous['Image'], old_image)
@@ -79,10 +86,11 @@ def deploy(release, revision):
         raise RuntimeError('Voice container changed during build; rerun')
     plan = {'revision': revision, 'previous_image': old_image,
             'previous_image_id': previous['Image'], 'image': new_image,
-            'compose_files': [str(file) for file in files]}
+            'compose_files': [str(file) for file in files],
+            'environment_updates': updates}
     (release / 'plan.json').write_text(json.dumps(plan, indent=2) + '\n')
     override = release / 'voice-ci.json'
-    image_override(override, new_image)
+    image_override(override, new_image, updates)
     attempted = False
     try:
         run(*compose([*files, override]), 'config', '-q', cwd=STACK)
@@ -92,13 +100,14 @@ def deploy(release, revision):
         current = wait_healthy()
         if (current['Image'] != subprocess.check_output(['docker', 'image', 'inspect',
                 new_image, '--format', '{{.Id}}'], text=True).strip()
-                or sorted(current['Config']['Env']) != sorted(previous['Config']['Env'])
+                or sorted(current['Config']['Env']) != sorted(expected_env)
                 or current['Mounts'] != previous['Mounts']):
             raise RuntimeError('Voice image, environment or mounts changed unexpectedly')
     except Exception:
         if attempted:
             rollback = release / 'voice-rollback.json'
-            image_override(rollback, old_image)
+            # A null Compose value removes a key absent from the prior container.
+            image_override(rollback, old_image, {key: previous_env.get(key) for key in updates})
             run(*compose([*files, rollback]), 'up', '-d', '--no-deps', '--no-build',
                 '--force-recreate', 'voice', cwd=STACK)
             wait_healthy()
@@ -113,6 +122,7 @@ if __name__ == '__main__':
     parser.add_argument('--release', type=Path)
     parser.add_argument('--revision')
     parser.add_argument('--verify-only', action='store_true')
+    parser.add_argument('--enable-hausa-research', action='store_true')
     args = parser.parse_args()
     if args.verify_only:
         current, files = inspect_voice()
@@ -125,4 +135,4 @@ if __name__ == '__main__':
         os.umask(0o077)
         with open('/var/lock/attentive-voice-auth-deploy.lock', 'w') as lock:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            deploy(args.release.resolve(), args.revision)
+            deploy(args.release.resolve(), args.revision, args.enable_hausa_research)

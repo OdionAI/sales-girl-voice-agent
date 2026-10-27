@@ -188,7 +188,7 @@ class SpeechLanguageTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(payload["stream_format"], "audio")
 
     def test_hausa_opt_in_legacy_and_override_selection(self):
-        for legacy in ("", "hausa", "musa", "coqui-hausa-vits"):
+        for legacy in ("", "default", "hausa", "musa", "coqui-hausa-vits"):
             context = AgentRuntimeContext(tts_language_hint="Hausa", tts_voice_id=legacy)
             self.assertEqual(apply_language_stack(LabConfig(hausa_twb_voices_enabled=False), context).tts_voice, "hausa")
             self.assertEqual(apply_language_stack(LabConfig(hausa_twb_voices_enabled=True), context).tts_voice, "haisha")

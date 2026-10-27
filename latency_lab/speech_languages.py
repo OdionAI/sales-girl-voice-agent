@@ -29,7 +29,7 @@ LANGUAGES = {
 
 # CLEAR Global TWB Voice Hausa 1.0 is CC-BY-NC-4.0, for opted-in research only.
 HAUSA_TWB_VOICES = {"haisha": "spk_f_1", "adamu": "spk_m_1", "muhammad": "spk_m_2"}
-HAUSA_LEGACY_VOICES = {"", "hausa", "musa", "coqui-hausa-vits", "hausa-twb-voice-1.0"}
+HAUSA_LEGACY_VOICES = {"", "default", "hausa", "musa", "coqui-hausa-vits", "hausa-twb-voice-1.0"}
 
 
 def hausa_voice(value):
