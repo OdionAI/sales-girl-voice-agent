@@ -39,7 +39,7 @@ from .action_tools import (
     localized_action_text,
     suppress_transfer_preamble,
 )
-from .providers import RLLMClient, RSTTClient, RTTSClient, tts_token_budget
+from .providers import RLLMClient, RSTTClient, RTTSClient, tts_token_budget, scoped_llm_stream
 from .pidgin import EjiroTTSClient, SBPNClient, is_pidgin
 from .speech_languages import CoquiTTSClient, LANGUAGES, apply_language_stack, language_code, language_rules, uses_sbpn
 from .trace import TraceRecorder
@@ -2313,14 +2313,17 @@ class ConversationPipeline:
                            and not self.engagement.speech_enabled else {})
             if getattr(self, "directory_enabled", False) and phase in {"prompt_first", "directory_email_search"} and self.engagement.speech_enabled:
                 gate_choice = {"tool_choice": "required"}
-            stream = self.llm.stream(messages, tools=tools, **gate_choice)
+            stream = scoped_llm_stream(self.llm.stream(messages, tools=tools, **gate_choice),
+                                      turn_id=attempt.turn_id, attempt_id=attempt.id, phase=phase)
             if any(
                 (tool.get("function", {}) or {}).get("name") == TRANSFER_TO_AICC_TOOL
                 for tool in (tools or [])
             ):
                 # Do not let speculative speech precede the transfer decision: the
                 # application announces the connection once, then reports the result.
-                stream = suppress_transfer_preamble(stream)
+                stream = suppress_transfer_preamble(stream, on_decision=lambda **timing:
+                    self.trace.record("llm_transfer_guard_decision", turn_id=attempt.turn_id,
+                                      attempt_id=attempt.id, phase=phase, **timing))
             async for event in stream:
                 if attempt.cancelled:
                     raise asyncio.CancelledError
