@@ -127,21 +127,26 @@ The current branch exposes native LLM function definitions only for an agent's
 configured `internal://create-ticket` and `internal://send-email` tools. A stable
 partial may prepare the function name and arguments, but it cannot execute an
 API call. After that caller turn is committed, the coordinator asks a
-deterministic confirmation question. Only an affirmative, separately committed
-caller turn authorizes one request to the conversation service. Rejection
-cancels the pending action, unclear evidence repeats the confirmation, and
-spoken success is generated only from a successful API result.
+model-generated confirmation question in the agent's saved language. Only a
+clear, separately committed caller approval authorizes one request to the
+conversation service. Rejection cancels the pending action; unclear evidence
+gets a new natural-language question. The application retains deterministic
+side-effect and result checks, while the model phrases acknowledgements and
+success or failure feedback from the action result.
 
-Confirmation questions, acknowledgements, and ticket/email results use the
-agent's saved `tts_language_hint` for French agents. The confirmation matcher
-accepts clear French approvals and refusals as well as common English replies,
-including “Okay, create the ticket,” so a caller's language does not cause the
-action prompt to switch languages or repeat after an explicit approval.
+For French agents, confirmation questions, acknowledgements, action results,
+transfer updates, and closing responses are phrased by the model in the saved
+`tts_language_hint`. The confirmation classifier understands natural French and
+English replies, including indirect approval, without requiring a phrase list.
+French-agent spoken fallbacks do not use fixed English text when the language
+model is unavailable; other agents keep their existing response paths.
 
-Generic HTTP tools, transfers, and transactional banking actions remain outside
-this increment. Trace events record tool preparation, final-authority waiting,
-confirmation classification, API start/completion, elapsed time, and result
-keys without recording email bodies or other argument values.
+Generic HTTP tools and transactional banking actions remain outside this
+increment. Transfer routing stays on its dedicated path; French-agent transfer
+updates are phrased by the model. Trace events record tool preparation,
+final-authority waiting, confirmation classification, API start/completion,
+elapsed time, and result keys without recording email bodies or other argument
+values.
 
 ### Increment 4: AICC number routing and end-call
 
