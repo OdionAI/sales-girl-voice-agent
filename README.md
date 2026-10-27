@@ -33,6 +33,22 @@ This worker talks to:
 - `sales-girl-knowledge-service`
   - runtime business-knowledge lookup scoped to the agent's attached
     `knowledge_base_ids`
+
+### AICC outbound call context
+
+For outbound calls, AICC must put the prepared call reference in SIP header
+`X-Odion-Call-Ref`. The worker reads available participant attributes and uses
+LiveKit's `lk.sip.GetRemoteHeaders` RPC when mapped header attributes have not
+arrived yet. It claims the reference from Conversation Service before
+loading the agent runtime config. The claim binds the record to one LiveKit
+room; a missing, expired, already-finished, or differently-bound reference
+fails closed instead of starting with unrelated customer context. The worker
+adds the configured outbound instructions and that call's context values to
+the prompt as data, and finalizes the call record during session cleanup.
+Configure `CONVERSATION_API_BASE_URL` (or the legacy
+`CONVERSATION_SERVICE_BASE_URL`) and `CONVERSATION_SERVICE_TOKEN` in the worker
+runtime for this path. SIP header propagation must be verified with AICC before
+release.
 - optional external/custom tool endpoints
 
 ## Current runtime status
