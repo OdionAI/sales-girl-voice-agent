@@ -25,6 +25,62 @@ class LlmProviderTests(unittest.TestCase):
             self.assertEqual(llm_engine.provider, "groq")
             self.assertEqual(llm_engine.model, main.GROQ_LLM_MODEL_EN)
 
+    def test_build_llm_uses_environment_wide_model_selection(self) -> None:
+        with (
+            patch("main.groq.LLM", side_effect=lambda **kwargs: object()),
+            patch.object(main, "FallbackGroqLLM") as factory,
+        ):
+            main._build_llm_for_language(
+                language="en",
+                userdata={
+                    "platform_voice_defaults": {
+                        "llm": {"provider": "groq", "model": "llama-3.3-70b-versatile"}
+                    }
+                },
+            )
+        factory.assert_called_once_with(
+            primary_model="llama-3.3-70b-versatile", backup_model=""
+        )
+
+    def test_build_llm_uses_environment_wide_openai_compatible_endpoint(self) -> None:
+        with patch("main.openai.LLM", return_value=object()) as llm_factory:
+            main._build_llm_for_language(
+                language="en",
+                userdata={
+                    "platform_voice_defaults": {
+                        "llm": {
+                            "provider": "openai_compatible",
+                            "model": "custom-chat-model",
+                            "base_url": "https://ai-server.example.test/v1/chat/completions",
+                        }
+                    }
+                },
+            )
+        self.assertEqual(llm_factory.call_args.kwargs["model"], "custom-chat-model")
+        self.assertEqual(llm_factory.call_args.kwargs["base_url"], "https://ai-server.example.test/v1")
+        self.assertEqual(llm_factory.call_args.kwargs["api_key"], "EMPTY")
+
+    def test_build_llm_uses_environment_wide_huawei_maas_selection(self) -> None:
+        with (
+            patch.dict("os.environ", {"MAAS_API_KEY": "test-maas-key"}),
+            patch("main.openai.LLM", return_value=object()) as llm_factory,
+        ):
+            main._build_llm_for_language(
+                language="en",
+                userdata={
+                    "platform_voice_defaults": {
+                        "llm": {
+                            "provider": "maas",
+                            "model": "glm-5.2",
+                            "base_url": "https://maas.example.test/openai/v1",
+                        }
+                    }
+                },
+            )
+        self.assertEqual(llm_factory.call_args.kwargs["model"], "glm-5.2")
+        self.assertEqual(llm_factory.call_args.kwargs["base_url"], "https://maas.example.test/openai/v1")
+        self.assertEqual(llm_factory.call_args.kwargs["api_key"], "test-maas-key")
+
     def test_build_llm_uses_full_qwen_endpoint_override_without_fallback(self) -> None:
         runtime_overrides = {
             "llm_provider": "qwen_openai",

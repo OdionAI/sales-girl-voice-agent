@@ -1477,15 +1477,21 @@ def _build_llm_for_language(
     lang = str(language or "").strip().lower()
     overrides = _normalize_runtime_overrides((userdata or {}).get("runtime_overrides"))
     override_provider = str(overrides.get("llm_provider") or "").strip().lower()
-    provider = override_provider or LLM_PROVIDER
+    platform_defaults = (userdata or {}).get("platform_voice_defaults") or {}
+    platform_llm = platform_defaults.get("llm") if isinstance(platform_defaults, dict) else {}
+    if not isinstance(platform_llm, dict):
+        platform_llm = {}
+    provider = override_provider or str(platform_llm.get("provider") or "").strip().lower() or LLM_PROVIDER
 
-    if provider in {"qwen", "qwen_openai", "openai", "openai_compatible", "custom"}:
+    if provider in {"qwen", "qwen_openai", "openai", "custom"}:
         model = (
             str(overrides.get("llm_model") or "").strip()
+            or str(platform_llm.get("model") or "").strip()
             or (QWEN_LLM_MODEL_FR if lang == "fr" else QWEN_LLM_MODEL_EN)
         )
         endpoint = (
             str(overrides.get("llm_base_url") or "").strip()
+            or str(platform_llm.get("base_url") or "").strip()
             or str(os.getenv("QWEN_LLM_BASE_URL") or "").strip()
         )
         base_url = _openai_compatible_base_url(endpoint)
@@ -1523,12 +1529,75 @@ def _build_llm_for_language(
             },
         )
 
+    if provider == "openai_compatible":
+        model = str(overrides.get("llm_model") or platform_llm.get("model") or "").strip()
+        endpoint = (
+            str(overrides.get("llm_base_url") or "").strip()
+            or str(platform_llm.get("base_url") or "").strip()
+            or str(os.getenv("OPENAI_COMPATIBLE_LLM_BASE_URL") or "").strip()
+        )
+        base_url = _openai_compatible_base_url(endpoint)
+        if not model:
+            raise ValueError("A model ID is required for the OpenAI-compatible LLM provider")
+        if not base_url:
+            raise ValueError("An endpoint is required for the OpenAI-compatible LLM provider")
+        api_key = (
+            str(overrides.get("llm_api_key") or "").strip()
+            or str(os.getenv("OPENAI_COMPATIBLE_LLM_API_KEY") or "").strip()
+            or str(os.getenv("QWEN_LLM_API_KEY") or "").strip()
+            or "EMPTY"
+        )
+        logger.info(
+            "Using OpenAI-compatible LLM for %s session: model=%s base_url=%s",
+            "French" if lang == "fr" else "English",
+            model,
+            base_url,
+        )
+        return openai.LLM(
+            model=model,
+            api_key=api_key,
+            base_url=base_url,
+            temperature=0,
+        )
+
+    if provider == "maas":
+        model = str(
+            overrides.get("llm_model")
+            or platform_llm.get("model")
+            or os.getenv("MAAS_LLM_MODEL_DEFAULT")
+            or os.getenv("MAAS_PROMPT_MODEL")
+            or "glm-5.2"
+        ).strip()
+        endpoint = (
+            str(overrides.get("llm_base_url") or "").strip()
+            or str(platform_llm.get("base_url") or "").strip()
+            or str(os.getenv("MAAS_BASE_URL") or "").strip()
+            or "https://api-ap-southeast-1.modelarts-maas.com/openai/v1"
+        )
+        api_key = str(os.getenv("MAAS_API_KEY") or "").strip()
+        if not api_key:
+            raise ValueError("MAAS_API_KEY is required for the Huawei MaaS LLM provider")
+        base_url = _openai_compatible_base_url(endpoint)
+        logger.info(
+            "Using Huawei MaaS LLM for %s session: model=%s base_url=%s",
+            "French" if lang == "fr" else "English",
+            model,
+            base_url,
+        )
+        return openai.LLM(
+            model=model,
+            api_key=api_key,
+            base_url=base_url,
+            temperature=0,
+        )
+
     if provider == "groq":
         primary_model = (
             str(overrides.get("llm_model") or "").strip()
+            or str(platform_llm.get("model") or "").strip()
             or (GROQ_LLM_MODEL_FR if lang == "fr" else GROQ_LLM_MODEL_EN)
         )
-        backup_model = "" if override_provider else (
+        backup_model = "" if (override_provider or platform_llm.get("provider")) else (
             GROQ_LLM_BACKUP_MODEL_FR if lang == "fr" else GROQ_LLM_BACKUP_MODEL_EN
         )
         logger.info(
@@ -1544,9 +1613,10 @@ def _build_llm_for_language(
 
     primary_model = (
         str(overrides.get("llm_model") or "").strip()
+        or str(platform_llm.get("model") or "").strip()
         or (GOOGLE_LLM_MODEL_FR if lang == "fr" else GOOGLE_LLM_MODEL_EN)
     )
-    backup_model = "" if override_provider else (
+    backup_model = "" if (override_provider or platform_llm.get("provider")) else (
         GOOGLE_LLM_BACKUP_MODEL_FR if lang == "fr" else GOOGLE_LLM_BACKUP_MODEL_EN
     )
     logger.info(
@@ -3049,6 +3119,9 @@ async def _fetch_agent_runtime_config(
         str(payload.get("name") or ""),
         len(str(payload.get("instructions") or "")),
     )
+    platform_defaults = payload.get("platform_voice_defaults")
+    if isinstance(platform_defaults, dict):
+        userdata["platform_voice_defaults"] = platform_defaults
     return payload if isinstance(payload, dict) else {}
 
 
@@ -4071,11 +4144,30 @@ def _default_odion_stt_transport() -> str:
 def _build_stt_engine_for_language(*, language: str, userdata: dict[str, Any]) -> Any:
     lang = str(language or "").strip().lower()
     overrides = _runtime_overrides_from_userdata(userdata)
+    platform_defaults = userdata.get("platform_voice_defaults") or {}
+    platform_stt = platform_defaults.get("stt") if isinstance(platform_defaults, dict) else {}
+    if not isinstance(platform_stt, dict):
+        platform_stt = {}
     provider = (
-        str(overrides.get("stt_provider") or _default_stt_provider()).strip().lower()
+        str(
+            overrides.get("stt_provider")
+            or platform_stt.get("provider")
+            or _default_stt_provider()
+        ).strip().lower()
     )
-    model = str(overrides.get("stt_model") or _default_stt_model()).strip() or _default_stt_model()
-    base_url = str(overrides.get("stt_base_url") or "").strip()
+    model = str(overrides.get("stt_model") or platform_stt.get("model") or "").strip()
+    if not model:
+        if provider == "groq":
+            model = str(os.getenv("GROQ_STT_MODEL") or "whisper-large-v3-turbo").strip()
+        elif provider == "odion_stt":
+            model = str(
+                os.getenv("VOICE_AGENT_STT_MODEL")
+                or os.getenv("ODION_STT_MODEL")
+                or "Qwen3-ASR"
+            ).strip()
+        else:
+            model = _default_stt_model()
+    base_url = str(overrides.get("stt_base_url") or platform_stt.get("base_url") or "").strip()
     transport = str(
         overrides.get("stt_transport")
         or ("" if base_url else _default_odion_stt_transport())
@@ -4109,6 +4201,14 @@ def _build_stt_engine_for_language(*, language: str, userdata: dict[str, Any]) -
             stt=odion_stt,
             vad=endpointing_vad,
         )
+    if provider == "groq":
+        logger.info(
+            "Using Groq STT runtime selection: model=%s language=%s platform_default=%s",
+            model,
+            lang,
+            bool(platform_stt),
+        )
+        return groq.STT(model=model, language=lang or "en")
     stt_kwargs: dict[str, Any] = {
         "language": _deepgram_stt_language_for_language(lang),
         "model": model,
@@ -4142,8 +4242,13 @@ def _build_tts_engine_for_language(
     is_fr = lang == "fr"
     saved_provider = str(active_agent_config.get("tts_provider") or "").strip().lower()
     runtime_overrides = _runtime_overrides_from_userdata(userdata)
+    platform_defaults = userdata.get("platform_voice_defaults") or {}
+    platform_tts = platform_defaults.get("tts") if isinstance(platform_defaults, dict) else {}
+    if not isinstance(platform_tts, dict):
+        platform_tts = {}
     default_tts_provider = str(
-        os.getenv("VOICE_AGENT_TTS_PROVIDER")
+        platform_tts.get("provider")
+        or os.getenv("VOICE_AGENT_TTS_PROVIDER")
         or os.getenv("DEFAULT_TTS_PROVIDER")
         or ""
     ).strip().lower()
@@ -4152,13 +4257,19 @@ def _build_tts_engine_for_language(
     ).strip().lower()
     override_model = (
         str(runtime_overrides.get("tts_model") or "").strip()
-        or _deepgram_tts_model_for_language(lang)
+        or str(platform_tts.get("model") or "").strip()
     )
-    override_base_url = str(runtime_overrides.get("tts_base_url") or "").strip()
+    if not override_model:
+        if default_tts_provider in {"odion_tts", "odion"}:
+            override_model = str(os.getenv("ODION_TTS_MODEL_PROFILE") or "Qwen3-TTS").strip()
+        else:
+            override_model = _deepgram_tts_model_for_language(lang)
+    override_base_url = str(
+        runtime_overrides.get("tts_base_url") or platform_tts.get("base_url") or ""
+    ).strip()
     override_api_key = str(runtime_overrides.get("tts_api_key") or "").strip()
-    fallback_tts: Any = (
-        deepgram.TTS(model=_deepgram_tts_model_for_language(lang))
-    )
+    def fallback_tts() -> Any:
+        return deepgram.TTS(model=_deepgram_tts_model_for_language(lang))
     odion_enabled = ENABLE_ODION_TTS_FR if is_fr else ENABLE_ODION_TTS_EN
     fallback_label = "French" if is_fr else "English"
 
@@ -4286,7 +4397,7 @@ def _build_tts_engine_for_language(
             "FR" if is_fr else "EN",
             fallback_label,
         )
-        return fallback_tts
+        return fallback_tts()
     if not odion_enabled and runtime_odion_tts_requested:
         logger.info(
             "Using runtime Odion TTS override for %s session even though ENABLE_ODION_TTS_%s=false.",
@@ -4374,7 +4485,7 @@ def _build_tts_engine_for_language(
             fallback_label,
             exc,
         )
-    return fallback_tts
+    return fallback_tts()
 
 
 async def _wait_for_job_shutdown(ctx: JobContext) -> str:

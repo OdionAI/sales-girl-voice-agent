@@ -21,6 +21,22 @@ def _room_token(value: str) -> str:
 
 
 class OdionTTSTests(unittest.TestCase):
+    def test_tts_builder_uses_environment_wide_provider_and_model(self) -> None:
+        expected = object()
+        with patch("main.deepgram.TTS", return_value=expected) as deepgram_tts:
+            engine = main._build_tts_engine_for_language(
+                language="en",
+                active_agent_config={"tts_provider": "odion_tts", "tts_voice_id": "saved-clone"},
+                userdata={
+                    "platform_voice_defaults": {
+                        "tts": {"provider": "deepgram", "model": "aura-2-thalia-en"}
+                    }
+                },
+                business_id="business-123",
+            )
+        self.assertIs(engine, expected)
+        deepgram_tts.assert_called_once_with(model="aura-2-thalia-en")
+
     def test_endpoint_appends_stream_path_for_host_only_base_url(self) -> None:
         engine = OdionTTS(
             owner_id="owner-123",

@@ -645,6 +645,20 @@ class OdionSTTTests(unittest.IsolatedAsyncioTestCase):
             f"{DEFAULT_ODION_STT_BASE_URL}/stt/v1/stt/stream",
         )
 
+    def test_main_uses_environment_wide_groq_stt_selection(self) -> None:
+        expected = object()
+        with patch("main.groq.STT", return_value=expected) as groq_stt:
+            engine = main._build_stt_engine_for_language(
+                language="en",
+                userdata={
+                    "platform_voice_defaults": {
+                        "stt": {"provider": "groq", "model": "whisper-large-v3-turbo"}
+                    }
+                },
+            )
+        self.assertIs(engine, expected)
+        groq_stt.assert_called_once_with(model="whisper-large-v3-turbo", language="en")
+
     def test_main_builds_odion_stt_stream_adapter_with_full_endpoint_override(self) -> None:
         userdata = {
             "runtime_overrides": {

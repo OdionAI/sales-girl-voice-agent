@@ -53,6 +53,16 @@ release.
 
 ## Current runtime status
 
+The active worker loads the environment's Voice Lab defaults in the same
+runtime-config request as each agent. The defaults apply to calls that start
+after an administrator saves a change; a call already in progress keeps its
+existing engines. Provider credentials remain in the worker environment. Groq
+STT requires `GROQ_API_KEY`; OpenAI-compatible LLM endpoints use
+`OPENAI_COMPATIBLE_LLM_API_KEY` (or the existing `QWEN_LLM_API_KEY`) when
+authentication is required. Huawei MaaS uses `MAAS_API_KEY` and its
+OpenAI-compatible endpoint. Provider/model IDs and compatible endpoints can be
+changed in the dashboard; new provider protocols still need a worker adapter.
+
 Current stable contract:
 
 - stable cascade runtime is the production-safe path
@@ -114,7 +124,7 @@ Current stable contract:
   Odion STT and NG TTS with `VOICE_AGENT_STT_PROVIDER`, `VOICE_AGENT_STT_MODEL`,
   `ODION_STT_BASE_URL`, and `NG_TTS_BASE_URL` without needing per-call
   dashboard overrides
-- staging Voice Lab sessions can apply temporary per-call STT/TTS overrides,
+- Voice Lab sessions can apply temporary per-call STT/TTS overrides,
   including the Odion STT adapter for `eu-stt.odion.ai`, without changing
   saved agent configuration
 - NG TTS should use `NG_TTS_BASE_URL=https://tts-ng.odion.ai` on Huawei;
