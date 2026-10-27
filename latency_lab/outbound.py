@@ -11,19 +11,6 @@ from agent import outbound_call_api
 from .agentic import AgentRuntimeContext
 
 
-def _reference_from_participant(participant: Any) -> str:
-    attributes = getattr(participant, "attributes", None) or {}
-    for key, value in attributes.items():
-        normalized = str(key).lower().replace("_", "-")
-        if normalized in {"sip.h.x-odion-call-ref", "x-odion-call-ref"}:
-            return str(value or "").strip()
-    try:
-        metadata = json.loads(getattr(participant, "metadata", "") or "{}")
-    except (TypeError, ValueError):
-        metadata = {}
-    return str(metadata.get("outbound_call_ref") or metadata.get("call_ref") or "").strip()
-
-
 async def sip_remote_headers(ctx: Any, participant: Any) -> dict[str, str]:
     rpc = getattr(getattr(ctx.room, "local_participant", None), "perform_rpc", None)
     if not callable(rpc):
@@ -33,7 +20,7 @@ async def sip_remote_headers(ctx: Any, participant: Any) -> dict[str, str]:
             rpc(
                 destination_identity=participant.identity,
                 method="lk.sip.GetRemoteHeaders",
-                payload=json.dumps({"include": ["To", "X-Odion-Call-Ref"]}),
+                payload=json.dumps({"include": ["To"]}),
             ), timeout=2.0,
         )
     except Exception:
@@ -48,16 +35,23 @@ async def sip_remote_headers(ctx: Any, participant: Any) -> dict[str, str]:
     return {str(key).lower(): str(value or "").strip() for key, value in values.items()}
 
 
-def sip_call_reference(participant: Any, headers: dict[str, str]) -> str:
-    return _reference_from_participant(participant) or headers.get("x-odion-call-ref", "")
+async def claim_for_route(*, recipient_phone: str, room_name: str, identity: dict[str, Any]) -> dict[str, Any]:
+    """Bind the prepared outbound call for the customer's number to this room.
 
-
-async def claim_for_route(*, call_ref: str, room_name: str, identity: dict[str, Any]) -> dict[str, Any]:
-    claim = await outbound_call_api.claim_call(call_ref=call_ref, room_name=room_name)
+    AICC carries the customer's phone number on the SIP INVITE, so the worker
+    uses that number as the call identifier instead of an opaque reference.
+    """
+    claim = await outbound_call_api.claim_call_by_recipient(
+        business_id=str(identity.get("business_id") or ""),
+        recipient_phone=recipient_phone,
+        room_name=room_name,
+    )
     if (str(claim.get("business_id") or "") != str(identity.get("business_id") or "")
             or str(claim.get("agent_id") or "") != str(identity.get("config_agent_id") or "")):
         await outbound_call_api.finish_call(
-            call_ref=call_ref, status="failed", failure_reason="SIP To route did not match prepared agent."
+            call_ref=str(claim.get("call_ref") or ""),
+            status="failed",
+            failure_reason="SIP To route did not match prepared agent.",
         )
         raise RuntimeError("Prepared call agent does not match the SIP To route.")
     return claim
