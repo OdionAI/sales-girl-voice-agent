@@ -422,7 +422,7 @@ class ConversationPipeline:
             return profile["opening"]
         if is_pidgin(self.config.tts_language):
             name = str(getattr(self.agent_context, "name", "") or "").strip()
-            return f"Hello! Na {name} dey here. How I fit help you today?" if name else "Hello! How I fit help you today?"
+            return f"How you dey? Na {name} dey here. How I fit help you?" if name else "How you dey? How I fit help you?"
         # The opening is spoken directly by TTS, before the LLM sees a caller
         # turn. Allow an agent's own instructions to supply that first line.
         greeting = ""
@@ -2139,6 +2139,14 @@ class ConversationPipeline:
         except Exception:
             self.trace.record("natural_line_failed", reason=kind)
         # Only if the model is unavailable; rotate so it is not the same line twice.
+        if is_pidgin(self.config.tts_language):
+            return random.choice({
+                "acknowledge_tool_start": ["Make I check am for you.", "Give me small time, abeg."],
+                "report_result": ["Na the result be this.", "See wetin I find."],
+                "ask_missing_detail": ["Abeg, I need one more detail from you."],
+                "tool_failed_offer_ticket": ["I no fit complete am now. I fit raise ticket make the team follow am up."],
+                "ask_confirmation": ["Abeg, konfam say make I go ahead?"],
+            }.get(kind, ["Give me small time, abeg."]))
         return random.choice({
             "acknowledge_tool_start": ["Let me check that for you.", "One moment, I'll look into that.",
                                        "Alright, checking that now.", "Let me take a look at that."],
