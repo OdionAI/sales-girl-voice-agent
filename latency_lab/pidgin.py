@@ -12,7 +12,8 @@ from dataclasses import replace
 import aiohttp
 from livekit import rtc
 
-EJIRO_MODEL = "mms-pcm-ejiro-3h"
+EJIRO_MODEL = "qwen-pidgin-f1-cleaned-epoch5"
+PIDGIN_VOICE = "favour"
 EJIRO_URL = "http://102.88.137.124:8080/tts-ejiro/v1/audio/speech"
 SBPN_MODEL = "ogunlao/SBPN_multilingual_base"
 SBPN_URL = "http://102.88.137.124:8080/asr-sbpn/v1/audio/transcriptions"
@@ -22,14 +23,20 @@ LANGUAGE_RULES = """
 CALL LANGUAGE: Nigerian Pidgin (pcm). Speak natural Nigerian Pidgin throughout
 this call, not standard English. This applies to greetings, tool acknowledgements,
 progress updates, answers and goodbyes, even when the instructions, retrieved
-information or tool results are in English. Preserve names, amounts, account
-numbers and factual meaning. Do not translate tool names or JSON argument keys.
-Do not imitate an accent with misspellings or invent facts. Use short, complete
-spoken sentences and ask one question at a time. Keep all existing safety and
-business rules. In spoken replies, spell amounts and quantities in words, and
-read phone numbers, account numbers and codes digit by digit without losing zeros.
-Keep numeric tool arguments as numbers. For example:
-"Abeg give me small time make I check am for you."
+information, customer context or tool results are in English. Do not switch to
+formal English unless the caller explicitly asks or an exact quotation is necessary.
+Use abeg, wetin, wey, dey, don, fit, na, una, am and make I where natural; do not
+force slang. For the spoken verb confirm, write konfam, with K. This is the only
+tested pronunciation-spelling exception; do not invent other phonetic spellings.
+Preserve facts, names, brands, addresses, amounts, URLs, account/phone numbers and
+codes. Never respell tool names, JSON keys, enums, numeric arguments or stored
+customer records. These rules apply only to spoken natural-language output.
+Use short complete sentences, one question at a time, without Markdown or numbered
+lists. Keep all existing safety and business rules. Speak amounts as the correct
+amount in words, and read identifiers digit by digit without losing any leading
+zero. Keep numeric tool arguments as numbers. For example:
+"Abeg, konfam your account number again."
+"Make I check am for you. Give me small time, abeg."
 """
 
 
@@ -45,7 +52,7 @@ def apply_pidgin_stack(config, context=None, identity=None):
     if not is_pidgin(language):
         return config
     return replace(config, tts_language="Nigerian Pidgin", tts_model=EJIRO_MODEL,
-                   tts_voice="ejiro", tts_url=EJIRO_URL, tts_ref_audio="",
+                   tts_voice=PIDGIN_VOICE, tts_url=EJIRO_URL, tts_ref_audio="", tts_seed="17",
                    stt_model=SBPN_MODEL, stt_ws_url=SBPN_WS_URL, stt_batch_url=SBPN_URL,
                    stt_batch_timeout_seconds=120.0)
 
@@ -68,10 +75,10 @@ def split_text(text: str, limit: int = 240) -> list[str]:
 
 
 def ejiro_spoken_text(text: str) -> str:
-    """MMS lacks some digit tokens; preserve identifiers without guessing value."""
+    """Spoken-only numeric compatibility; never rewrite structured/customer data."""
     words = ("zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine")
     text = text.replace("\u20a6", " naira ").replace("%", " percent ")
-    # Numeric punctuation must stay audible rather than being dropped by MMS.
+    # Keep numeric punctuation audible without guessing the intended amount.
     text = re.sub(r"(?<=\d)\.(?=\d)", " point ", text)
     return re.sub(r"\d+", lambda match: " " + " ".join(words[unicodedata.decimal(c)] for c in match[0]) + " ", text)
 
@@ -101,8 +108,8 @@ class EjiroTTSClient:
                 if not part.strip():
                     continue
                 async with self.session.post(self.config.tts_url, json={
-                    "model": EJIRO_MODEL, "voice": "ejiro", "input": part,
-                    "response_format": "pcm", "stream": True,
+                    "model": EJIRO_MODEL, "voice": PIDGIN_VOICE, "input": part,
+                    "response_format": "pcm", "stream": True, "seed": 17, "speed": 1,
                 }, timeout=aiohttp.ClientTimeout(total=60)) as response:
                     response.raise_for_status()
                     if (response.content_type != "audio/pcm" or
