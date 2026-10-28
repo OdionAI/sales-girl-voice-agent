@@ -142,8 +142,9 @@ class EjiroTTSClient:
 
 class SBPNClient:
     """Revisable live prefixes, with bounded batch recovery for a complete turn."""
-    def __init__(self, config, on_partial, on_final, on_provider_event):
+    def __init__(self, config, on_partial, on_final, on_provider_event, *, on_final_unavailable=None):
         self.config, self.on_final = config, on_final
+        self.on_final_unavailable = on_final_unavailable
         self.on_partial = on_partial
         self.event = on_provider_event
         self.session = None
@@ -266,6 +267,9 @@ class SBPNClient:
             self.degraded = False
         if text:
             await self.on_final(text)
+        elif self.on_final_unavailable is not None:
+            self.event("stt_final_unavailable", {"model": SBPN_MODEL})
+            await self.on_final_unavailable()
 
     async def _transcribe(self, pcm):
         from .providers import pcm16_wav
