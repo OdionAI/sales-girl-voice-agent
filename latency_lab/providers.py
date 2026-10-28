@@ -542,10 +542,11 @@ class RSTTClient:
             async with self.session.post(
                 self.config.stt_batch_url, data=form, timeout=timeout
             ) as response:
-                http_status = response.status
+                http_status = getattr(response, "status", None)
+                response_headers = getattr(response, "headers", {}) or {}
                 provider_request_id = (
-                    response.headers.get("x-request-id")
-                    or response.headers.get("request-id")
+                    response_headers.get("x-request-id")
+                    or response_headers.get("request-id")
                 )
                 if provider_request_id:
                     provider_request_id = (
