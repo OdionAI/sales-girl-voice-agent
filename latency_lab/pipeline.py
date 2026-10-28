@@ -773,6 +773,36 @@ class ConversationPipeline:
         self.preconfirm_partial = None
         self.speech_ms = 0.0
 
+    def _reply_grace_seconds(self) -> float:
+        if (self.transport != "livekit" or not self.config.engagement_enabled
+                or self.agent_context.agent_id not in self.config.reply_grace_agent_ids):
+            return 0.0
+        # Keep a trial setting from silently turning a short pause into dead air.
+        return min(max(self.config.reply_grace_ms, 0.0), 1500.0) / 1000.0
+
+    async def _respond_after_reply_grace(self, text: str, turn_id: str | None) -> None:
+        seconds = self._reply_grace_seconds()
+        if seconds:
+            self.trace.record("reply_grace_start", turn_id=turn_id,
+                              reason="wait_for_caller_continuation_before_generation",
+                              delay_ms=round(seconds * 1000))
+            try:
+                await asyncio.sleep(seconds)
+                # A candidate may start just before the timer expires. Give it
+                # one bounded confirmation window; a stalled audio stream must
+                # not leave the agent waiting indefinitely.
+                if self.speech_candidate_active and self.turn_id == turn_id:
+                    await asyncio.sleep(min(max(self.config.min_speech_ms / 1000, 0.05), 0.5))
+            except asyncio.CancelledError:
+                self.trace.record("reply_grace_cancelled", turn_id=turn_id,
+                                  reason="caller_continued_or_session_ended")
+                raise
+            if self.turn_id != turn_id or self.state != "releasing":
+                return
+            self.trace.record("reply_grace_elapsed", turn_id=turn_id,
+                              reason="caller_did_not_continue")
+        await self._respond_to_final(text)
+
     async def _speech_ended(self) -> None:
         if self.state not in {"speaking", "speculating"}:
             return
@@ -1027,7 +1057,8 @@ class ConversationPipeline:
             # can interrupt this generation without stopping input retention.
             self._transition("releasing", "caller_final_retained_pending_response")
             self._final_response_task = asyncio.create_task(
-                self._respond_to_final(text), name="rvc-final-response")
+                self._respond_after_reply_grace(text, self.turn_id),
+                name="rvc-final-response")
             return
         await self._respond_to_final(text)
 

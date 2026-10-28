@@ -45,6 +45,15 @@ Agents should pull GitHub `main`, make changes on a branch, and promote through
 Keep the previous image tag and the exact `-f` chain. Rollback = recreate `voice` from the
 previous chain (or the earlier override). Do not prune rollback images.
 
+The optional reply-grace trial is controlled by GitHub repository variables
+`RVC_LAB_REPLY_GRACE_AGENT_IDS` and `RVC_LAB_REPLY_GRACE_MS`. The Lagos release
+passes them into the voice runtime environment; it is off when the ID list is
+empty or the delay is `0`. To stop the trial, set the delay to `0` and run the
+normal Lagos release workflow with `verify_only=false` on `main`. The active
+Compose environment is shared by agents, so the ID list limits the trial to
+the selected agent rather than changing all calls. The release checks both
+settings and restores the previous values if deployment fails.
+
 ## GitHub release
 `.github/workflows/deploy-lagos.yml` is the Lagos path. A `main` push starts a
 release unless the commit message contains `[skip deploy]`. Manual workflow
