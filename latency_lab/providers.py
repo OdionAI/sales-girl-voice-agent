@@ -7,6 +7,7 @@ import hashlib
 import io
 import json
 import math
+import os
 import re
 import sys
 import time
@@ -1112,14 +1113,30 @@ def tts_token_budget(text: str) -> int:
     return max(24, min(360, int((spoken_words / 2.5 + 0.5) * 12.5) + 8))
 
 
+WEMA_VOICES = frozenset({
+    "wema-en-ng-female", "wema-en-ng-male", "wema-en-us-female", "wema-en-us-male",
+})
+# Preserve the Wema sampling seed while comparing full ICL conditioning with
+# Helen. A fixed seed controls sampling; it does not guarantee speaker identity.
+# Overridable with RVC_LAB_WEMA_TTS_SEED.
+WEMA_TTS_SEED = os.getenv("RVC_LAB_WEMA_TTS_SEED", "0")
+
+
+def is_wema_voice(voice: str) -> bool:
+    return str(voice or "").strip().lower() in WEMA_VOICES
+
+
 def resolve_tts_seed(config: LabConfig) -> str:
     """Return the seed to pin a TTS voice.
 
-    An explicit configured seed wins; otherwise derive a stable per-voice seed
-    from the voice id so the voice never drifts between generations.
+    An explicit configured seed wins; the four Wema voices use one constant
+    clone seed for repeatable sampling; otherwise derive
+    a stable per-voice seed from the voice id.
     """
     seed = str(getattr(config, "tts_seed", "") or "").strip()
     voice = str(getattr(config, "tts_voice", "") or "").strip()
+    if not seed and is_wema_voice(voice):
+        return WEMA_TTS_SEED
     if not seed and voice:
         seed = str(int(hashlib.sha256(voice.encode("utf-8")).hexdigest()[:8], 16))
     return seed
@@ -1150,6 +1167,8 @@ class RTTSClient:
             payload.update(
                 task_type="Base",
                 voice=self.config.tts_voice,
+                # Use the saved reference speech and transcript for every clone,
+                # including Wema, rather than speaker-embedding-only synthesis.
                 x_vector_only_mode=False,
             )
         elif self._ref_audio:
@@ -1164,7 +1183,7 @@ class RTTSClient:
                 task_type="VoiceDesign",
                 instructions="A warm, clear female conversational voice. Natural pacing and no exaggerated emotion.",
             )
-        # Pin the voice so it does not drift between generations.
+        # Keep sampling reproducible; the reference controls speaker conditioning.
         seed = resolve_tts_seed(self.config)
         if seed:
             payload["seed"] = seed
