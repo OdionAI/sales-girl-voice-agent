@@ -27,7 +27,8 @@ BASE_ROUTE = {
 
 
 class LagosReleaseTests(unittest.TestCase):
-    def exercise_release(self, *, enabled=False, old_value=None, drift=False):
+    def exercise_release(self, *, enabled=False, old_value=None, drift=False,
+                         reply_grace_ms='0', reply_grace_agent_ids=''):
         with TemporaryDirectory() as directory:
             root = Path(directory)
             revision = 'a' * 40
@@ -47,6 +48,7 @@ class LagosReleaseTests(unittest.TestCase):
             previous_env = dict(item.split('=', 1) for item in base_env)
 
             updates = dict(release.LAGOS_ASR_ENV)
+            updates.update(release.reply_grace_env(reply_grace_ms, reply_grace_agent_ids))
             if enabled:
                 updates[release.HAUSA_RESEARCH_KEY] = 'true'
             momo_route = release.momo_feedback_route(previous_env, AGENT_ID)
@@ -68,19 +70,25 @@ class LagosReleaseTests(unittest.TestCase):
                  patch.object(release.subprocess, 'check_output', return_value='new-image\n'):
                 if drift:
                     with self.assertRaisesRegex(RuntimeError, 'environment or mounts'):
-                        release.deploy(target, revision, enabled, AGENT_ID)
+                        release.deploy(target, revision, enabled, AGENT_ID,
+                                       reply_grace_ms, reply_grace_agent_ids)
                     self.assertFalse((target / 'DEPLOYED').exists())
                     rollback = json.loads((target / 'voice-rollback.json').read_text())
                     rollback_env = {
                         key: previous_env.get(key) for key in release.LAGOS_ASR_ENV
                     }
                     rollback_env['RVC_AICC_SIP_ROUTE'] = previous_env['RVC_AICC_SIP_ROUTE']
+                    rollback_env[release.REPLY_GRACE_MS_KEY] = previous_env.get(
+                        release.REPLY_GRACE_MS_KEY)
+                    rollback_env[release.REPLY_GRACE_AGENT_IDS_KEY] = previous_env.get(
+                        release.REPLY_GRACE_AGENT_IDS_KEY)
                     if enabled:
                         rollback_env[release.HAUSA_RESEARCH_KEY] = old_value
                     self.assertEqual(rollback['services']['voice']['environment'], rollback_env)
                     self.assertIn('before-', rollback['services']['voice']['image'])
                 else:
-                    release.deploy(target, revision, enabled, AGENT_ID)
+                    release.deploy(target, revision, enabled, AGENT_ID,
+                                   reply_grace_ms, reply_grace_agent_ids)
                     self.assertTrue((target / 'DEPLOYED').exists())
                 override = json.loads((target / 'voice-ci.json').read_text())['services']['voice']
                 self.assertEqual(override.get('environment', {}), updates)
@@ -122,6 +130,17 @@ class LagosReleaseTests(unittest.TestCase):
 
     def test_opt_in_updates_existing_flag(self):
         self.exercise_release(enabled=True, old_value='false')
+
+    def test_agent_scoped_reply_grace_can_be_released(self):
+        self.exercise_release(reply_grace_ms='500', reply_grace_agent_ids=AGENT_ID)
+
+    def test_reply_grace_requires_agent_id_and_bounded_delay(self):
+        with self.assertRaisesRegex(ValueError, 'AGENT_IDS is required'):
+            release.reply_grace_env('500', '')
+        with self.assertRaisesRegex(ValueError, 'integer from 0 to 1500'):
+            release.reply_grace_env('2000', AGENT_ID)
+        with self.assertRaisesRegex(ValueError, 'must contain UUIDs'):
+            release.reply_grace_env('500', 'not-an-agent')
 
     def test_failed_release_removes_previously_absent_flag(self):
         self.exercise_release(enabled=True, drift=True)

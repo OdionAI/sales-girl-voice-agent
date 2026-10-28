@@ -62,6 +62,10 @@ def _bool(name: str, default: bool) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _ids(name: str) -> tuple[str, ...]:
+    return tuple(value.strip() for value in os.getenv(name, "").split(",") if value.strip())
+
+
 @dataclass(frozen=True)
 class LabConfig:
     speech_language_override: str = ""
@@ -190,6 +194,8 @@ This test agent can provide guidance only. It cannot see accounts, verify identi
     speech_rms: float = _float("RVC_LAB_SPEECH_RMS", 280.0)
     min_speech_ms: float = _float("RVC_LAB_MIN_SPEECH_MS", 240.0)
     end_silence_ms: float = _float("RVC_LAB_END_SILENCE_MS", 300.0)
+    reply_grace_agent_ids: tuple[str, ...] = _ids("RVC_LAB_REPLY_GRACE_AGENT_IDS")
+    reply_grace_ms: float = _float("RVC_LAB_REPLY_GRACE_MS", 0.0)
     stable_partial_ms: float = _float("RVC_LAB_STABLE_PARTIAL_MS", 180.0)
     stable_min_chars: int = int(_float("RVC_LAB_STABLE_MIN_CHARS", 8))
     trace_dir: Path = Path(

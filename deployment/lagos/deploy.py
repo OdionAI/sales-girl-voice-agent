@@ -16,6 +16,8 @@ PROJECT = 'odion-recovery-lagos'
 CONTAINER = 'odion-recovery-lagos-voice-1'
 RELEASE_ROOT = Path('/opt/attentive/releases/voice-ci')
 HAUSA_RESEARCH_KEY = 'RVC_LAB_ENABLE_HAUSA_TWB_VOICES'
+REPLY_GRACE_MS_KEY = 'RVC_LAB_REPLY_GRACE_MS'
+REPLY_GRACE_AGENT_IDS_KEY = 'RVC_LAB_REPLY_GRACE_AGENT_IDS'
 LAGOS_ASR_ENV = {
     'RVC_LAB_STT_PROVIDER': 'self_hosted',
     'RVC_LAB_STT_MODEL': 'Qwen3-ASR',
@@ -150,7 +152,25 @@ def leadway_caller_routes(previous_env):
     return json.dumps(route, separators=(',', ':'), sort_keys=True)
 
 
-def deploy(release, revision, enable_hausa_research=False, momo_feedback_agent_id=''):
+def reply_grace_env(delay_ms='0', agent_ids=''):
+    delay = str(delay_ms).strip()
+    if not re.fullmatch(r'\d{1,4}', delay) or int(delay) > 1500:
+        raise ValueError('RVC_LAB_REPLY_GRACE_MS must be an integer from 0 to 1500')
+    raw_ids = [value.strip() for value in str(agent_ids).split(',') if value.strip()]
+    try:
+        normalized_ids = [str(uuid.UUID(value)) for value in raw_ids]
+    except ValueError as exc:
+        raise ValueError('RVC_LAB_REPLY_GRACE_AGENT_IDS must contain UUIDs') from exc
+    if int(delay) and not normalized_ids:
+        raise ValueError('RVC_LAB_REPLY_GRACE_AGENT_IDS is required when delay is enabled')
+    return {
+        REPLY_GRACE_MS_KEY: str(int(delay)),
+        REPLY_GRACE_AGENT_IDS_KEY: ','.join(dict.fromkeys(normalized_ids)),
+    }
+
+
+def deploy(release, revision, enable_hausa_research=False, momo_feedback_agent_id='',
+           reply_grace_ms='0', reply_grace_agent_ids=''):
     if not re.fullmatch(r'[0-9a-f]{40}', revision):
         raise ValueError('Expected a full Git commit SHA')
     if (release.parent != RELEASE_ROOT
@@ -162,6 +182,7 @@ def deploy(release, revision, enable_hausa_research=False, momo_feedback_agent_i
     # Lagos ASR is shared by the voice worker. Reassert Qwen realtime + batch
     # endpoints each release so stale Whisper overrides cannot persist.
     updates = dict(LAGOS_ASR_ENV)
+    updates.update(reply_grace_env(reply_grace_ms, reply_grace_agent_ids))
     if enable_hausa_research:
         updates[HAUSA_RESEARCH_KEY] = 'true'
     if not momo_feedback_agent_id:
@@ -222,6 +243,8 @@ if __name__ == '__main__':
     parser.add_argument('--verify-only', action='store_true')
     parser.add_argument('--enable-hausa-research', action='store_true')
     parser.add_argument('--momo-feedback-agent-id', default='')
+    parser.add_argument('--reply-grace-ms', default='0')
+    parser.add_argument('--reply-grace-agent-ids', default='')
     args = parser.parse_args()
     if args.verify_only:
         current, files = inspect_voice()
@@ -235,4 +258,5 @@ if __name__ == '__main__':
         with open('/var/lock/attentive-voice-auth-deploy.lock', 'w') as lock:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             deploy(args.release.resolve(), args.revision, args.enable_hausa_research,
-                   args.momo_feedback_agent_id)
+                   args.momo_feedback_agent_id, args.reply_grace_ms,
+                   args.reply_grace_agent_ids)
