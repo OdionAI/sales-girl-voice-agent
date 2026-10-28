@@ -36,14 +36,14 @@ LAGOS_ASR_ENV = {
 LEADWAY_CALLER_ROUTES = {
     "+2348112812216": {
         "business_id": "762d1f6d-9a7a-4e41-9088-bc6dcbb6ef4e",
-        "config_agent_id": "388f9963-279c-446f-8d56-c689ddafa6be",
+        "config_agent_id": "c4f4925d-0188-431e-a881-15533f6bb31b",
         "configured_agent_name": "Amaka",
         "voice_auth_required": False,
         "override_did_routes": True,
     },
     "+2349040760651": {
         "business_id": "762d1f6d-9a7a-4e41-9088-bc6dcbb6ef4e",
-        "config_agent_id": "388f9963-279c-446f-8d56-c689ddafa6be",
+        "config_agent_id": "c4f4925d-0188-431e-a881-15533f6bb31b",
         "configured_agent_name": "Amaka",
         "voice_auth_required": False,
         "override_did_routes": True,
