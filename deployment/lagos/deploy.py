@@ -31,6 +31,20 @@ LAGOS_ASR_ENV = {
         '00f99439-59d9-42a2-9c3a-db06422ea6cf'
     ),
 }
+LEADWAY_CALLER_ROUTES = {
+    "+2348112812216": {
+        "business_id": "762d1f6d-9a7a-4e41-9088-bc6dcbb6ef4e",
+        "config_agent_id": "388f9963-279c-446f-8d56-c689ddafa6be",
+        "configured_agent_name": "Amaka",
+        "voice_auth_required": False,
+    },
+    "+2349040760651": {
+        "business_id": "762d1f6d-9a7a-4e41-9088-bc6dcbb6ef4e",
+        "config_agent_id": "388f9963-279c-446f-8d56-c689ddafa6be",
+        "configured_agent_name": "Amaka",
+        "voice_auth_required": False,
+    },
+}
 
 
 def run(*args, **kwargs):
@@ -102,6 +116,28 @@ def momo_feedback_route(previous_env, agent_id):
     return json.dumps(route, separators=(',', ':'), sort_keys=True)
 
 
+def leadway_caller_routes(previous_env):
+    """Add the verified Leadway caller numbers without changing other routes."""
+    route = json.loads(previous_env.get('RVC_AICC_SIP_ROUTE') or '{}')
+    caller_routes = route.setdefault('caller_routes', {})
+    if not isinstance(caller_routes, dict):
+        raise RuntimeError('Lagos SIP caller route map is invalid')
+
+    for number, target in LEADWAY_CALLER_ROUTES.items():
+        digits = ''.join(character for character in number if character.isdigit())[-10:]
+        for existing_number, existing_route in caller_routes.items():
+            existing_digits = ''.join(
+                character for character in str(existing_number) if character.isdigit()
+            )[-10:]
+            if existing_digits == digits:
+                if existing_route != target:
+                    raise RuntimeError(f'Caller number {number} already has a different route')
+                break
+        else:
+            caller_routes[number] = target
+    return json.dumps(route, separators=(',', ':'), sort_keys=True)
+
+
 def deploy(release, revision, enable_hausa_research=False, momo_feedback_agent_id=''):
     if not re.fullmatch(r'[0-9a-f]{40}', revision):
         raise ValueError('Expected a full Git commit SHA')
@@ -118,7 +154,10 @@ def deploy(release, revision, enable_hausa_research=False, momo_feedback_agent_i
         updates[HAUSA_RESEARCH_KEY] = 'true'
     if not momo_feedback_agent_id:
         raise RuntimeError('AICC_MOMO_FEEDBACK_AGENT_ID is required for this release')
-    updates['RVC_AICC_SIP_ROUTE'] = momo_feedback_route(previous_env, momo_feedback_agent_id)
+    route_env = {
+        'RVC_AICC_SIP_ROUTE': momo_feedback_route(previous_env, momo_feedback_agent_id)
+    }
+    updates['RVC_AICC_SIP_ROUTE'] = leadway_caller_routes(route_env)
     expected_env = [f'{key}={value}' for key, value in (previous_env | updates).items()]
     old_image = f'attentive/voice:before-{release.name}'
     new_image = f'attentive/voice:ci-{release.name}'
