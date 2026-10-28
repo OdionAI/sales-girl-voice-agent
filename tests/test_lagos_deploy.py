@@ -30,7 +30,8 @@ class LagosReleaseTests(unittest.TestCase):
             revision = 'a' * 40
             target = root / f'{revision}-1-1'
             target.mkdir()
-            base_env = ['TOKEN=unchanged=secret', 'MODEL=existing'] + [
+            base_env = ['TOKEN=unchanged=secret', 'MODEL=existing',
+                        'RVC_LAB_STT_CONTEXT=sample vocabulary hints'] + [
                 f'{key}={value}' for key, value in {
                     **release.LAGOS_ASR_ENV,
                     'RVC_LAB_STT_MODEL': 'whisper-large-v3-turbo',
@@ -83,6 +84,19 @@ class LagosReleaseTests(unittest.TestCase):
                     self.assertEqual(route['did_routes'][number]['business_id'], MOMO_BUSINESS_ID_DASHED)
                     self.assertTrue(route['did_routes'][number]['outbound_required'])
                 self.assertEqual(route['did_routes']['030105'], BASE_ROUTE['did_routes']['030105'])
+                self.assertEqual(
+                    set(updates['RVC_LAB_STT_CHAT_SCOPE'].split()),
+                    {
+                        'a0c8cda2-3b46-4ee0-898c-48f9a4d3a444',
+                        '00f99439-59d9-42a2-9c3a-db06422ea6cf',
+                    },
+                )
+                self.assertEqual(
+                    dict(item.split('=', 1) for item in current['Config']['Env'])[
+                        'RVC_LAB_STT_CONTEXT'
+                    ],
+                    'sample vocabulary hints',
+                )
                 for call in run.call_args_list:
                     if 'up' in call.args:
                         self.assertEqual(call.args[-1], 'voice')
