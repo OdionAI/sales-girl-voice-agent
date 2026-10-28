@@ -83,6 +83,8 @@ class PidginTests(unittest.IsolatedAsyncioTestCase):
         self.tts_release = asyncio.Event()
         self.tts_finished = asyncio.Event()
         self.delay_tts = False
+        self.asr_text = "I wan check my balance"
+        self.ws_final_text = "I wan check my balance"
         async def tts(request):
             body = await request.json()
             self.requests.append(body)
@@ -115,7 +117,7 @@ class PidginTests(unittest.IsolatedAsyncioTestCase):
             with wave.open(io.BytesIO(audio)) as reader:
                 self.assertLessEqual(reader.getnframes() / reader.getframerate(), 30)
                 self.requests.append(reader.readframes(reader.getnframes()))
-            return web.json_response({"text": "I wan check my balance", "language": "pd"})
+            return web.json_response({"text": self.asr_text, "language": "pd"})
         app = web.Application(client_max_size=10 * 1024 * 1024)
         self.ws_audio = bytearray()
         self.ws_requests = []
@@ -136,7 +138,7 @@ class PidginTests(unittest.IsolatedAsyncioTestCase):
                     data = message.json()
                     self.ws_requests.append(data)
                     if data.get("final"):
-                        await ws.send_json({"type": "transcription.done", "text": "I wan check my balance", "language": "pd"})
+                        await ws.send_json({"type": "transcription.done", "text": self.ws_final_text, "language": "pd"})
             return ws
         app.router.add_get("/realtime", realtime)
         app.router.add_post("/tts", tts)
@@ -315,3 +317,107 @@ class PidginTests(unittest.IsolatedAsyncioTestCase):
             final.assert_awaited_once()
         finally:
             await client.close()
+
+    async def test_empty_final_releases_pipeline_and_next_turn_is_accepted(self):
+        with TemporaryDirectory() as directory:
+            pipeline = ConversationPipeline(self.config, TraceRecorder(Path(directory)), AsyncMock())
+            pipeline._start_attempt = AsyncMock()
+            client = SBPNClient(self.config, pipeline.on_partial, pipeline.on_final,
+                                pipeline._provider_event,
+                                on_final_unavailable=pipeline.on_stt_final_unavailable)
+            pipeline.stt = client
+            try:
+                await client.connect()
+                for number, text in enumerate(("First question", "", "Next question"), 1):
+                    self.ws_final_text = self.asr_text = text
+                    pipeline.state = "speaking"
+                    pipeline.turn_id = f"turn-{number:04d}"
+                    pipeline.turn_number = number
+                    pipeline.final_text = ""
+                    pcm = b"\x01\x00" * 9600
+                    pipeline.turn_pcm16.extend(pcm)
+                    await client.append(pcm)
+                    await pipeline._speech_ended()
+                    async with asyncio.timeout(2):
+                        while client.tasks:
+                            await asyncio.gather(*client.tasks)
+                    if text:
+                        self.assertEqual(pipeline.final_text, text)
+                        await pipeline.client_event("tts_stop")
+                    else:
+                        self.assertEqual(pipeline.state, "idle")
+                        self.assertIsNone(pipeline.turn_id)
+                        self.assertIsNone(pipeline.final_timeout_task)
+                        self.assertFalse(client.pending_final)
+                        self.assertIsNone(client.ws)
+                        self.assertIn("turn-0002", pipeline.closed_turns)
+                self.assertEqual([c.args[0] for c in pipeline._start_attempt.await_args_list],
+                                 ["First question", "Next question"])
+                events = pipeline.trace.path.read_text()
+                self.assertIn('"event": "stt_final_unavailable"', events)
+                self.assertNotIn('"event": "stt_final_timeout"', events)
+            finally:
+                await pipeline.close()
+
+    async def test_empty_realtime_uses_batch_success_without_reporting_failure(self):
+        final, unavailable = AsyncMock(), AsyncMock()
+        self.ws_final_text = ""
+        client = SBPNClient(self.config, AsyncMock(), final, lambda *args: None,
+                            on_final_unavailable=unavailable)
+        try:
+            await client.connect()
+            pcm = b"\x01\x00" * 1600
+            await client.append(pcm)
+            await client.commit(pcm)
+            await asyncio.gather(*client.tasks)
+            final.assert_awaited_once_with(self.asr_text)
+            unavailable.assert_not_awaited()
+        finally:
+            await client.close()
+
+    async def test_failed_batch_notifies_once_and_does_not_publish_partial_as_final(self):
+        final, unavailable = AsyncMock(), AsyncMock()
+        config = replace(self.config, stt_batch_url=self.config.stt_batch_url + '/missing')
+        client = SBPNClient(config, AsyncMock(), final, lambda *args: None,
+                            on_final_unavailable=unavailable)
+        try:
+            await client.connect()
+            await client.commit(b"\x01\x00" * 1600)
+            await asyncio.gather(*client.tasks)
+            unavailable.assert_awaited_once_with()
+            final.assert_not_awaited()
+            self.assertFalse(client.pending_final)
+        finally:
+            await client.close()
+
+    async def test_cancelled_final_does_not_report_a_failed_turn(self):
+        unavailable = AsyncMock()
+        client = SBPNClient(self.config, AsyncMock(), AsyncMock(), lambda *args: None,
+                            on_final_unavailable=unavailable)
+        entered, release = asyncio.Event(), asyncio.Event()
+        async def blocked_transcription(_pcm):
+            entered.set()
+            await release.wait()
+        client._transcribe = blocked_transcription
+        try:
+            await client.connect()
+            await client.commit(b"\x01\x00" * 1600)
+            await asyncio.wait_for(entered.wait(), 2)
+            await client.recover("session_closed")
+            unavailable.assert_not_awaited()
+            self.assertFalse(client.pending_final)
+            self.assertFalse(client.tasks)
+        finally:
+            release.set()
+            await client.close()
+
+    async def test_unavailable_callback_ignores_a_turn_that_already_closed(self):
+        with TemporaryDirectory() as directory:
+            pipeline = ConversationPipeline(self.config, TraceRecorder(Path(directory)), AsyncMock())
+            pipeline.stt.recover = AsyncMock()
+            try:
+                await pipeline.on_stt_final_unavailable()
+                self.assertEqual(pipeline.state, "idle")
+                pipeline.stt.recover.assert_not_awaited()
+            finally:
+                await pipeline.close()
