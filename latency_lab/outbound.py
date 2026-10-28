@@ -11,6 +11,15 @@ from agent import outbound_call_api
 from .agentic import AgentRuntimeContext
 
 
+_LANGUAGE_NAMES = {
+    "EN-NG": "Nigerian English",
+    "YOR": "Yoruba",
+    "HAU": "Hausa",
+    "IGB": "Igbo",
+    "PGD": "Nigerian Pidgin",
+}
+
+
 async def sip_remote_headers(ctx: Any, participant: Any) -> dict[str, str]:
     rpc = getattr(getattr(ctx.room, "local_participant", None), "perform_rpc", None)
     if not callable(rpc):
@@ -66,6 +75,13 @@ def apply_outbound_context(agent: AgentRuntimeContext, claim: dict[str, Any]) ->
     name = str(claim.get("recipient_name") or "").strip()
     if name:
         instructions += "\n\nPerson being called:\nName: " + name + "\nAddress this person by name naturally."
+    language = str(claim.get("language") or "").strip()
+    if language:
+        label = _LANGUAGE_NAMES.get(language.upper(), language)
+        instructions += (
+            "\n\nCall language:\n" + label + " (" + language + "). "
+            "Conduct the entire call in this language, including the greeting."
+        )
     context = claim.get("context")
     if isinstance(context, dict) and context:
         instructions += (
