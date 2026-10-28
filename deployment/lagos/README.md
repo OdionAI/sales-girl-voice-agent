@@ -35,11 +35,17 @@ Agents should pull GitHub `main`, make changes on a branch, and promote through
   `pyrnnoise` dependency in the freeze. If `pyrnnoise` is missing the filter fails **open**
   (`implementation: off`) and the trace shows **no** `input_noise_filter_ready` event.
 - **STT** `Qwen3-ASR` chat transcription is authoritative for Wema SAW's
-  business and the intended Amaka agent; an empty or failed chat transcript falls back to the
-  realtime Qwen final. Other businesses remain on the existing realtime/batch
-  path. The vocabulary context is preserved from the active environment.
-  **LLM** local `qwen3.8-27b`, **TTS** `Qwen3-TTS` — these are runtime env
-  (`RVC_LAB_*`), not baked into the image.
+  business, the MoMo feedback agent and the Leadway Health business; an empty or
+  failed chat transcript falls back to the realtime Qwen final. The vocabulary
+  hint stays Wema/MoMo-only (`RVC_LAB_STT_CONTEXT_SCOPE`), so Leadway uses the
+  chat final WITHOUT inheriting Wema's bank hint. Other businesses remain on the
+  existing realtime/batch path. **LLM** local `qwen3.8-27b`, **TTS** `Qwen3-TTS`
+  — these are runtime env (`RVC_LAB_*`), not baked into the image.
+- **End-call gate** — `latency_lab/action_tools.caller_blocks_end_call` blocks a
+  model hang-up only when the caller explicitly asks to keep going or asks a
+  question; a natural "no, nothing else" closes the call with the agent's spoken
+  goodbye. (Replaced the strict `explicit_end_call_intent` goodbye-pattern gate,
+  which wrongly vetoed real sign-offs.)
 
 ## Rollback
 Keep the previous image tag and the exact `-f` chain. Rollback = recreate `voice` from the

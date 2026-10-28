@@ -14,7 +14,7 @@ from latency_lab.action_tools import (
     action_tool_definitions,
     confirmation_decision,
     confirmation_prompt,
-    explicit_end_call_intent,
+    caller_blocks_end_call,
 )
 from latency_lab.agentic import AgentRuntimeContext
 from latency_lab.config import LabConfig
@@ -57,8 +57,8 @@ class ActionDefinitionTest(unittest.TestCase):
             ["create_ticket", "send_email", "end_call"],
         )
 
-    def test_end_call_intent_requires_an_explicit_closing_utterance(self) -> None:
-        accepted = (
+    def test_caller_blocks_end_call_only_for_questions_and_hold_requests(self) -> None:
+        allowed_to_end = (
             "Goodbye",
             "Okay, bye",
             "Please end this call now",
@@ -66,22 +66,25 @@ class ActionDefinitionTest(unittest.TestCase):
             "No, that's all, thank you",
             "I have no more questions, thanks",
             "Nothing else, thank you",
+            "No, I don't have any other concerns",
+            "Oh no, not at all.",
+            "I don't have any other concerns",
         )
-        rejected = (
+        blocked = (
             "What details are required to open the account successfully?",
-            "Thank you",
             "Before we end the call, I have another question",
             "How do I end a call in the mobile application?",
             "Do not end the call",
             "I don't want to hang up yet",
             "What does goodbye mean?",
+            "Wait, one more thing",
         )
-        for text in accepted:
+        for text in allowed_to_end:
             with self.subTest(text=text):
-                self.assertTrue(explicit_end_call_intent(text))
-        for text in rejected:
+                self.assertFalse(caller_blocks_end_call(text))
+        for text in blocked:
             with self.subTest(text=text):
-                self.assertFalse(explicit_end_call_intent(text))
+                self.assertTrue(caller_blocks_end_call(text))
 
     def test_outbound_agent_can_use_its_own_spoken_goodbye(self) -> None:
         from types import SimpleNamespace

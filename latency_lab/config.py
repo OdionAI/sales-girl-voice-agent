@@ -123,6 +123,12 @@ class LabConfig:
     stt_chat_scope: tuple[str, ...] = tuple(
         item.strip() for item in os.getenv("RVC_LAB_STT_CHAT_SCOPE", "").replace(",", " ").split() if item.strip()
     )
+    # Only agents/businesses in THIS list get the vocabulary hint (stt_context)
+    # on the chat final; empty means "the same set as stt_chat_scope". Lets a
+    # tenant use the hinted chat final WITHOUT inheriting another tenant's hint.
+    stt_context_scope: tuple[str, ...] = tuple(
+        item.strip() for item in os.getenv("RVC_LAB_STT_CONTEXT_SCOPE", "").replace(",", " ").split() if item.strip()
+    )
     stt_model: str = os.getenv("RVC_LAB_STT_MODEL", "Qwen3-ASR")
     stt_recovery_buffer_seconds: float = _float(
         "RVC_LAB_STT_RECOVERY_BUFFER_SECONDS", 12.0

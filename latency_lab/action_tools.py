@@ -61,64 +61,42 @@ PASSKEY_START_TOOL = "wema_start_passkey"
 TRANSFER_TO_AICC_TOOL = "transfer_to_aicc"
 
 
-def explicit_end_call_intent(text: str) -> bool:
-    """Return true only for a caller utterance that clearly closes this call."""
+def caller_blocks_end_call(text: str) -> bool:
+    """Return true only when the caller clearly does NOT want to end the call.
 
-    normalized = re.sub(r"[^a-z0-9' ]+", " ", str(text or "").lower())
+    A natural sign-off ("no, nothing else", "that's all", "thanks, bye") must
+    LET the call end; only an explicit instruction to keep going, or an open
+    question, keeps it alive. This replaces the old strict goodbye-pattern gate
+    that wrongly vetoed real goodbyes like "I don't have any other concerns".
+    """
+
+    normalized = re.sub(r"[^a-z0-9'? ]+", " ", str(text or "").lower())
     normalized = " ".join(normalized.split())
     if not normalized:
         return False
 
-    # A negative instruction always wins, even if the sentence also contains
-    # words such as "hang up" or "end the call".
-    negative_patterns = (
-        r"\b(?:do not|don't|dont|please don't|please dont|not yet)\s+(?:end|hang up|disconnect|terminate)\b",
+    hold_patterns = (
+        r"\b(?:do not|don't|dont|please don't|please dont|not yet)\s+(?:end|hang up|hangup|disconnect|terminate|close)\b",
         r"\b(?:do not|don't|dont)\s+say\s+goodbye\b",
-        r"\bi\s+(?:do not|don't|dont)\s+want\s+to\s+(?:end|hang up|disconnect|terminate)\b",
+        r"\bi\s+(?:do not|don't|dont)\s+want\s+to\s+(?:end|hang up|hangup|disconnect|terminate|go)\b",
+        r"\b(?:wait|hold on|one moment|one second|one more thing|before you go|not so fast)\b",
+        r"\b(?:i|we)\s+(?:still|also)\s+(?:have|need|want|would like)\b",
+        r"\b(?:i|we)\s+(?:still\s+|also\s+)?have\s+(?:another|one more|a|some|a few)\s+questions?\b",
     )
-    if any(re.search(pattern, normalized) for pattern in negative_patterns):
-        return False
+    if any(re.search(pattern, normalized) for pattern in hold_patterns):
+        return True
 
-    # Standalone farewells are explicit. Keep this bounded so explanatory
-    # questions such as "what does goodbye mean" cannot terminate a call.
-    farewell = re.fullmatch(
-        r"(?:(?:ok(?:ay)?|alright|all right|well|thanks|thank you|cheers)[ ]+)*"
-        r"(?:goodbye|good bye|bye|bye bye)"
-        r"(?:[ ]+(?:thanks|thank you|for now|then|sarah|helen))?",
+    # An open question means the caller still wants something answered.
+    if "?" in normalized:
+        return True
+    if re.match(
+        r"^(?:who|what|when|where|why|how|which|whose|whom|"
+        r"is|are|am|was|were|do|does|did|can|could|would|should|will|shall|"
+        r"may|might|have|has|had)\b",
         normalized,
-    )
-    if farewell:
+    ):
         return True
-
-    combined_farewell_request = re.fullmatch(
-        r"(?:goodbye|good bye|bye|bye bye)[ ]+(?:and[ ]+)?(?:please[ ]+)?"
-        r"(?:end|terminate|disconnect)\s+(?:the|this|our)\s+call(?:[ ]+now)?",
-        normalized,
-    )
-    if combined_farewell_request:
-        return True
-
-    direct_request_patterns = (
-        r"^(?:(?:ok(?:ay)?|alright|all right|thanks|thank you)[ ]+)*"
-        r"(?:please[ ]+)?(?:end|terminate|disconnect)\s+(?:the|this|our)\s+call(?:[ ]+now)?$",
-        r"^(?:(?:ok(?:ay)?|alright|all right|thanks|thank you)[ ]+)*"
-        r"(?:please[ ]+)?(?:hang up|disconnect)(?:[ ]+(?:the|this|our)\s+call)?(?:[ ]+now)?$",
-        r"^(?:(?:ok(?:ay)?|alright|all right)[ ]+)*"
-        r"(?:you|we)\s+can\s+(?:end|terminate|disconnect)\s+(?:the|this|our)\s+call(?:[ ]+now)?$",
-        r"^(?:(?:ok(?:ay)?|alright|all right)[ ]+)*"
-        r"you\s+can\s+hang up(?:[ ]+now)?$",
-    )
-    if any(re.fullmatch(pattern, normalized) for pattern in direct_request_patterns):
-        return True
-
-    finished_patterns = (
-        r"^(?:(?:no|ok(?:ay)?|alright|all right|thanks|thank you)[ ]+)*(?:that's|that is|thats)\s+all(?:[ ]+(?:thanks|thank you|for now))?$",
-        r"^(?:(?:no|ok(?:ay)?|alright|all right|thanks|thank you)[ ]+)*nothing else(?:[ ]+(?:thanks|thank you))?$",
-        r"^(?:(?:ok(?:ay)?|alright|all right|thanks|thank you)[ ]+)*(?:i am|i'm|im|we are|we're|were)\s+done$",
-        r"^(?:(?:no|ok(?:ay)?|alright|all right)[ ]+)*i\s+(?:have|have got|haven't got|havent got)\s+no\s+more\s+questions(?:[ ]+(?:thanks|thank you))?$",
-        r"^(?:(?:ok(?:ay)?|alright|all right|thanks|thank you)[ ]+)*(?:that|this)\s+will\s+be\s+all(?:[ ]+(?:thanks|thank you))?$",
-    )
-    return any(re.fullmatch(pattern, normalized) for pattern in finished_patterns)
+    return False
 
 
 @dataclass(frozen=True)

@@ -35,7 +35,7 @@ from .action_tools import (
     action_tool_definitions,
     confirmation_decision,
     confirmation_prompt,
-    explicit_end_call_intent,
+    caller_blocks_end_call,
     localized_action_text,
     suppress_transfer_preamble,
     uses_french,
@@ -166,6 +166,12 @@ class ConversationPipeline:
             if (agent_context is not None and agent_context.agent_id not in scope
                     and agent_context.business_id not in scope):
                 stt_config = replace(config, stt_chat_url="", stt_context="")
+            elif config.stt_context_scope:
+                context_scope = set(config.stt_context_scope)
+                if (agent_context is not None
+                        and agent_context.agent_id not in context_scope
+                        and agent_context.business_id not in context_scope):
+                    stt_config = replace(stt_config, stt_context="")
         if uses_sbpn(config.tts_language):
             self.stt = SBPNClient(stt_config, self.on_partial, self.on_final, self._provider_event,
                                   on_final_unavailable=self.on_stt_final_unavailable)
@@ -1302,24 +1308,27 @@ class ConversationPipeline:
                     await self._run_banking_tools(attempt, messages, attempt.tool_calls)
                 elif call.name == "end_call":
                     committed_text = self.final_text if attempt.authorized else ""
-                    closing_intent = explicit_end_call_intent(committed_text)
+                    # A natural sign-off ("no, nothing else") must end the call;
+                    # only an explicit request to keep going, or an open question,
+                    # blocks the caller's hang-up.
+                    blocks_end = caller_blocks_end_call(committed_text)
                     self.trace.record(
                         "end_call_semantic_validation",
                         turn_id=self.turn_id,
                         attempt_id=attempt.id,
                         reason=(
-                            "explicit_committed_closing_intent"
-                            if closing_intent
-                            else "committed_transcript_has_no_explicit_closing_intent"
+                            "committed_transcript_blocks_hangup"
+                            if blocks_end
+                            else "committed_transcript_allows_natural_hangup"
                         ),
-                        valid=closing_intent,
+                        valid=not blocks_end,
                     )
-                    if not closing_intent:
+                    if blocks_end:
                         self.trace.record(
                             "end_call_rejected",
                             turn_id=self.turn_id,
                             attempt_id=attempt.id,
-                            reason="deterministic_closing_intent_gate_vetoed_llm_tool_call",
+                            reason="caller_signal_keeps_call_open_vetoed_llm_tool_call",
                         )
                         attempt.tool_calls = []
                         attempt.held_audio.clear()
