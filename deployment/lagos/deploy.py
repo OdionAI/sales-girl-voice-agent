@@ -20,6 +20,15 @@ LAGOS_ASR_ENV = {
     'RVC_LAB_STT_MODEL': 'Qwen3-ASR',
     'RVC_LAB_STT_WS_URL': 'ws://102.88.137.124:8080/asr-rt/v1/realtime',
     'RVC_LAB_STT_BATCH_URL': 'http://102.88.137.124:8080/asr-rt/v1/audio/transcriptions',
+    # The chat endpoint is authoritative for the selected businesses. Empty or
+    # failed chat transcripts automatically fall back to realtime Qwen finals.
+    'RVC_LAB_STT_CHAT_URL': 'http://102.88.137.124:8080/asr-rt/v1/chat/completions',
+    'RVC_LAB_STT_CHAT_MODEL': 'Qwen3-ASR',
+    # Keep Wema's existing business scope and add only the intended Amaka agent.
+    'RVC_LAB_STT_CHAT_SCOPE': (
+        'a0c8cda2-3b46-4ee0-898c-48f9a4d3a444 '
+        '00f99439-59d9-42a2-9c3a-db06422ea6cf'
+    ),
 }
 
 
