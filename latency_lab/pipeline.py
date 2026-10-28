@@ -166,7 +166,11 @@ class ConversationPipeline:
             if (agent_context is not None and agent_context.agent_id not in scope
                     and agent_context.business_id not in scope):
                 stt_config = replace(config, stt_chat_url="", stt_context="")
-        self.stt = (SBPNClient if uses_sbpn(config.tts_language) else RSTTClient)(stt_config, self.on_partial, self.on_final, self._provider_event)
+        if uses_sbpn(config.tts_language):
+            self.stt = SBPNClient(stt_config, self.on_partial, self.on_final, self._provider_event,
+                                  on_final_unavailable=self.on_stt_final_unavailable)
+        else:
+            self.stt = RSTTClient(stt_config, self.on_partial, self.on_final, self._provider_event)
         self.agent_context = agent_context or AgentRuntimeContext()
         self.banking = BankingTools(self.http, self.agent_context, trace.session_id, send, session_identity)
         self.system_prompt = self.agent_context.system_prompt(config.system_prompt) + self.banking.prompt() + CONVERSATION_RULES
@@ -845,6 +849,36 @@ class ConversationPipeline:
             self.final_timeout_task = None
         except asyncio.CancelledError:
             return
+
+    async def on_stt_final_unavailable(self) -> None:
+        """A completed but unrecognized SBPN turn must not keep input gated."""
+        if self.state != "awaiting_final":
+            return
+        failed_turn = self.turn_id
+        if self.final_timeout_task:
+            self.final_timeout_task.cancel()
+            self.final_timeout_task = None
+        self._transition("recovering_stt", "stt_final_unavailable_restarting_provider")
+        await self._cancel_attempt("stt_final_unavailable")
+        recovered = False
+        try:
+            await self.stt.recover("final_unavailable")
+            recovered = True
+        except Exception as exc:
+            self.trace.record("stt_recovery_unavailable", turn_id=failed_turn,
+                              reason="provider_reset_failed_after_unrecognized_turn",
+                              error=str(exc), error_type=type(exc).__name__)
+        if failed_turn:
+            self.closed_turns.add(failed_turn)
+            self.last_closed_turn_id = failed_turn
+            self.trace.record("turn_close", turn_id=failed_turn, reason="stt_final_unavailable")
+        self.turn_id = None
+        self.last_partial = self.final_text = ""
+        self.turn_pcm16.clear()
+        self._clear_speech_candidate()
+        self._transition("idle", "stt_recovery_completed" if recovered
+                         else "stt_recovery_failed_retry_on_next_audio")
+        await self.send({"type": "lab_status", "content": "listening"})
 
     async def on_partial(self, text: str, raw: str) -> None:
         if not self.turn_id:
