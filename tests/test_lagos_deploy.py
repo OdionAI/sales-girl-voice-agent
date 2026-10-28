@@ -15,7 +15,14 @@ class LagosReleaseTests(unittest.TestCase):
             target = root / f'{revision}-1-1'
             target.mkdir()
             env = ['TOKEN=unchanged=secret', 'MODEL=existing',
-                   'RVC_LAB_STT_CONTEXT=sample vocabulary hints'] + [
+                   'RVC_LAB_STT_CONTEXT=sample vocabulary hints',
+                   'RVC_AICC_SIP_ROUTE=' + json.dumps({
+                       'trunk_ids': ['ST_test'],
+                       'caller_routes': {
+                           '+2347012345678': {'config_agent_id': 'existing-agent'}
+                       },
+                       'did_routes': {'030105': {'config_agent_id': 'existing-did'}},
+                   })] + [
                 f'{key}={value}' for key, value in {
                     **release.LAGOS_ASR_ENV,
                     'RVC_LAB_STT_MODEL': 'whisper-large-v3-turbo',
@@ -27,10 +34,14 @@ class LagosReleaseTests(unittest.TestCase):
                 env.append(f'{release.HAUSA_RESEARCH_KEY}={old_value}')
             previous = {'Id': 'old-container', 'Image': 'old-image',
                         'Config': {'Env': env}, 'Mounts': [{'Source': '/data'}]}
+            updates = dict(release.LAGOS_ASR_ENV)
+            updates['RVC_AICC_SIP_ROUTE'] = release.leadway_caller_routes(previous_env)
+            if enabled:
+                updates[release.HAUSA_RESEARCH_KEY] = 'true'
+            expected_env = [f'{key}={value}' for key, value in
+                            (previous_env | updates).items()]
             current = {**previous, 'Id': 'new-container', 'Image': 'new-image',
-                       'Config': {'Env': [
-                           f'{key}={value}' for key, value in
-                           (previous_env | release.LAGOS_ASR_ENV).items()]}}
+                       'Config': {'Env': list(expected_env)}}
             if enabled:
                 current['Config']['Env'] = [item for item in current['Config']['Env']
                     if not item.startswith(release.HAUSA_RESEARCH_KEY + '=')]
@@ -50,6 +61,7 @@ class LagosReleaseTests(unittest.TestCase):
                     rollback_env = {
                         key: previous_env.get(key) for key in release.LAGOS_ASR_ENV
                     }
+                    rollback_env['RVC_AICC_SIP_ROUTE'] = previous_env['RVC_AICC_SIP_ROUTE']
                     rollback_env[release.HAUSA_RESEARCH_KEY] = old_value
                     self.assertEqual(rollback['services']['voice']['environment'], rollback_env)
                     self.assertIn('before-', rollback['services']['voice']['image'])
@@ -57,12 +69,20 @@ class LagosReleaseTests(unittest.TestCase):
                     release.deploy(target, revision, enabled)
                     self.assertTrue((target / 'DEPLOYED').exists())
                 override = json.loads((target / 'voice-ci.json').read_text())['services']['voice']
-                expected_updates = dict(release.LAGOS_ASR_ENV)
-                if enabled:
-                    expected_updates[release.HAUSA_RESEARCH_KEY] = 'true'
-                self.assertEqual(override.get('environment', {}), expected_updates)
+                self.assertEqual(override.get('environment', {}), updates)
+                updated_route = json.loads(updates['RVC_AICC_SIP_ROUTE'])
                 self.assertEqual(
-                    set(expected_updates['RVC_LAB_STT_CHAT_SCOPE'].split()),
+                    updated_route['caller_routes']['+2347012345678'],
+                    {'config_agent_id': 'existing-agent'},
+                )
+                self.assertEqual(
+                    updated_route['did_routes'],
+                    {'030105': {'config_agent_id': 'existing-did'}},
+                )
+                for number, target in release.LEADWAY_CALLER_ROUTES.items():
+                    self.assertEqual(updated_route['caller_routes'][number], target)
+                self.assertEqual(
+                    set(updates['RVC_LAB_STT_CHAT_SCOPE'].split()),
                     {
                         'a0c8cda2-3b46-4ee0-898c-48f9a4d3a444',
                         '00f99439-59d9-42a2-9c3a-db06422ea6cf',
@@ -93,3 +113,14 @@ class LagosReleaseTests(unittest.TestCase):
 
     def test_failed_release_restores_existing_flag(self):
         self.exercise_release(enabled=True, old_value='false', drift=True)
+
+    def test_conflicting_leadway_caller_route_fails_closed(self):
+        env = {
+            'RVC_AICC_SIP_ROUTE': json.dumps({
+                'caller_routes': {
+                    '08112812216': {'config_agent_id': 'different-agent'}
+                }
+            })
+        }
+        with self.assertRaisesRegex(RuntimeError, 'already has a different route'):
+            release.leadway_caller_routes(env)
