@@ -59,8 +59,10 @@ and mounts, and restores the prior image if verification fails. A post-release
 real call still needs to confirm worker registration and the RNNoise trace.
 `deployment/lagos/deploy.py` also maintains explicit caller-number routes in
 `RVC_AICC_SIP_ROUTE`. Leadway caller IDs resolve to the active Leadway Amaka
-agent. Existing DID and caller routes are preserved; conflicting numbers fail
-the release instead of being silently reassigned.
+agent, with an explicit per-caller override so a carrier-rewritten shared DID
+cannot take precedence for those callers. Other callers retain DID-first
+routing. Existing routes are preserved; conflicting numbers fail the release
+instead of being silently reassigned.
 `deploy.yml` remains available only for an explicit legacy node-B run.
 
 For the explicitly opted-in noncommercial Hausa research pilot, set the GitHub

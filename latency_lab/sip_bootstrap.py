@@ -123,12 +123,21 @@ def participant_identity(route, participant, room_name, sip_kind, *, called_over
     except Exception:
         pass
 
-    chosen = (
+    caller_route = (
+        _lookup(caller_map, caller)
+        or _lookup_any(caller_map, [participant.identity, room_name])
+    )
+    did_route = (
         _lookup(did_map, called)
         or (None if called else _lookup_any(did_map, other_callee_values))
-        or _lookup(caller_map, caller)
-        or _lookup_any(caller_map, [participant.identity, room_name])
-        or {}
+    )
+    # A caller-specific override is opt-in per route. This lets a verified
+    # caller reach their configured agent when a carrier rewrites a dialed DID
+    # to a shared short code, while keeping DID-first routing for everyone else.
+    chosen = (
+        caller_route
+        if caller_route and caller_route.get("override_did_routes") is True
+        else did_route or caller_route or {}
     )
     return {
         "business_id": chosen.get("business_id") or route["business_id"],
