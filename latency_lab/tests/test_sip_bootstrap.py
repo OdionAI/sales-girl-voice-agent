@@ -30,12 +30,18 @@ ROUTE = {
                           "configured_agent_name": "Sonia"},
         "0301051": {"business_id": "biz-momo", "config_agent_id": "agent-feedback",
                      "configured_agent_name": "MoMo Feedback", "outbound_required": True},
+        "0301050": {"business_id": "biz-momo", "config_agent_id": "agent-momo",
+                    "configured_agent_name": "Amaka"},
     },
     "caller_routes": {
         "301050": {"business_id": "biz-momo", "config_agent_id": "agent-momo",
                    "configured_agent_name": "Amaka"},
         "+2347000000787": {"business_id": "biz-teni", "config_agent_id": "agent-teni",
                            "configured_agent_name": "Teni"},
+        "+2348112812216": {
+            "business_id": "biz-leadway", "config_agent_id": "agent-leadway",
+            "configured_agent_name": "Amaka", "override_did_routes": True,
+        },
     },
 }
 
@@ -83,6 +89,11 @@ class AiccNumberRoutingTest(unittest.TestCase):
     def test_caller_number_cannot_select_outbound_to_route(self) -> None:
         ident = self._identity(_participant(caller="0301051", called="030105"))
         self.assertNotEqual(ident["config_agent_id"], "agent-feedback")
+
+    def test_explicit_leadway_caller_override_wins_over_rewritten_momo_did(self) -> None:
+        ident = self._identity(_participant(caller="08112812216", called="0301050"))
+        self.assertEqual(ident["business_id"], "biz-leadway")
+        self.assertEqual(ident["config_agent_id"], "agent-leadway")
 
     def test_known_caller_routes_to_its_agent(self) -> None:
         ident = self._identity(_participant(caller="+2347000000787"))
