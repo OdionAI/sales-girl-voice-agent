@@ -58,9 +58,10 @@ recreates only `voice`, checks the new image and container health, environment
 and mounts, and restores the prior image if verification fails. A post-release
 real call still needs to confirm worker registration and the RNNoise trace.
 `deployment/lagos/deploy.py` also maintains explicit caller-number routes in
-`RVC_AICC_SIP_ROUTE`. Leadway caller IDs resolve to the active Leadway Amaka
-agent, with an explicit per-caller override so a carrier-rewritten shared DID
-cannot take precedence for those callers. Other callers retain DID-first
+`RVC_AICC_SIP_ROUTE`. Leadway caller IDs resolve to the Leadway new-member
+check-in agent (`c4f4925d-0188-431e-a881-15533f6bb31b`), with an explicit
+per-caller override so a carrier-rewritten shared DID cannot take precedence
+for those callers. Other callers retain DID-first
 routing. Existing routes are preserved; conflicting numbers fail the release
 instead of being silently reassigned.
 `deploy.yml` remains available only for an explicit legacy node-B run.
