@@ -7,6 +7,7 @@ import hashlib
 import io
 import json
 import math
+import os
 import re
 import sys
 import time
@@ -1112,14 +1113,30 @@ def tts_token_budget(text: str) -> int:
     return max(24, min(360, int((spoken_words / 2.5 + 0.5) * 12.5) + 8))
 
 
+WEMA_VOICES = frozenset({
+    "wema-en-ng-female", "wema-en-ng-male", "wema-en-us-female", "wema-en-us-male",
+})
+# One constant clone seed on the request for all four Wema voices (Helen's way:
+# pin the voice so it cannot drift between generations). Overridable with
+# RVC_LAB_WEMA_TTS_SEED.
+WEMA_TTS_SEED = os.getenv("RVC_LAB_WEMA_TTS_SEED", "0")
+
+
+def is_wema_voice(voice: str) -> bool:
+    return str(voice or "").strip().lower() in WEMA_VOICES
+
+
 def resolve_tts_seed(config: LabConfig) -> str:
     """Return the seed to pin a TTS voice.
 
-    An explicit configured seed wins; otherwise derive a stable per-voice seed
-    from the voice id so the voice never drifts between generations.
+    An explicit configured seed wins; the four Wema voices use one constant
+    clone seed so the voice never drifts between generations; otherwise derive
+    a stable per-voice seed from the voice id.
     """
     seed = str(getattr(config, "tts_seed", "") or "").strip()
     voice = str(getattr(config, "tts_voice", "") or "").strip()
+    if not seed and is_wema_voice(voice):
+        return WEMA_TTS_SEED
     if not seed and voice:
         seed = str(int(hashlib.sha256(voice.encode("utf-8")).hexdigest()[:8], 16))
     return seed
@@ -1150,7 +1167,10 @@ class RTTSClient:
             payload.update(
                 task_type="Base",
                 voice=self.config.tts_voice,
-                x_vector_only_mode=False,
+                # The four Wema voices use x-vector mode: it holds the speaker
+                # identity steady across sentences, where plain ICL re-clones the
+                # timbre on every request and the voice audibly drifts.
+                x_vector_only_mode=is_wema_voice(self.config.tts_voice),
             )
         elif self._ref_audio:
             payload.update(

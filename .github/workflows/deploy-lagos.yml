@@ -51,8 +51,10 @@ jobs:
         if: github.event_name == 'push' || !inputs.verify_only
         env:
           ENABLE_HAUSA_RESEARCH: ${{ vars.ENABLE_HAUSA_TWB_VOICES || 'false' }}
+          MOMO_FEEDBACK_AGENT_ID: ${{ vars.AICC_MOMO_FEEDBACK_AGENT_ID }}
         run: |
           set -euo pipefail
+          test -n "$MOMO_FEEDBACK_AGENT_ID"
           research_args=()
           case "$ENABLE_HAUSA_RESEARCH" in
             true) research_args+=(--enable-hausa-research) ;;
@@ -62,7 +64,7 @@ jobs:
           release="/opt/attentive/releases/voice-ci/${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           ssh lagos-app "install -d -m 700 '$release'"
           git archive HEAD | ssh lagos-app "tar -xf - --no-same-owner -C '$release'"
-          ssh lagos-app python3 "$release/deployment/lagos/deploy.py" --release "$release" --revision "$GITHUB_SHA" "${research_args[@]}"
+          ssh lagos-app python3 "$release/deployment/lagos/deploy.py" --release "$release" --revision "$GITHUB_SHA" --momo-feedback-agent-id "$MOMO_FEEDBACK_AGENT_ID" "${research_args[@]}"
           printf 'Lagos voice revision `%s` is deployed.\n' "$GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"
       - name: Remove runner SSH key
         if: always()
