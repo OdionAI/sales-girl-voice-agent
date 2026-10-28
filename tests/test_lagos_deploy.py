@@ -104,6 +104,10 @@ class LagosReleaseTests(unittest.TestCase):
                 )
                 for number, target in release.LEADWAY_CALLER_ROUTES.items():
                     self.assertEqual(route['caller_routes'][number], target)
+                    self.assertEqual(
+                        route['caller_routes'][number]['config_agent_id'],
+                        'c4f4925d-0188-431e-a881-15533f6bb31b',
+                    )
                 self.assertEqual(
                     set(updates['RVC_LAB_STT_CHAT_SCOPE'].split()),
                     {
