@@ -37,12 +37,14 @@ LEADWAY_CALLER_ROUTES = {
         "config_agent_id": "388f9963-279c-446f-8d56-c689ddafa6be",
         "configured_agent_name": "Amaka",
         "voice_auth_required": False,
+        "override_did_routes": True,
     },
     "+2349040760651": {
         "business_id": "762d1f6d-9a7a-4e41-9088-bc6dcbb6ef4e",
         "config_agent_id": "388f9963-279c-446f-8d56-c689ddafa6be",
         "configured_agent_name": "Amaka",
         "voice_auth_required": False,
+        "override_did_routes": True,
     },
 }
 
