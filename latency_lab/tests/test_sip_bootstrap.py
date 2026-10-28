@@ -28,6 +28,8 @@ ROUTE = {
     "did_routes": {
         "+233308048122": {"business_id": "biz-ghana", "config_agent_id": "agent-sonia",
                           "configured_agent_name": "Sonia"},
+        "0301051": {"business_id": "biz-momo", "config_agent_id": "agent-feedback",
+                     "configured_agent_name": "MoMo Feedback", "outbound_required": True},
         "0301050": {"business_id": "biz-momo", "config_agent_id": "agent-momo",
                     "configured_agent_name": "Amaka"},
     },
@@ -65,6 +67,28 @@ class AiccNumberRoutingTest(unittest.TestCase):
     def test_called_did_takes_precedence_over_caller_route(self) -> None:
         ident = self._identity(_participant(caller="301050", called="+233308048122"))
         self.assertEqual(ident["config_agent_id"], "agent-sonia")
+
+    def test_sip_to_short_code_routes_to_feedback_agent(self) -> None:
+        p = _participant(caller="+2348012345678")
+        p.attributes["sip.To"] = "sip:0301051@aicc.example"
+        ident = self._identity(p)
+        self.assertEqual(ident["config_agent_id"], "agent-feedback")
+        self.assertTrue(ident["outbound_required"])
+        # The customer's (from) number is exposed for outbound context matching.
+        self.assertEqual(ident["caller_number"], "+2348012345678")
+
+    def test_remote_to_header_overrides_trunk_number(self) -> None:
+        p = _participant(caller="+2348012345678", called="030105")
+        route = {"trunk_ids": ROUTE["trunk_ids"], "room_prefix": ROUTE["room_prefix"],
+                 "expected_trunk_id": TRUNK, **ROUTE}
+        ident = sip_bootstrap.participant_identity(
+            route, p, "aicc-lara-1", "sip", called_override="<sip:0301051@aicc.example>"
+        )
+        self.assertEqual(ident["config_agent_id"], "agent-feedback")
+
+    def test_caller_number_cannot_select_outbound_to_route(self) -> None:
+        ident = self._identity(_participant(caller="0301051", called="030105"))
+        self.assertNotEqual(ident["config_agent_id"], "agent-feedback")
 
     def test_explicit_leadway_caller_override_wins_over_rewritten_momo_did(self) -> None:
         ident = self._identity(_participant(caller="08112812216", called="0301050"))

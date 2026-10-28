@@ -39,8 +39,12 @@ This worker talks to:
 For outbound calls, AICC must put the prepared call reference in SIP header
 `X-Odion-Call-Ref`. The worker reads available participant attributes and uses
 LiveKit's `lk.sip.GetRemoteHeaders` RPC when mapped header attributes have not
-arrived yet. It claims the reference from Conversation Service before
-loading the agent runtime config. The claim binds the record to one LiveKit
+arrived yet. The active Lagos `latency_lab.livekit_worker` first selects the
+agent from the SIP `To` number. The `0301051` route is configured from the
+GitHub repository variable `AICC_MOMO_FEEDBACK_AGENT_ID` and requires a call
+reference. The worker claims that reference from Conversation Service before
+loading the agent runtime config and verifies that its agent and business
+match the `To` route. The claim binds the record to one LiveKit
 room; a missing, expired, already-finished, or differently-bound reference
 fails closed instead of starting with unrelated customer context. The worker
 adds the configured outbound instructions and that call's context values to

@@ -9,6 +9,7 @@ import re
 import socket
 import subprocess
 import time
+import uuid
 
 STACK = Path('/opt/attentive/releases/recovery-20261009')
 PROJECT = 'odion-recovery-lagos'
@@ -93,6 +94,30 @@ def image_override(path, image, environment=None):
     path.write_text(json.dumps({'services': {'voice': service}}) + '\n')
 
 
+def momo_feedback_route(previous_env, agent_id):
+    agent_id = str(uuid.UUID(agent_id))
+    route = json.loads(previous_env.get('RVC_AICC_SIP_ROUTE') or '{}')
+    did_routes = route.get('did_routes')
+    if not isinstance(did_routes, dict):
+        raise RuntimeError('Lagos SIP To route map is missing')
+    momo_route = did_routes.get('030105')
+    if not isinstance(momo_route, dict) or not momo_route.get('business_id'):
+        raise RuntimeError('Existing MoMo route is missing')
+    business_id = str(uuid.UUID(momo_route['business_id']))
+    feedback_route = {
+        'business_id': business_id,
+        'config_agent_id': agent_id,
+        'configured_agent_name': 'MoMo Feedback',
+        'outbound_required': True,
+    }
+    for number in ('0301051', '301051'):
+        existing = did_routes.get(number)
+        if existing and existing != feedback_route:
+            raise RuntimeError(f'SIP To number {number} already has a different route')
+        did_routes[number] = feedback_route
+    return json.dumps(route, separators=(',', ':'), sort_keys=True)
+
+
 def leadway_caller_routes(previous_env):
     """Add the verified Leadway caller numbers without changing other routes."""
     route = json.loads(previous_env.get('RVC_AICC_SIP_ROUTE') or '{}')
@@ -125,7 +150,7 @@ def leadway_caller_routes(previous_env):
     return json.dumps(route, separators=(',', ':'), sort_keys=True)
 
 
-def deploy(release, revision, enable_hausa_research=False):
+def deploy(release, revision, enable_hausa_research=False, momo_feedback_agent_id=''):
     if not re.fullmatch(r'[0-9a-f]{40}', revision):
         raise ValueError('Expected a full Git commit SHA')
     if (release.parent != RELEASE_ROOT
@@ -134,13 +159,17 @@ def deploy(release, revision, enable_hausa_research=False):
         raise ValueError('Unexpected or reused release directory')
     previous, files = inspect_voice()
     previous_env = dict(item.split('=', 1) for item in previous['Config']['Env'])
-    # Lagos ASR is shared by the voice worker. Reassert the platform's Qwen
-    # realtime + batch endpoints on every release so stale Whisper overrides
-    # cannot silently survive a normal worker rollout.
+    # Lagos ASR is shared by the voice worker. Reassert Qwen realtime + batch
+    # endpoints each release so stale Whisper overrides cannot persist.
     updates = dict(LAGOS_ASR_ENV)
-    updates['RVC_AICC_SIP_ROUTE'] = leadway_caller_routes(previous_env)
     if enable_hausa_research:
         updates[HAUSA_RESEARCH_KEY] = 'true'
+    if not momo_feedback_agent_id:
+        raise RuntimeError('AICC_MOMO_FEEDBACK_AGENT_ID is required for this release')
+    route_env = {
+        'RVC_AICC_SIP_ROUTE': momo_feedback_route(previous_env, momo_feedback_agent_id)
+    }
+    updates['RVC_AICC_SIP_ROUTE'] = leadway_caller_routes(route_env)
     expected_env = [f'{key}={value}' for key, value in (previous_env | updates).items()]
     old_image = f'attentive/voice:before-{release.name}'
     new_image = f'attentive/voice:ci-{release.name}'
@@ -192,6 +221,7 @@ if __name__ == '__main__':
     parser.add_argument('--revision')
     parser.add_argument('--verify-only', action='store_true')
     parser.add_argument('--enable-hausa-research', action='store_true')
+    parser.add_argument('--momo-feedback-agent-id', default='')
     args = parser.parse_args()
     if args.verify_only:
         current, files = inspect_voice()
@@ -204,4 +234,5 @@ if __name__ == '__main__':
         os.umask(0o077)
         with open('/var/lock/attentive-voice-auth-deploy.lock', 'w') as lock:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            deploy(args.release.resolve(), args.revision, args.enable_hausa_research)
+            deploy(args.release.resolve(), args.revision, args.enable_hausa_research,
+                   args.momo_feedback_agent_id)

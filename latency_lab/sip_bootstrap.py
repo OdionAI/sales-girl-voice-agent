@@ -24,6 +24,9 @@ _NAMED_UNKNOWN = {"anonymous", "restricted", "unavailable", "unknown", "private"
 
 # LiveKit exposes the callee (called) number under one of these attributes.
 _CALLEE_KEYS = (
+    "sip.to",
+    "sip.h.to",
+    "sip.h.x-to",
     "sip.trunkphonenumber",
     "sip.trunk_phone_number",
     "sip.h.x-callee-number",
@@ -31,8 +34,6 @@ _CALLEE_KEYS = (
     "sip.x_callee_number",
     "sip.calleenumber",
     "sip.callee_number",
-    "sip.h.x-to",
-    "sip.to",
     "sip.called",
 )
 # Caller (from) number attributes.
@@ -97,23 +98,24 @@ def resolve_route(metadata, room_name):
     return {**route, "expected_trunk_id": trunk}
 
 
-def participant_identity(route, participant, room_name, sip_kind):
+def participant_identity(route, participant, room_name, sip_kind, *, called_override=""):
     attrs = dict(participant.attributes)
     lowered = {str(key).lower(): value for key, value in attrs.items()}
     if participant.kind != sip_kind or lowered.get("sip.trunkid") != route["expected_trunk_id"]:
         raise ValueError("Caller is not a SIP participant on the configured trunk.")
 
-    called = next((lowered.get(key) for key in _CALLEE_KEYS if lowered.get(key)), "")
+    called = called_override or next((lowered.get(key) for key in _CALLEE_KEYS if lowered.get(key)), "")
     caller = next((lowered.get(key) for key in _CALLER_KEYS if lowered.get(key)), "")
     if not caller:
         caller = attrs.get("sip.phoneNumber") or participant.identity
 
     did_map = route.get("did_routes") or {}
     caller_map = route.get("caller_routes") or {}
-    # Every string this call exposes — used only to match operator-configured numbers.
-    haystack = [called, caller, participant.identity, room_name]
-    haystack += [str(v) for v in attrs.values()]
-    haystack += [str(k) for k in attrs.keys()]
+    # The caller/From number must never be mistaken for a configured To route.
+    other_callee_values = [
+        str(value) for key, value in lowered.items()
+        if key not in _CALLER_KEYS and key != "sip.trunkid"
+    ]
 
     # Temporary diagnostic: which attributes did this call actually carry?
     try:
@@ -127,7 +129,7 @@ def participant_identity(route, participant, room_name, sip_kind):
     )
     did_route = (
         _lookup(did_map, called)
-        or _lookup_any(did_map, haystack)  # dialed number under any attribute
+        or (None if called else _lookup_any(did_map, other_callee_values))
     )
     # A caller-specific override is opt-in per route. This lets a verified
     # caller reach their configured agent when a carrier rewrites a dialed DID
@@ -149,7 +151,9 @@ def participant_identity(route, participant, room_name, sip_kind):
         "entry_surface": "aicc_inbound",
         "language": "en",
         "caller_phone": attrs.get("sip.phoneNumber", ""),
+        "caller_number": caller,
         "called_phone": called,
+        "outbound_required": chosen.get("outbound_required") is True,
         "sip_attribute_keys": sorted(str(key) for key in attrs.keys()),
         "sip_trunk_id": attrs["sip.trunkID"],
         "sip_caller_verified": True,
