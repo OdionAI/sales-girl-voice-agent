@@ -132,8 +132,18 @@ def leadway_caller_routes(previous_env):
                 character for character in str(existing_number) if character.isdigit()
             )[-10:]
             if existing_digits == digits:
-                if existing_route != target:
+                if not isinstance(existing_route, dict):
                     raise RuntimeError(f'Caller number {number} already has a different route')
+                # Upgrade the deployed mapping, which predates the explicit
+                # flag needed to take precedence over carrier-rewritten DIDs.
+                legacy_target = {
+                    key: value for key, value in target.items()
+                    if key != 'override_did_routes'
+                }
+                if any(existing_route.get(key) != value
+                       for key, value in legacy_target.items()):
+                    raise RuntimeError(f'Caller number {number} already has a different route')
+                caller_routes[existing_number] = target
                 break
         else:
             caller_routes[number] = target
