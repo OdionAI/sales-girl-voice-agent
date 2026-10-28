@@ -30,14 +30,21 @@ class LagosReleaseTests(unittest.TestCase):
             revision = 'a' * 40
             target = root / f'{revision}-1-1'
             target.mkdir()
-            base_env = ['TOKEN=unchanged=secret', 'MODEL=existing',
-                        'RVC_AICC_SIP_ROUTE=' + json.dumps(
-                            BASE_ROUTE, separators=(',', ':'), sort_keys=True)]
+            base_env = ['TOKEN=unchanged=secret', 'MODEL=existing'] + [
+                f'{key}={value}' for key, value in {
+                    **release.LAGOS_ASR_ENV,
+                    'RVC_LAB_STT_MODEL': 'whisper-large-v3-turbo',
+                    'RVC_LAB_STT_WS_URL': 'ws://asr.example/whisper-rt/v1/realtime',
+                }.items()
+            ] + ['RVC_AICC_SIP_ROUTE=' + json.dumps(
+                BASE_ROUTE, separators=(',', ':'), sort_keys=True)]
             if old_value is not None:
                 base_env.append(f'{release.HAUSA_RESEARCH_KEY}={old_value}')
             previous_env = dict(item.split('=', 1) for item in base_env)
 
-            updates = {release.HAUSA_RESEARCH_KEY: 'true'} if enabled else {}
+            updates = dict(release.LAGOS_ASR_ENV)
+            if enabled:
+                updates[release.HAUSA_RESEARCH_KEY] = 'true'
             updates['RVC_AICC_SIP_ROUTE'] = release.momo_feedback_route(previous_env, AGENT_ID)
             expected_env = [f'{key}={value}' for key, value in (previous_env | updates).items()]
 
@@ -57,10 +64,13 @@ class LagosReleaseTests(unittest.TestCase):
                         release.deploy(target, revision, enabled, AGENT_ID)
                     self.assertFalse((target / 'DEPLOYED').exists())
                     rollback = json.loads((target / 'voice-rollback.json').read_text())
-                    self.assertEqual(
-                        rollback['services']['voice']['environment'],
-                        {release.HAUSA_RESEARCH_KEY: old_value,
-                         'RVC_AICC_SIP_ROUTE': previous_env['RVC_AICC_SIP_ROUTE']})
+                    rollback_env = {
+                        key: previous_env.get(key) for key in release.LAGOS_ASR_ENV
+                    }
+                    rollback_env['RVC_AICC_SIP_ROUTE'] = previous_env['RVC_AICC_SIP_ROUTE']
+                    if enabled:
+                        rollback_env[release.HAUSA_RESEARCH_KEY] = old_value
+                    self.assertEqual(rollback['services']['voice']['environment'], rollback_env)
                     self.assertIn('before-', rollback['services']['voice']['image'])
                 else:
                     release.deploy(target, revision, enabled, AGENT_ID)
