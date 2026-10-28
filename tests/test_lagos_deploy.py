@@ -124,3 +124,30 @@ class LagosReleaseTests(unittest.TestCase):
         }
         with self.assertRaisesRegex(RuntimeError, 'already has a different route'):
             release.leadway_caller_routes(env)
+
+    def test_existing_leadway_caller_route_is_upgraded_with_did_override(self):
+        legacy_route = {
+            'business_id': release.LEADWAY_CALLER_ROUTES['+2348112812216']['business_id'],
+            'config_agent_id': release.LEADWAY_CALLER_ROUTES['+2348112812216']['config_agent_id'],
+            'configured_agent_name': 'Amaka',
+            'voice_auth_required': False,
+        }
+        env = {'RVC_AICC_SIP_ROUTE': json.dumps({
+            'caller_routes': {'08112812216': legacy_route}
+        })}
+
+        upgraded = json.loads(release.leadway_caller_routes(env))['caller_routes']
+
+        self.assertTrue(upgraded['08112812216']['override_did_routes'])
+        self.assertTrue(upgraded['+2349040760651']['override_did_routes'])
+
+    def test_existing_leadway_route_with_wrong_agent_still_fails_closed(self):
+        env = {'RVC_AICC_SIP_ROUTE': json.dumps({
+            'caller_routes': {'08112812216': {
+                **release.LEADWAY_CALLER_ROUTES['+2348112812216'],
+                'config_agent_id': 'different-agent',
+            }}
+        })}
+
+        with self.assertRaisesRegex(RuntimeError, 'already has a different route'):
+            release.leadway_caller_routes(env)
