@@ -385,6 +385,10 @@ runtime never forwards this credential to a different scheme, host, or port.
   message contains `[skip deploy]`; `dev` and `staging` do not deploy Lagos
 - `deploy-lagos.yml` tests the worker, uploads the exact commit, builds its
   image on Lagos, recreates only `voice`, checks health and retains a rollback image
+- each Lagos release explicitly sets the shared STT path to Qwen3-ASR at the
+  `/asr-rt/v1/realtime` WebSocket and `/asr-rt/v1/audio/transcriptions` batch
+  endpoint. The batch endpoint supplies the authoritative final transcript;
+  this setting applies to all Lagos voice agents.
 - it does not authenticate to GCP, publish to Artifact Registry, or use IAP
 - the approved personal-GCP dependency is the external NG/Odion TTS endpoint;
   Huawei MaaS `glm-5.2` remains the live and post-call text model
