@@ -34,8 +34,12 @@ Agents should pull GitHub `main`, make changes on a branch, and promote through
   allowlist and `ListeningNoiseRoute`), wired in `latency_lab/livekit_worker.py`, and the
   `pyrnnoise` dependency in the freeze. If `pyrnnoise` is missing the filter fails **open**
   (`implementation: off`) and the trace shows **no** `input_noise_filter_ready` event.
-- **STT** `Qwen3-ASR` (realtime final), **LLM** local `qwen3.8-27b`, **TTS** `Qwen3-TTS`
-  (`helen-mavino-0030`) — these are runtime env (`RVC_LAB_*`), not baked into the image.
+- **STT** `Qwen3-ASR` chat transcription is authoritative for Wema SAW's
+  business and the intended Amaka agent; an empty or failed chat transcript falls back to the
+  realtime Qwen final. Other businesses remain on the existing realtime/batch
+  path. The vocabulary context is preserved from the active environment.
+  **LLM** local `qwen3.8-27b`, **TTS** `Qwen3-TTS` — these are runtime env
+  (`RVC_LAB_*`), not baked into the image.
 
 ## Rollback
 Keep the previous image tag and the exact `-f` chain. Rollback = recreate `voice` from the
