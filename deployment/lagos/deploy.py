@@ -15,6 +15,12 @@ PROJECT = 'odion-recovery-lagos'
 CONTAINER = 'odion-recovery-lagos-voice-1'
 RELEASE_ROOT = Path('/opt/attentive/releases/voice-ci')
 HAUSA_RESEARCH_KEY = 'RVC_LAB_ENABLE_HAUSA_TWB_VOICES'
+LAGOS_ASR_ENV = {
+    'RVC_LAB_STT_PROVIDER': 'self_hosted',
+    'RVC_LAB_STT_MODEL': 'Qwen3-ASR',
+    'RVC_LAB_STT_WS_URL': 'ws://102.88.137.124:8080/asr-rt/v1/realtime',
+    'RVC_LAB_STT_BATCH_URL': 'http://102.88.137.124:8080/asr-rt/v1/audio/transcriptions',
+}
 
 
 def run(*args, **kwargs):
@@ -71,7 +77,12 @@ def deploy(release, revision, enable_hausa_research=False):
         raise ValueError('Unexpected or reused release directory')
     previous, files = inspect_voice()
     previous_env = dict(item.split('=', 1) for item in previous['Config']['Env'])
-    updates = {HAUSA_RESEARCH_KEY: 'true'} if enable_hausa_research else {}
+    # Lagos ASR is shared by the voice worker. Reassert the platform's Qwen
+    # realtime + batch endpoints on every release so stale Whisper overrides
+    # cannot silently survive a normal worker rollout.
+    updates = dict(LAGOS_ASR_ENV)
+    if enable_hausa_research:
+        updates[HAUSA_RESEARCH_KEY] = 'true'
     expected_env = [f'{key}={value}' for key, value in (previous_env | updates).items()]
     old_image = f'attentive/voice:before-{release.name}'
     new_image = f'attentive/voice:ci-{release.name}'

@@ -14,15 +14,24 @@ class LagosReleaseTests(unittest.TestCase):
             revision = 'a' * 40
             target = root / f'{revision}-1-1'
             target.mkdir()
-            env = ['TOKEN=unchanged=secret', 'MODEL=existing']
+            env = ['TOKEN=unchanged=secret', 'MODEL=existing'] + [
+                f'{key}={value}' for key, value in {
+                    **release.LAGOS_ASR_ENV,
+                    'RVC_LAB_STT_MODEL': 'whisper-large-v3-turbo',
+                    'RVC_LAB_STT_WS_URL': 'ws://asr.example/whisper-rt/v1/realtime',
+                }.items()
+            ]
+            previous_env = dict(item.split('=', 1) for item in env)
             if old_value is not None:
                 env.append(f'{release.HAUSA_RESEARCH_KEY}={old_value}')
             previous = {'Id': 'old-container', 'Image': 'old-image',
                         'Config': {'Env': env}, 'Mounts': [{'Source': '/data'}]}
             current = {**previous, 'Id': 'new-container', 'Image': 'new-image',
-                       'Config': {'Env': list(env)}}
+                       'Config': {'Env': [
+                           f'{key}={value}' for key, value in
+                           (previous_env | release.LAGOS_ASR_ENV).items()]}}
             if enabled:
-                current['Config']['Env'] = [item for item in env
+                current['Config']['Env'] = [item for item in current['Config']['Env']
                     if not item.startswith(release.HAUSA_RESEARCH_KEY + '=')]
                 current['Config']['Env'].append(f'{release.HAUSA_RESEARCH_KEY}=true')
             if drift:
@@ -37,15 +46,20 @@ class LagosReleaseTests(unittest.TestCase):
                         release.deploy(target, revision, enabled)
                     self.assertFalse((target / 'DEPLOYED').exists())
                     rollback = json.loads((target / 'voice-rollback.json').read_text())
-                    self.assertEqual(rollback['services']['voice']['environment'],
-                                     {release.HAUSA_RESEARCH_KEY: old_value})
+                    rollback_env = {
+                        key: previous_env.get(key) for key in release.LAGOS_ASR_ENV
+                    }
+                    rollback_env[release.HAUSA_RESEARCH_KEY] = old_value
+                    self.assertEqual(rollback['services']['voice']['environment'], rollback_env)
                     self.assertIn('before-', rollback['services']['voice']['image'])
                 else:
                     release.deploy(target, revision, enabled)
                     self.assertTrue((target / 'DEPLOYED').exists())
                 override = json.loads((target / 'voice-ci.json').read_text())['services']['voice']
-                self.assertEqual(override.get('environment', {}),
-                                 {release.HAUSA_RESEARCH_KEY: 'true'} if enabled else {})
+                expected_updates = dict(release.LAGOS_ASR_ENV)
+                if enabled:
+                    expected_updates[release.HAUSA_RESEARCH_KEY] = 'true'
+                self.assertEqual(override.get('environment', {}), expected_updates)
                 for call in run.call_args_list:
                     if 'up' in call.args:
                         self.assertEqual(call.args[-1], 'voice')
