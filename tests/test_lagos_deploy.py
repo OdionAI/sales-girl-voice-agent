@@ -13,6 +13,9 @@ MOMO_BUSINESS_ID = 'f2ff0fe3d56c468890489a76a6310d4a'
 MOMO_BUSINESS_ID_DASHED = 'f2ff0fe3-d56c-4688-9048-9a76a6310d4a'
 BASE_ROUTE = {
     'trunk_ids': ['ST_test_trunk'],
+    'caller_routes': {
+        '+2347012345678': {'config_agent_id': 'existing-agent'},
+    },
     'did_routes': {
         '030105': {
             'business_id': MOMO_BUSINESS_ID,
@@ -46,7 +49,10 @@ class LagosReleaseTests(unittest.TestCase):
             updates = dict(release.LAGOS_ASR_ENV)
             if enabled:
                 updates[release.HAUSA_RESEARCH_KEY] = 'true'
-            updates['RVC_AICC_SIP_ROUTE'] = release.momo_feedback_route(previous_env, AGENT_ID)
+            momo_route = release.momo_feedback_route(previous_env, AGENT_ID)
+            updates['RVC_AICC_SIP_ROUTE'] = release.leadway_caller_routes(
+                {'RVC_AICC_SIP_ROUTE': momo_route}
+            )
             expected_env = [f'{key}={value}' for key, value in (previous_env | updates).items()]
 
             previous = {'Id': 'old-container', 'Image': 'old-image',
@@ -84,6 +90,12 @@ class LagosReleaseTests(unittest.TestCase):
                     self.assertEqual(route['did_routes'][number]['business_id'], MOMO_BUSINESS_ID_DASHED)
                     self.assertTrue(route['did_routes'][number]['outbound_required'])
                 self.assertEqual(route['did_routes']['030105'], BASE_ROUTE['did_routes']['030105'])
+                self.assertEqual(
+                    route['caller_routes']['+2347012345678'],
+                    {'config_agent_id': 'existing-agent'},
+                )
+                for number, target in release.LEADWAY_CALLER_ROUTES.items():
+                    self.assertEqual(route['caller_routes'][number], target)
                 self.assertEqual(
                     set(updates['RVC_LAB_STT_CHAT_SCOPE'].split()),
                     {
@@ -147,3 +159,14 @@ class LagosReleaseTests(unittest.TestCase):
                  patch.object(release, 'run'):
                 with self.assertRaisesRegex(RuntimeError, 'MoMo route is missing'):
                     release.deploy(target, revision, False, AGENT_ID)
+
+    def test_conflicting_leadway_caller_route_fails_closed(self):
+        env = {
+            'RVC_AICC_SIP_ROUTE': json.dumps({
+                'caller_routes': {
+                    '08112812216': {'config_agent_id': 'different-agent'}
+                }
+            })
+        }
+        with self.assertRaisesRegex(RuntimeError, 'already has a different route'):
+            release.leadway_caller_routes(env)
