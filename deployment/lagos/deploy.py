@@ -25,8 +25,17 @@ LAGOS_ASR_ENV = {
     # failed chat transcripts automatically fall back to realtime Qwen finals.
     'RVC_LAB_STT_CHAT_URL': 'http://102.88.137.124:8080/asr-rt/v1/chat/completions',
     'RVC_LAB_STT_CHAT_MODEL': 'Qwen3-ASR',
-    # Keep Wema's existing business scope and add only the intended Amaka agent.
+    # Keep Wema's existing business scope and add the intended Amaka agent and
+    # Leadway Health (business), so Leadway's phone finals use the same hinted
+    # chat final as Wema.
     'RVC_LAB_STT_CHAT_SCOPE': (
+        'a0c8cda2-3b46-4ee0-898c-48f9a4d3a444 '
+        '00f99439-59d9-42a2-9c3a-db06422ea6cf '
+        '762d1f6d-9a7a-4e41-9088-bc6dcbb6ef4e'
+    ),
+    # The vocabulary hint itself stays Wema/MoMo-only, so putting Leadway on the
+    # chat final does not leak the Wema bank hint into Leadway transcription.
+    'RVC_LAB_STT_CONTEXT_SCOPE': (
         'a0c8cda2-3b46-4ee0-898c-48f9a4d3a444 '
         '00f99439-59d9-42a2-9c3a-db06422ea6cf'
     ),
