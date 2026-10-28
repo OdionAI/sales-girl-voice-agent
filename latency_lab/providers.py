@@ -6,9 +6,12 @@ import codecs
 import hashlib
 import io
 import json
+import math
 import re
+import sys
 import time
 import wave
+from array import array
 from contextvars import ContextVar
 from collections.abc import AsyncIterator, Awaitable, Callable
 from pathlib import Path
@@ -87,21 +90,86 @@ async def frame_pcm16_chunks(source: AsyncIterator[bytes]) -> AsyncIterator[byte
 
 
 def clean_transcript(value: str) -> str:
-    value = str(value or "").strip()
-    detected = [item.lower() for item in re.findall(r"(?i)language\s+([a-z]+)", value)]
+    return clean_transcript_with_diagnostics(value)[0]
+
+
+def clean_transcript_with_diagnostics(value: str) -> tuple[str, dict[str, Any]]:
+    raw_value = str(value or "")
+    value = raw_value.strip()
+    detected = list(dict.fromkeys(
+        item.lower() for item in re.findall(r"(?i)language\s+([a-z]+)", value)
+    ))[:8]
+    language_tags = list(dict.fromkeys(
+        item.lower()
+        for item in re.findall(r"(?i)language\s+([a-z]+)\s*<asr_text>", value)
+    ))[:8]
+    diagnostics: dict[str, Any] = {
+        "provider_text_chars": len(value),
+        "provider_text_empty": not value,
+        "detected_language_tags": language_tags,
+    }
+    if not value:
+        diagnostics["cleanup_reason"] = "provider_returned_empty_text"
+        return "", diagnostics
     concrete = [item for item in detected if item not in {"none", "null", "undefined"}]
     if concrete and "english" not in concrete:
-        return ""
+        diagnostics["cleanup_reason"] = "non_english_language_filtered"
+        return "", diagnostics
     if "<asr_text>" in value.lower():
         bodies = re.findall(
             r"(?is)<asr_text>(.*?)(?=(?:\n?\s*language\s+[a-z]+\s*<asr_text>)|$)",
             value,
         )
         value = " ".join(body.strip() for body in bodies if body.strip())
+        if not value:
+            diagnostics["cleanup_reason"] = "empty_asr_text_segments"
+            return "", diagnostics
     value = re.sub(r"(?i)^language\s+[a-z]+\s*", "", value).strip()
     if _CJK.search(value):
-        return ""
-    return value
+        diagnostics["cleanup_reason"] = "cjk_output_filtered"
+        return "", diagnostics
+    if not value:
+        diagnostics["cleanup_reason"] = "empty_after_language_prefix_cleanup"
+        return "", diagnostics
+    diagnostics["cleanup_reason"] = "accepted"
+    return value, diagnostics
+
+
+def pcm16_signal_diagnostics(pcm16: bytes, *, speech_rms: float) -> dict[str, Any]:
+    """Summarize ASR input signal without retaining or logging caller audio."""
+    usable_bytes = len(pcm16) - (len(pcm16) % 2)
+    samples = array("h")
+    samples.frombytes(pcm16[:usable_bytes])
+    if sys.byteorder != "little":
+        samples.byteswap()
+    sample_count = len(samples)
+    if not sample_count:
+        return {
+            "audio_duration_ms": 0.0,
+            "audio_rms": 0.0,
+            "audio_peak": 0,
+            "audio_voiced_frame_percent": 0.0,
+            "audio_clipped_sample_percent": 0.0,
+            "audio_odd_trailing_byte": bool(len(pcm16) % 2),
+        }
+
+    sum_squares = sum(sample * sample for sample in samples)
+    frame_samples = 160  # 10 ms at the ASR input rate of 16 kHz.
+    voiced_frames = frame_count = 0
+    for start in range(0, sample_count, frame_samples):
+        frame = samples[start : start + frame_samples]
+        frame_count += 1
+        if math.sqrt(sum(sample * sample for sample in frame) / len(frame)) >= speech_rms:
+            voiced_frames += 1
+    clipped_samples = sum(abs(sample) >= 32760 for sample in samples)
+    return {
+        "audio_duration_ms": round(sample_count / 16000 * 1000, 1),
+        "audio_rms": round(math.sqrt(sum_squares / sample_count), 1),
+        "audio_peak": max(abs(sample) for sample in samples),
+        "audio_voiced_frame_percent": round(voiced_frames / frame_count * 100, 1),
+        "audio_clipped_sample_percent": round(clipped_samples / sample_count * 100, 2),
+        "audio_odd_trailing_byte": bool(len(pcm16) % 2),
+    }
 
 
 class RSTTClient:
@@ -429,10 +497,22 @@ class RSTTClient:
 
     async def _transcribe_batch(self, pcm16: bytes) -> None:
         started = time.monotonic()
+        audio_diagnostics = pcm16_signal_diagnostics(
+            pcm16, speech_rms=self.config.speech_rms
+        )
+        requested_language = (
+            "fr"
+            if self.config.tts_language.lower() in {"fr", "french", "français"}
+            else "en"
+        )
         if not pcm16:
             self.on_provider_event(
                 "stt_batch_error",
-                {"error": "local utterance buffer was empty", "error_type": "EmptyAudio"},
+                {
+                    "error": "local utterance buffer was empty",
+                    "error_type": "EmptyAudio",
+                    **audio_diagnostics,
+                },
             )
             return
         assert self.session is not None and not self.session.closed
@@ -445,31 +525,54 @@ class RSTTClient:
             content_type="audio/wav",
         )
         form.add_field("model", self.config.stt_model)
-        form.add_field("language", "fr" if self.config.tts_language.lower() in {"fr", "french", "français"} else "en")
+        form.add_field("language", requested_language)
         self.on_provider_event(
             "stt_batch_request_start",
             {
                 "url": self.config.stt_batch_url,
                 "wav_bytes": len(wav_audio),
+                "requested_language": requested_language,
+                **audio_diagnostics,
             },
         )
+        http_status: int | None = None
+        provider_request_id: str | None = None
         try:
             timeout = aiohttp.ClientTimeout(total=self.config.stt_batch_timeout_seconds)
             async with self.session.post(
                 self.config.stt_batch_url, data=form, timeout=timeout
             ) as response:
+                http_status = response.status
+                provider_request_id = (
+                    response.headers.get("x-request-id")
+                    or response.headers.get("request-id")
+                )
+                if provider_request_id:
+                    provider_request_id = (
+                        re.sub(r"[^A-Za-z0-9._:-]", "", provider_request_id)[:128]
+                        or None
+                    )
                 response.raise_for_status()
                 if self.usage is not None:
                     self.usage.stt_submitted(len(pcm16))
                 payload = await response.json()
-            final = clean_transcript(str(payload.get("text") or ""))
+            raw_text = str(payload.get("text") or "")
+            final, cleanup_diagnostics = clean_transcript_with_diagnostics(raw_text)
             elapsed_ms = (time.monotonic() - started) * 1000
+            response_diagnostics = {
+                "http_status": http_status,
+                "provider_request_id": provider_request_id,
+                "requested_language": requested_language,
+                **cleanup_diagnostics,
+                **audio_diagnostics,
+            }
             self.on_provider_event(
                 "stt_batch_final",
                 {
                     "elapsed_ms": round(elapsed_ms, 1),
                     "text": final,
                     "authoritative": True,
+                    **response_diagnostics,
                 },
             )
             if final:
@@ -481,6 +584,7 @@ class RSTTClient:
                         "error": "batch endpoint returned an empty transcript",
                         "error_type": "EmptyTranscript",
                         "elapsed_ms": round(elapsed_ms, 1),
+                        **response_diagnostics,
                     },
                 )
         except asyncio.CancelledError:
@@ -492,6 +596,10 @@ class RSTTClient:
                     "error": str(exc),
                     "error_type": type(exc).__name__,
                     "elapsed_ms": round((time.monotonic() - started) * 1000, 1),
+                    "http_status": http_status,
+                    "provider_request_id": provider_request_id,
+                    "requested_language": requested_language,
+                    **audio_diagnostics,
                 },
             )
 
