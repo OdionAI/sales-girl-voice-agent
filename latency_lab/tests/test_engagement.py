@@ -100,6 +100,51 @@ class EngagementTests(unittest.IsolatedAsyncioTestCase):
         self.pipe.state = "releasing"
         return attempt
 
+    async def test_reply_grace_waits_for_continuation_and_keeps_prior_words(self):
+        self.pipe.config = replace(
+            self.pipe.config,
+            reply_grace_agent_ids=("leadway-amaka",),
+            reply_grace_ms=500,
+        )
+        self.pipe.agent_context = replace(self.pipe.agent_context, agent_id="leadway-amaka")
+        self.pipe._respond_to_final = AsyncMock()
+        self.pipe.turn_id = "turn-0001"
+        self.pipe.state = "awaiting_final"
+
+        await self.pipe.on_final("It has been very good.")
+        first_reply = self.pipe._final_response_task
+        self.pipe._respond_to_final.assert_not_awaited()
+
+        self.pipe.speech_candidate_active = True
+        self.pipe.candidate_turn_id = "turn-0002"
+        self.pipe.speech_ms = self.pipe.config.min_speech_ms
+        await self.pipe._speech_started(1000.0, None, None)
+        self.assertTrue(first_reply.cancelled())
+        self.pipe._respond_to_final.assert_not_awaited()
+
+        self.pipe.state = "awaiting_final"
+        await self.pipe.on_final("You know.")
+        await self.pipe._final_response_task
+        self.pipe._respond_to_final.assert_awaited_once_with("You know.")
+        caller_messages = [message["content"] for message in self.pipe.history
+                           if message["role"] == "user"]
+        self.assertEqual(caller_messages[-2:], ["It has been very good.", "You know."])
+
+    async def test_reply_grace_does_not_delay_other_agents(self):
+        self.pipe.config = replace(
+            self.pipe.config,
+            reply_grace_agent_ids=("leadway-amaka",),
+            reply_grace_ms=500,
+        )
+        self.pipe.agent_context = replace(self.pipe.agent_context, agent_id="wema-saw")
+        self.pipe._respond_to_final = AsyncMock()
+        self.pipe.turn_id = "turn-0001"
+        self.pipe.state = "awaiting_final"
+
+        await self.pipe.on_final("Hello.")
+        await asyncio.wait_for(self.pipe._final_response_task, timeout=0.1)
+        self.pipe._respond_to_final.assert_awaited_once_with("Hello.")
+
     async def pending(self):
         attempt = self.attempt()
         call = ActionToolCall("balance", "wema_account_balance", {"account": "test-account"})
