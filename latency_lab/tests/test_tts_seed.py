@@ -1,4 +1,5 @@
 import asyncio
+import unittest
 
 from latency_lab.config import LabConfig, apply_runtime_overrides
 from latency_lab.providers import RTTSClient, WEMA_TTS_SEED, is_wema_voice, resolve_tts_seed
@@ -69,15 +70,41 @@ def _request_payload(voice):
     return session.payload
 
 
-def test_wema_request_pins_voice_with_constant_seed_and_xvector():
+def test_wema_request_pins_voice_with_constant_seed_and_icl():
     for v in WEMA:
         payload = _request_payload(v)
         assert payload["voice"] == v
         assert payload["seed"] == WEMA_TTS_SEED == "0"
-        assert payload["x_vector_only_mode"] is True
+        assert payload["x_vector_only_mode"] is False
 
 
 def test_non_wema_request_keeps_icl_and_derived_seed():
     payload = _request_payload("helen-mavino-0030")
     assert payload["x_vector_only_mode"] is False
     assert payload["seed"] == resolve_tts_seed(LabConfig(tts_voice="helen-mavino-0030"))
+
+
+class CloneConditioningTest(unittest.IsolatedAsyncioTestCase):
+    async def test_cached_clones_keep_icl_and_seed_across_phrases(self):
+        # Exercise outgoing requests, including runtime voice selection, rather
+        # than just checking the default configuration. unittest runs in CI.
+        for voice in [*WEMA, "helen-mavino-0030"]:
+            with self.subTest(voice=voice):
+                config = apply_runtime_overrides(LabConfig(), {"tts_voice_id": voice})
+                session = _Session()
+                client = RTTSClient(config, session)
+                for phrase in ("Hello, this is SAW.", "Which account should I use?", "No problem."):
+                    await client.stream(phrase)
+                    self.assertEqual(session.payload["voice"], voice)
+                    self.assertEqual(session.payload["task_type"], "Base")
+                    self.assertIs(session.payload["x_vector_only_mode"], False)
+                    self.assertEqual(session.payload["seed"], resolve_tts_seed(config))
+
+    async def test_explicit_wema_seed_preserves_icl(self):
+        session = _Session()
+        config = apply_runtime_overrides(
+            LabConfig(), {"tts_voice_id": WEMA[0], "tts_seed": "777"}
+        )
+        await RTTSClient(config, session).stream("Please confirm the amount.")
+        self.assertEqual(session.payload["seed"], "777")
+        self.assertIs(session.payload["x_vector_only_mode"], False)
