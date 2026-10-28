@@ -1116,9 +1116,9 @@ def tts_token_budget(text: str) -> int:
 WEMA_VOICES = frozenset({
     "wema-en-ng-female", "wema-en-ng-male", "wema-en-us-female", "wema-en-us-male",
 })
-# One constant clone seed on the request for all four Wema voices (Helen's way:
-# pin the voice so it cannot drift between generations). Overridable with
-# RVC_LAB_WEMA_TTS_SEED.
+# Preserve the Wema sampling seed while comparing full ICL conditioning with
+# Helen. A fixed seed controls sampling; it does not guarantee speaker identity.
+# Overridable with RVC_LAB_WEMA_TTS_SEED.
 WEMA_TTS_SEED = os.getenv("RVC_LAB_WEMA_TTS_SEED", "0")
 
 
@@ -1130,7 +1130,7 @@ def resolve_tts_seed(config: LabConfig) -> str:
     """Return the seed to pin a TTS voice.
 
     An explicit configured seed wins; the four Wema voices use one constant
-    clone seed so the voice never drifts between generations; otherwise derive
+    clone seed for repeatable sampling; otherwise derive
     a stable per-voice seed from the voice id.
     """
     seed = str(getattr(config, "tts_seed", "") or "").strip()
@@ -1167,10 +1167,9 @@ class RTTSClient:
             payload.update(
                 task_type="Base",
                 voice=self.config.tts_voice,
-                # The four Wema voices use x-vector mode: it holds the speaker
-                # identity steady across sentences, where plain ICL re-clones the
-                # timbre on every request and the voice audibly drifts.
-                x_vector_only_mode=is_wema_voice(self.config.tts_voice),
+                # Use the saved reference speech and transcript for every clone,
+                # including Wema, rather than speaker-embedding-only synthesis.
+                x_vector_only_mode=False,
             )
         elif self._ref_audio:
             payload.update(
@@ -1184,7 +1183,7 @@ class RTTSClient:
                 task_type="VoiceDesign",
                 instructions="A warm, clear female conversational voice. Natural pacing and no exaggerated emotion.",
             )
-        # Pin the voice so it does not drift between generations.
+        # Keep sampling reproducible; the reference controls speaker conditioning.
         seed = resolve_tts_seed(self.config)
         if seed:
             payload["seed"] = seed
