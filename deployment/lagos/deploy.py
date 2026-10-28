@@ -16,6 +16,12 @@ PROJECT = 'odion-recovery-lagos'
 CONTAINER = 'odion-recovery-lagos-voice-1'
 RELEASE_ROOT = Path('/opt/attentive/releases/voice-ci')
 HAUSA_RESEARCH_KEY = 'RVC_LAB_ENABLE_HAUSA_TWB_VOICES'
+LAGOS_ASR_ENV = {
+    'RVC_LAB_STT_PROVIDER': 'self_hosted',
+    'RVC_LAB_STT_MODEL': 'Qwen3-ASR',
+    'RVC_LAB_STT_WS_URL': 'ws://102.88.137.124:8080/asr-rt/v1/realtime',
+    'RVC_LAB_STT_BATCH_URL': 'http://102.88.137.124:8080/asr-rt/v1/audio/transcriptions',
+}
 
 
 def run(*args, **kwargs):
@@ -96,7 +102,11 @@ def deploy(release, revision, enable_hausa_research=False, momo_feedback_agent_i
         raise ValueError('Unexpected or reused release directory')
     previous, files = inspect_voice()
     previous_env = dict(item.split('=', 1) for item in previous['Config']['Env'])
-    updates = {HAUSA_RESEARCH_KEY: 'true'} if enable_hausa_research else {}
+    # Lagos ASR is shared by the voice worker. Reassert Qwen realtime + batch
+    # endpoints each release so stale Whisper overrides cannot persist.
+    updates = dict(LAGOS_ASR_ENV)
+    if enable_hausa_research:
+        updates[HAUSA_RESEARCH_KEY] = 'true'
     if not momo_feedback_agent_id:
         raise RuntimeError('AICC_MOMO_FEEDBACK_AGENT_ID is required for this release')
     updates['RVC_AICC_SIP_ROUTE'] = momo_feedback_route(previous_env, momo_feedback_agent_id)
