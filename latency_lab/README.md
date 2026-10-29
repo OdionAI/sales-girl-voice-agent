@@ -2,14 +2,15 @@
 
 ## Wema English cached ICL voices
 
-For Wema agents, the saved Agent Config `tts_voice_id` selects one of the
-gateway-cached Qwen ICL voices: `wema-en-us-female`, `wema-en-us-male`,
-`wema-en-ng-female`, or `wema-en-ng-male`. Explicit signed per-session voice
-overrides retain precedence. Each request uses Base synthesis with
-`x_vector_only_mode=false`; the four Wema voices share the same deterministic
-seed derived from the configured Helen voice, matching Helen's clone-seed
-behavior. The worker does not send a reference WAV on each phrase because
-these are named cached voices.
+For Wema agents, the saved Agent Config `tts_voice_id` selects a gateway-cached
+Qwen ICL voice. Legacy IDs are `wema-en-us-female`, `wema-en-us-male`,
+`wema-en-ng-female`, and `wema-en-ng-male`. Short-reference IDs append
+`-short`; these must be registered in the gateway before they can synthesize.
+Explicit signed per-session voice overrides retain precedence. Each request
+uses Base synthesis with `x_vector_only_mode=false`; all Wema IDs share the
+same deterministic seed derived from the configured Helen voice, matching
+Helen's clone-seed behavior. The worker does not send a reference WAV on each
+phrase because these are named cached voices.
 
 To prepare short enrollment references from the private voice pack, run
 `python scripts/prepare_wema_icl_references.py <source-voices-dir> <output-dir>`.

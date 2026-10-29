@@ -16,7 +16,7 @@ from pathlib import Path
 
 VOICE_CUTS = (
     {
-        "voice_id": "wema-en-us-female",
+        "voice_id": "wema-en-us-female-short",
         "asset": "american-female-slt",
         "duration_seconds": 6.5,
         "transcript": (
@@ -25,7 +25,7 @@ VOICE_CUTS = (
         ),
     },
     {
-        "voice_id": "wema-en-us-male",
+        "voice_id": "wema-en-us-male-short",
         "asset": "american-male-bdl",
         "duration_seconds": 6.5,
         "transcript": (
@@ -34,7 +34,7 @@ VOICE_CUTS = (
         ),
     },
     {
-        "voice_id": "wema-en-ng-female",
+        "voice_id": "wema-en-ng-female-short",
         "asset": "nigerian-female-ngozi",
         "spoken_duration_seconds": 5.6,
         "duration_seconds": 6.0,
@@ -44,7 +44,7 @@ VOICE_CUTS = (
         ),
     },
     {
-        "voice_id": "wema-en-ng-male",
+        "voice_id": "wema-en-ng-male-short",
         "asset": "nigerian-male-femi",
         "duration_seconds": 7.0,
         "transcript": (
