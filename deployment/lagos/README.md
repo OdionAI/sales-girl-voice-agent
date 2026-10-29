@@ -118,6 +118,26 @@ preserves the current environment. Pair this with the dashboard production
 build flag `NEXT_PUBLIC_ENABLE_HAUSA_TWB_VOICES=true`. These are account-wide
 research controls, not commercial licensing clearance.
 
+## Abdul Hausa Voice
+
+An explicit saved `abdul` voice selects `hausa-ljspeech-vits-epoch271` through
+the existing `/tts-hausa/v1/audio/speech` endpoint. It keeps SBPN ASR and the
+configured LLM. Aisha, Adamu, Muhammad, legacy defaults and the TWB research
+opt-in remain unchanged; Abdul is a separate fine-tuned LJSpeech checkpoint,
+not a new TWB speaker ID.
+
+The API converts this model's native 22050 Hz output to the call contract of
+24000 Hz mono PCM16. The worker must not resample it again or label native
+22050 Hz bytes as 24000 Hz. It verifies the PCM rate, `abdul` voice/speaker,
+canonical model, and checkpoint SHA
+`a92c761456510945bd1a556987c673bc7768546f97436eb840bf6e06b4f64dc4`
+before forwarding audio. Streaming, seed 17 and speed 1 are retained. Failed
+requests are not retried or substituted with another speaker.
+
+Only enable Abdul agents after the public API and worker are deployed and a
+real public PCM request passes these bindings. Unit tests alone do not prove
+end-to-end call readiness or Hausa pronunciation quality.
+
 ## Igbo evaluation speakers
 
 Igbo agents can save `chinedu` (Ibo1), `eze` (Ibo2) or `ada` (Ibo3).
