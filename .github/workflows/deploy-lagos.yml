@@ -58,6 +58,7 @@ jobs:
           DEEPSEEK_MODEL: ${{ vars.RVC_LAB_DEEPSEEK_MODEL || 'deepseek-flash' }}
           DEEPSEEK_REASONING_EFFORT: ${{ vars.RVC_LAB_DEEPSEEK_REASONING_EFFORT || 'high' }}
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY || '' }}
+          WEMA_BLOB_CONNECTION_STRING: ${{ secrets.WEMA_BLOB_CONNECTION_STRING }}
         run: |
           set -euo pipefail
           test -n "$MOMO_FEEDBACK_AGENT_ID"
@@ -75,6 +76,8 @@ jobs:
           release="/opt/attentive/releases/voice-ci/${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           ssh lagos-app "install -d -m 700 '$release'"
           git archive HEAD | ssh lagos-app "tar -xf - --no-same-owner -C '$release'"
+          test -n "$WEMA_BLOB_CONNECTION_STRING"
+          printf '%s' "$WEMA_BLOB_CONNECTION_STRING" | ssh lagos-app python3 "$release/deployment/lagos/deploy_voice_auth.py" --release "$release" --revision "$GITHUB_SHA"
           if [[ "$LLM_PROVIDER" == deepseek ]]; then
             test -n "$DEEPSEEK_API_KEY"
             printf '%s' "$DEEPSEEK_API_KEY" | ssh lagos-app python3 "$release/deployment/lagos/deploy.py" --release "$release" --revision "$GITHUB_SHA" --momo-feedback-agent-id "$MOMO_FEEDBACK_AGENT_ID" --reply-grace-ms "$REPLY_GRACE_MS" --reply-grace-agent-ids "$REPLY_GRACE_AGENT_IDS" "${research_args[@]}" "${llm_args[@]}" --deepseek-api-key-stdin
