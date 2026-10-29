@@ -41,6 +41,15 @@ Agents should pull GitHub `main`, make changes on a branch, and promote through
   **LLM** local `qwen3.8-27b`, **TTS** `Qwen3-TTS` — these are runtime env
   (`RVC_LAB_*`), not baked into the image.
 
+The shared Lagos LLM can be switched for all agents through the repository
+variable `RVC_LAB_LLM_PROVIDER` (`qwen` or `deepseek`; defaults to `qwen`).
+DeepSeek uses `deepseek-flash` with thinking enabled and the configured
+`RVC_LAB_DEEPSEEK_REASONING_EFFORT`. Set the private Actions secret
+`DEEPSEEK_API_KEY` before selecting DeepSeek. The release workflow passes the
+secret through stdin to the deploy script; neither the key nor model reasoning
+is written to source control or diagnostics. Roll back by setting the provider
+variable to `qwen` and running the normal Lagos release workflow on `main`.
+
 ## Rollback
 Keep the previous image tag and the exact `-f` chain. Rollback = recreate `voice` from the
 previous chain (or the earlier override). Do not prune rollback images.

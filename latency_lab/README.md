@@ -174,16 +174,24 @@ number to the saved business and agent configuration before the prompt and
 tools load. Non-SIP browser participants cannot activate this map.
 
 When that saved agent has active `builtin://end_call`, RVC exposes a native
-zero-argument `end_call` function. Speculation may prepare it, but only the
-committed caller closing turn authorizes it. A deterministic final-transcript
-gate independently requires an explicit farewell, request to hang up, or clear
-statement that the caller is finished; a mistaken LLM tool selection is vetoed
-and regenerated as a normal response with `end_call` unavailable for that turn.
-RVC then synthesizes one
-deterministic goodbye, waits for LiveKit playout to drain, and deletes the room;
-the existing LiveKit SIP edge is responsible for emitting BYE to AICC. Trace
-events cover the map decision (only a phone suffix), authorization, goodbye
-playout completion, and room deletion.
+zero-argument `end_call` function only on committed caller turns. The LLM decides
+when the conversation is finished; the worker does not veto that decision with
+phrase matching or a second semantic check. After the model selects the tool,
+the worker asks the model for a brief, natural closing line, plays it, then
+deletes the room after playout drains; the existing LiveKit SIP edge emits BYE.
+Speculative turns cannot end a call. Trace events cover the map decision (only a
+phone suffix), authorization, goodbye playout completion, and room deletion.
+
+The Lagos release can select one shared LLM provider for all voice agents with
+the GitHub repository variable `RVC_LAB_LLM_PROVIDER`. `qwen` remains the
+default and rollback setting. `deepseek` uses the OpenAI-compatible
+`https://api.deepseek.com` endpoint, `deepseek-flash` by default, and thinking
+mode with configurable `RVC_LAB_DEEPSEEK_REASONING_EFFORT` (`low`, `high`, or
+`max`). Its credential is supplied through the Actions secret
+`DEEPSEEK_API_KEY`; it is not stored in the repository. DeepSeek's private
+`reasoning_content` stays in per-call memory only, is sent back only when needed
+to continue a tool call, and is excluded from spoken output and traces. To roll
+back, set `RVC_LAB_LLM_PROVIDER=qwen` and run the normal Lagos release workflow.
 
 Once the remote participant, microphone track, and RVC output track are ready,
 the worker proactively speaks one short greeting. To customize it for one

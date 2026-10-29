@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock
 
 from latency_lab.action_tools import ActionToolCall
 from latency_lab.config import LabConfig
-from latency_lab.providers import RLLMClient
+from latency_lab.providers import RLLMClient, scoped_llm_stream
 from latency_lab.pipeline import Attempt, ConversationPipeline
 from latency_lab.trace import TraceRecorder
 
@@ -98,7 +98,12 @@ class LLMOutputTest(unittest.IsolatedAsyncioTestCase):
         ], tools=TOOLS)
         self.assertEqual("".join(e for e in events if isinstance(e, str)), "One moment. ")
         calls = [e for e in events if isinstance(e, ActionToolCall)]
-        self.assertEqual(calls, [ActionToolCall("call-1", "wema_list_data_plans", {"network": "MTN"})])
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0].id, "call-1")
+        self.assertEqual(calls[0].name, "wema_list_data_plans")
+        self.assertEqual(calls[0].arguments, {"network": "MTN"})
+        self.assertEqual(calls[0].reasoning_content, "private")
+        self.assertIn("<think>private</think>", calls[0].assistant_content)
 
     async def test_ordinary_text_and_unicode_survive_network_byte_boundaries(self):
         text = "It costs \u20a6100. 2 < 3 and 5 > 4."
@@ -108,6 +113,47 @@ class LLMOutputTest(unittest.IsolatedAsyncioTestCase):
     async def test_plain_text_is_not_held_until_completion(self):
         events = await self.output([{"content": "Hello. "}, {"content": "How can I help?"}])
         self.assertEqual(events, ["Hello. ", "How can I help?"])
+
+    async def test_deepseek_thinking_payload_and_reasoning_are_kept_out_of_speech(self):
+        session = FakeSession([
+            {"reasoning_content": "private reasoning", "content": "Thanks for telling me."},
+        ])
+        config = LabConfig(
+            llm_provider="deepseek", llm_base_url="https://api.deepseek.com",
+            llm_model="deepseek-flash", llm_api_key="test-key",
+            llm_enable_thinking=True, llm_reasoning_effort="high",
+        )
+        client = RLLMClient(config, session)
+        reasoning = []
+        stream = client.stream([{"role": "user", "content": "It has been good."}])
+        events = [event async for event in scoped_llm_stream(
+            stream, turn_id="t", attempt_id="a", phase="prompt_first",
+            on_reasoning_content=reasoning.append,
+        )]
+        self.assertEqual(events, ["Thanks for telling me."])
+        self.assertEqual(reasoning, ["private reasoning"])
+        self.assertEqual(session.payload["thinking"], {"type": "enabled"})
+        self.assertEqual(session.payload["reasoning_effort"], "high")
+        self.assertNotIn("chat_template_kwargs", session.payload)
+        self.assertNotIn("temperature", session.payload)
+
+    async def test_deepseek_reasoning_and_assistant_content_follow_tool_call(self):
+        session = FakeSession([
+            {"reasoning_content": "private reasoning", "content": "Checking that."},
+            {"tool_calls": [{"index": 0, "id": "call-1", "function": {
+                "name": "wema_list_data_plans", "arguments": '{"network":"MTN"}',
+            }}]},
+        ])
+        config = LabConfig(
+            llm_provider="deepseek", llm_base_url="https://api.deepseek.com",
+            llm_model="deepseek-flash", llm_api_key="test-key",
+            llm_enable_thinking=True,
+        )
+        events = [event async for event in RLLMClient(config, session).stream([], tools=TOOLS)]
+        call = next(event for event in events if isinstance(event, ActionToolCall))
+        self.assertEqual(call.reasoning_content, "private reasoning")
+        self.assertEqual(call.assistant_content, "Checking that.")
+        self.assertEqual("".join(event for event in events if isinstance(event, str)), "Checking that.")
 
     async def test_filtered_provider_output_is_used_for_transcripts_and_tts(self):
         text = "<think>private reasoning</think>Let me check. " + TOOL_MARKUP

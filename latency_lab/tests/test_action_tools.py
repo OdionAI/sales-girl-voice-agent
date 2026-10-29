@@ -14,7 +14,6 @@ from latency_lab.action_tools import (
     action_tool_definitions,
     confirmation_decision,
     confirmation_prompt,
-    explicit_end_call_intent,
 )
 from latency_lab.agentic import AgentRuntimeContext
 from latency_lab.config import LabConfig
@@ -56,49 +55,6 @@ class ActionDefinitionTest(unittest.TestCase):
             [item["function"]["name"] for item in definitions],
             ["create_ticket", "send_email", "end_call"],
         )
-
-    def test_end_call_intent_requires_an_explicit_closing_utterance(self) -> None:
-        accepted = (
-            "Goodbye",
-            "Okay, bye",
-            "Please end this call now",
-            "You can hang up now",
-            "No, that's all, thank you",
-            "I have no more questions, thanks",
-            "Nothing else, thank you",
-        )
-        rejected = (
-            "What details are required to open the account successfully?",
-            "Thank you",
-            "Before we end the call, I have another question",
-            "How do I end a call in the mobile application?",
-            "Do not end the call",
-            "I don't want to hang up yet",
-            "What does goodbye mean?",
-        )
-        for text in accepted:
-            with self.subTest(text=text):
-                self.assertTrue(explicit_end_call_intent(text))
-        for text in rejected:
-            with self.subTest(text=text):
-                self.assertFalse(explicit_end_call_intent(text))
-
-    def test_outbound_agent_can_use_its_own_spoken_goodbye(self) -> None:
-        from types import SimpleNamespace
-
-        outbound = SimpleNamespace(config=LabConfig(), agent_context=AgentRuntimeContext(
-            instructions="SPOKEN_GOODBYE: Thank you for sharing your feedback. Goodbye."
-        ))
-        self.assertEqual(
-            ConversationPipeline.closing_goodbye_text(outbound),
-            "Thank you for sharing your feedback. Goodbye.",
-        )
-        generic = SimpleNamespace(config=LabConfig(), agent_context=AgentRuntimeContext())
-        self.assertEqual(
-            ConversationPipeline.closing_goodbye_text(generic),
-            "Thank you for calling. Goodbye.",
-        )
-
 
 class ActionConfirmationLifecycleTest(unittest.IsolatedAsyncioTestCase):
     class ToolLLM:
@@ -205,8 +161,10 @@ class ActionConfirmationLifecycleTest(unittest.IsolatedAsyncioTestCase):
     async def test_end_call_waits_for_committed_turn_and_follows_goodbye(self) -> None:
         class EndCallLLM:
             async def stream(self, _messages, *, tools=None):
-                assert tools
-                yield ActionToolCall(id="call-end", name="end_call", arguments={})
+                if any(item["function"]["name"] == "end_call" for item in tools or []):
+                    yield ActionToolCall(id="call-end", name="end_call", arguments={})
+                else:
+                    yield "Thanks for sharing that with me. Take care."
 
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -224,17 +182,11 @@ class ActionConfirmationLifecycleTest(unittest.IsolatedAsyncioTestCase):
             pipeline.llm = EndCallLLM()
             pipeline.tts = self.SilentTTS()
             pipeline.turn_id = "turn-0001"
+            pipeline.final_text = "There isn't anything else I have. Thanks for your help."
             await pipeline._start_attempt(
-                "Goodbye, please end the call", speculative=True, authorized=False
+                pipeline.final_text, speculative=False, authorized=True
             )
             attempt = pipeline.attempt
-            await asyncio.sleep(0)
-            self.assertNotIn("end_call", [item.get("type") for item in sent])
-            self.assertFalse(attempt.task.done())
-
-            pipeline.final_text = "Goodbye, please end the call"
-            attempt.authorized = True
-            attempt.authorization_event.set()
             await attempt.task
 
             message_types = [item.get("type") for item in sent]
@@ -246,11 +198,11 @@ class ActionConfirmationLifecycleTest(unittest.IsolatedAsyncioTestCase):
                     for item in sent
                     if item.get("type") == "final_assistant_answer"
                 ),
-                "Thank you for calling. Goodbye.",
+                "Thanks for sharing that with me. Take care.",
             )
             await pipeline.http.close()
 
-    async def test_end_call_tool_is_vetoed_for_non_closing_final_transcript(self) -> None:
+    async def test_committed_model_end_call_is_not_vetoed_by_phrase_matching(self) -> None:
         class WrongEndCallLLM:
             def __init__(self):
                 self.calls = 0
@@ -289,7 +241,7 @@ class ActionConfirmationLifecycleTest(unittest.IsolatedAsyncioTestCase):
             await pipeline.attempt.task
 
             message_types = [item.get("type") for item in sent]
-            self.assertNotIn("end_call", message_types)
+            self.assertIn("end_call", message_types)
             self.assertIn("final_assistant_answer", message_types)
             self.assertIn(
                 "valid BVN or NIN",
@@ -303,9 +255,8 @@ class ActionConfirmationLifecycleTest(unittest.IsolatedAsyncioTestCase):
                 json.loads(line)["event"]
                 for line in trace.path.read_text(encoding="utf-8").splitlines()
             ]
-            self.assertIn("end_call_semantic_validation", events)
-            self.assertIn("end_call_rejected", events)
-            self.assertNotIn("end_call_authorized", events)
+            self.assertIn("end_call_authorized", events)
+            self.assertNotIn("end_call_rejected", events)
             await pipeline.http.close()
 
     async def test_committed_llm_outage_speaks_fallback_instead_of_silence(self) -> None:

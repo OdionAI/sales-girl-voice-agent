@@ -227,7 +227,6 @@ class PidginTests(unittest.IsolatedAsyncioTestCase):
                 self.assertIn("konfam, with K", pipeline.system_prompt)
                 self.assertNotIn("Do not imitate an accent with misspellings", pipeline.system_prompt)
                 self.assertIn("How I fit help", pipeline.opening_greeting_text())
-                self.assertIn("well well", pipeline.closing_goodbye_text())
             finally:
                 await pipeline.close()
 
