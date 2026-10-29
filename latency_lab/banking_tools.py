@@ -369,7 +369,9 @@ class BankingTools:
             "and ask only for their missing phone number. Bank names may be misheard: search the returned "
             "bank list and confirm a close match, never invent a bank code. Write every amount in "
             "figures, never in words (e.g. \"5000 naira\", not \"five thousand naira\"), and express "
-            "phone and account numbers as separate digits. "
+            "phone and account number readbacks must spell each digit as a word in the original order, "
+            "preserving leading zeros and every digit. Separate the digit words with spaces only; "
+            "never insert periods, full stops, ellipses, or commas between digits. "
             "Preparation is not execution. Read the actual returned preview and ask confirmation. "
             "The application requires a separate confirmation before execution. "
             + voice_policy +
