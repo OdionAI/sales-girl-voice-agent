@@ -5,7 +5,7 @@ import unittest
 from unittest.mock import patch
 
 from agent import call_capacity_api
-from latency_lab.outbound import sip_remote_headers
+from latency_lab.sip_headers import sip_remote_headers
 
 
 class CallCapacityApiTests(unittest.TestCase):
