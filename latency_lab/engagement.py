@@ -127,6 +127,7 @@ class Engagement:
         self.next_check = self.clock() + self.config.engagement_idle_seconds
         self.tool_checks = 0
         self.idle_checks = 0
+        self.idle_close_at: float | None = None
         self.last_updates: list[str] = []
 
     def start(self):
@@ -142,10 +143,19 @@ class Engagement:
         if not self.enabled:
             return
         self.invalidate()
+        self.idle_close_at = None
         self.new_messages.append(text)
         # Quiet sessions can be long. Full history belongs to bounded memory;
         # this list is only the recent input for optional speech opportunities.
         self.new_messages = self.new_messages[-8:]
+        self.idle_checks = 0
+        self.next_check = self.clock() + self.config.engagement_idle_seconds
+
+    def caller_started(self):
+        if not self.enabled:
+            return
+        self.invalidate()
+        self.idle_close_at = None
         self.idle_checks = 0
         self.next_check = self.clock() + self.config.engagement_idle_seconds
 
@@ -178,6 +188,7 @@ class Engagement:
         if not self.enabled:
             return op
         self.operation = op
+        self.idle_close_at = None
         self.tool_checks = 0
         self.next_check = self.clock() + self.config.engagement_ack_seconds
         return op
@@ -260,7 +271,8 @@ class Engagement:
             if attempt and (attempt is not op.attempt or attempt.cancelled or not attempt.authorized):
                 return None
             return ("tool_started" if self.tool_checks == 0 else "tool_wait", attempt)
-        if p.attempt is not None or p.state != "idle" or p.pending_action or p.banking.prepared:
+        if (p.attempt is not None or p.state != "idle" or
+                ((p.pending_action or p.banking.prepared) and not self.config.inactivity_pilot_enabled)):
             return None
         if (op and op.result is not None and not op.delivered
                 and op.completion_considered_revision != self.revision):
@@ -269,9 +281,29 @@ class Engagement:
             return None
         return "idle", None
 
+    def _can_close_idle(self, revision: int) -> bool:
+        p = self.pipe
+        return bool(
+            self.config.inactivity_pilot_enabled
+            and self.revision == revision
+            and not self.closed
+            and self.quiet == "none"
+            and not p.call_ending
+            and p.state == "idle"
+            and p.attempt is None
+            and not p.speech_candidate_active
+            and not p.inflight_tools
+            and not (self.operation and self.operation.task and not self.operation.task.done())
+            and not p._speech_lock.locked()
+        )
+
     async def _loop(self):
         while not self.closed:
             await asyncio.sleep(0.1)
+            if (self.idle_close_at is not None and self.clock() >= self.idle_close_at
+                    and not (self.decision_task and not self.decision_task.done())):
+                self.decision_task = asyncio.create_task(self._close_idle_call())
+                continue
             if self.clock() < self.next_check or (self.decision_task and not self.decision_task.done()):
                 continue
             candidate = self.opportunity()
@@ -290,6 +322,47 @@ class Engagement:
                     (reason not in {"tool_started", "tool_wait"} or
                      (self.operation and self.operation.task and not self.operation.task.done())))))
 
+    async def _close_idle_call(self):
+        revision = self.revision
+        if self.idle_close_at is None or self.clock() < self.idle_close_at:
+            return
+        if not self._can_close_idle(revision):
+            if self.revision == revision:
+                self.idle_close_at = self.clock() + 1.0
+            return
+        text = "I haven't heard back, so I'll end the call for now. Goodbye."
+        try:
+            async with asyncio.timeout(self.config.engagement_generation_timeout_seconds):
+                sample_rate, stream = await self.pipe.tts.stream(text)
+                chunks = [chunk async for chunk in stream]
+            if not self._can_close_idle(revision):
+                return
+            if chunks:
+                played = await self.pipe._play_engagement(
+                    self, None, "idle_close", revision, text, sample_rate, chunks
+                )
+                if not played:
+                    return
+            await self._hangup_idle(revision)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self.pipe.trace.record("inactivity_pilot_close_failed", reason=type(exc).__name__)
+            await self._hangup_idle(revision)
+
+    async def _hangup_idle(self, revision: int):
+        if not self._can_close_idle(revision):
+            return
+        self.idle_close_at = None
+        self.pipe.call_ending = True
+        self.pipe.trace.record("inactivity_pilot_hangup", reason="caller_absent_after_checkin")
+        try:
+            await self.pipe.send({"type": "end_call", "reason": "inactivity_pilot_caller_absent"})
+        except Exception as exc:
+            self.pipe.call_ending = False
+            self.idle_close_at = self.clock() + 5.0
+            self.pipe.trace.record("inactivity_pilot_hangup_retry", reason=type(exc).__name__)
+
     async def reconsider(self, reason, attempt):
         revision = self.revision
         if reason == "tool_completed" and self.operation:
@@ -304,7 +377,8 @@ class Engagement:
         payload = {"reason": reason, "quiet": self.quiet, "new_caller_messages": messages,
                    "conversation": self.pipe.memory.context(), "recent_updates": self.last_updates,
                    "current_answer": attempt.answer if attempt else "",
-                   "operation": self.operation.snapshot() if self.operation else None}
+                   "operation": self.operation.snapshot() if self.operation else None,
+                   "awaiting_confirmation": bool(self.pipe.pending_action or self.pipe.banking.prepared)}
         try:
             async with asyncio.timeout(self.config.engagement_generation_timeout_seconds):
                 output = "".join([piece async for piece in self.pipe.llm.stream(
@@ -326,6 +400,10 @@ class Engagement:
                 self.pipe.trace.record("engagement_decision", reason=reason,
                                        speak=decision["speak"], quiet=self.quiet)
                 text = decision["text"].strip()
+                if (self.config.inactivity_pilot_enabled and reason == "idle"
+                        and self.quiet == "none" and (not decision["speak"] or not text)):
+                    text = "Are you still there? Is there anything else I can help you with?"
+                    decision["speak"] = True
                 if (not decision["speak"] or not text or self.quiet == "until_user"
                         or (self.quiet == "until_result" and reason != "tool_completed")):
                     return
@@ -345,12 +423,35 @@ class Engagement:
             if not played:
                 return
             self.last_updates = (self.last_updates + [text])[-3:]
+            if (reason == "idle" and self.config.inactivity_pilot_enabled
+                    and self.safe(revision, None, reason)):
+                self.idle_close_at = self.clock() + self.config.inactivity_pilot_close_seconds
+                self.pipe.trace.record(
+                    "inactivity_pilot_checkin", reason="caller_idle", text=text,
+                )
             if reason == "tool_completed" and self.operation:
                 self.operation.delivered = True
         except asyncio.CancelledError:
             raise
         except Exception as exc:
             self.pipe.trace.record("engagement_skipped", reason=type(exc).__name__)
+            if reason == "idle" and self.config.inactivity_pilot_enabled and self.safe(revision, None, reason):
+                try:
+                    text = "Are you still there? Is there anything else I can help you with?"
+                    async with asyncio.timeout(self.config.engagement_generation_timeout_seconds):
+                        sample_rate, stream = await self.pipe.tts.stream(text)
+                        chunks = [chunk async for chunk in stream]
+                    if chunks and self.safe(revision, None, reason):
+                        if (await self.pipe._play_engagement(self, None, reason, revision, text, sample_rate, chunks)
+                                and self.safe(revision, None, reason)):
+                            self.idle_close_at = self.clock() + self.config.inactivity_pilot_close_seconds
+                            self.pipe.trace.record(
+                                "inactivity_pilot_checkin", reason="fallback_after_generation_failure", text=text,
+                            )
+                except Exception as fallback_exc:
+                    self.pipe.trace.record("inactivity_pilot_checkin_failed", reason=type(fallback_exc).__name__)
+                    if self.safe(revision, None, reason):
+                        self.idle_close_at = self.clock() + self.config.inactivity_pilot_close_seconds
         finally:
             self.emitting = False
             self.next_check = max(self.next_check, self.audio_until + (
