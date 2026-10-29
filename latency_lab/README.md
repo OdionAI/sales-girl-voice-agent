@@ -1,5 +1,21 @@
 # RVC natural-conversation latency lab
 
+## Wema English cached ICL voices
+
+For Wema agents, the saved Agent Config `tts_voice_id` selects one of the
+gateway-cached Qwen ICL voices: `wema-en-us-female`, `wema-en-us-male`,
+`wema-en-ng-female`, or `wema-en-ng-male`. Explicit signed per-session voice
+overrides retain precedence. Each request uses Base synthesis with
+`x_vector_only_mode=false`; the four Wema voices share the same deterministic
+seed derived from the configured Helen voice, matching Helen's clone-seed
+behavior. The worker does not send a reference WAV on each phrase because
+these are named cached voices.
+
+To prepare short enrollment references from the private voice pack, run
+`python scripts/prepare_wema_icl_references.py <source-voices-dir> <output-dir>`.
+The generated WAVs stay outside the repository, and the script carries source
+consent metadata forward unchanged.
+
 This lab lives in `sales-girl-voice-agent` on the `speculative-generation` branch. It does **not** replace the production LiveKit worker (`python main.py` / `make run`). Production SIP and room dispatch stay on that worker.
 
 This is the experimental speculative-generation pipeline for measuring the natural-conversation critical path using the Ascend realtime STT (`RSTT`), streaming LLM (`RLLM`), and streaming TTS (`RTTS`). Voice Lab loads each session-scoped agent configuration, supports read-only retrieval from only its attached knowledge bases, and exposes its configured ticket, email, and live-call hang-up actions.
