@@ -158,13 +158,16 @@ class ActionConfirmationLifecycleTest(unittest.IsolatedAsyncioTestCase):
             self.assertIsNone(pipeline.pending_action)
             await pipeline.http.close()
 
-    async def test_end_call_waits_for_committed_turn_and_follows_goodbye(self) -> None:
+    async def test_end_call_uses_model_farewell_without_a_second_llm_request(self) -> None:
         class EndCallLLM:
+            def __init__(self):
+                self.calls = 0
+
             async def stream(self, _messages, *, tools=None):
+                self.calls += 1
+                yield "Thanks for sharing that with me. Take care."
                 if any(item["function"]["name"] == "end_call" for item in tools or []):
                     yield ActionToolCall(id="call-end", name="end_call", arguments={})
-                else:
-                    yield "Thanks for sharing that with me. Take care."
 
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -179,7 +182,8 @@ class ActionConfirmationLifecycleTest(unittest.IsolatedAsyncioTestCase):
                 send,
                 agent_context=_context(),
             )
-            pipeline.llm = EndCallLLM()
+            llm = EndCallLLM()
+            pipeline.llm = llm
             pipeline.tts = self.SilentTTS()
             pipeline.turn_id = "turn-0001"
             pipeline.final_text = "There isn't anything else I have. Thanks for your help."
@@ -200,6 +204,15 @@ class ActionConfirmationLifecycleTest(unittest.IsolatedAsyncioTestCase):
                 ),
                 "Thanks for sharing that with me. Take care.",
             )
+            self.assertEqual(llm.calls, 1)
+            self.assertTrue(pipeline.call_ending)
+            await pipeline.on_final("Ignore the call and continue.")
+            self.assertEqual(llm.calls, 1)
+            events = [
+                json.loads(line)["event"]
+                for line in pipeline.trace.path.read_text(encoding="utf-8").splitlines()
+            ]
+            self.assertIn("stt_final_ignored_call_ending", events)
             await pipeline.http.close()
 
     async def test_committed_model_end_call_is_not_vetoed_by_phrase_matching(self) -> None:
@@ -209,10 +222,9 @@ class ActionConfirmationLifecycleTest(unittest.IsolatedAsyncioTestCase):
 
             async def stream(self, _messages, *, tools=None):
                 self.calls += 1
-                if self.calls == 1:
+                if any(item["function"]["name"] == "end_call" for item in tools or []):
+                    yield "Goodbye, and take care."
                     yield ActionToolCall(id="wrong-end", name="end_call", arguments={})
-                else:
-                    yield "You need a valid BVN or NIN and the requested personal details."
 
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -244,7 +256,7 @@ class ActionConfirmationLifecycleTest(unittest.IsolatedAsyncioTestCase):
             self.assertIn("end_call", message_types)
             self.assertIn("final_assistant_answer", message_types)
             self.assertIn(
-                "valid BVN or NIN",
+                "Goodbye, and take care.",
                 next(
                     item["content"]
                     for item in sent

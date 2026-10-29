@@ -216,6 +216,7 @@ class ConversationPipeline:
         self.pending_action: PendingAction | None = None
         self.transport = transport
         self.state = "idle"
+        self.call_ending = False
         # Bank calls running right now (tool id -> state) so the agent always knows
         # what it is doing, and the background tasks themselves so close() can stop them.
         self.inflight_tools: dict[str, dict] = {}
@@ -714,6 +715,14 @@ class ConversationPipeline:
         client_sent_ms: float | None,
         client_network_ms: float | None,
     ) -> None:
+        if self.call_ending:
+            self._clear_speech_candidate()
+            self.trace.record(
+                "caller_speech_ignored_call_ending",
+                turn_id=self.turn_id or self.last_closed_turn_id,
+                reason="end_call_already_authorized",
+            )
+            return
         confirmed_turn_id = self.candidate_turn_id or f"turn-{self.turn_number + 1:04d}"
         first_client_sent_ms = self.candidate_client_sent_ms
         first_client_network_ms = self.candidate_client_network_ms
@@ -895,6 +904,13 @@ class ConversationPipeline:
         await self.send({"type": "lab_status", "content": "listening"})
 
     async def on_partial(self, text: str, raw: str) -> None:
+        if self.call_ending:
+            self.trace.record(
+                "stt_partial_ignored_call_ending",
+                turn_id=self.turn_id or self.last_closed_turn_id,
+                reason="end_call_already_authorized",
+            )
+            return
         if not self.turn_id:
             if self.speech_candidate_active:
                 self.preconfirm_partial = (text, raw)
@@ -982,6 +998,14 @@ class ConversationPipeline:
             return
 
     async def on_final(self, text: str, *, publish_transcript: bool = True) -> None:
+        if self.call_ending:
+            self.trace.record(
+                "stt_final_ignored_call_ending",
+                turn_id=self.turn_id or self.last_closed_turn_id,
+                reason="end_call_already_authorized",
+                text=text,
+            )
+            return
         if not self.turn_id:
             if self.last_closed_turn_id:
                 self.trace.record(
@@ -1335,21 +1359,22 @@ class ConversationPipeline:
                         attempt.tool_calls = []
                         attempt.answer = ""
                     else:
-                        attempt.held_audio.clear()
-                        attempt.answer = ""
                         attempt.end_call_requested = True
+                        self.call_ending = True
                         self.trace.record(
                             "end_call_authorized",
                             turn_id=self.turn_id,
                             attempt_id=attempt.id,
                             reason="committed_model_selected_end_call_tool",
-                        )
-                        await self._generate_natural_action_response(
-                            attempt,
-                            "Close the conversation warmly and briefly. Do not ask a new question.",
-                            {"kind": "caller_requested_call_end"}, phase="end_call_goodbye",
+                            farewell_chars=len(attempt.answer.strip()),
                         )
                         if not attempt.answer.strip() and not attempt.cancelled:
+                            self.trace.record(
+                                "end_call_goodbye_fallback_used",
+                                turn_id=self.turn_id,
+                                attempt_id=attempt.id,
+                                reason="model_selected_end_call_without_spoken_farewell",
+                            )
                             await self._speak_text(
                                 attempt, "Thank you for sharing that with me. Take care.",
                                 phase="end_call_goodbye_fallback",
