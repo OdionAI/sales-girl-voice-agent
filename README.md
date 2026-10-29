@@ -65,6 +65,11 @@ runtime for this path. SIP header propagation must be verified with AICC before
 release.
 Caller `+2348112812216` follows the `0301051` DID route to the MoMo feedback
 agent; `+2349040760651` retains its explicit Leadway check-in route.
+
+For `builtin://end_call`, the model's natural farewell and tool call are handled
+in one response. The worker ignores additional speech/transcripts after the
+committed end-call decision while the farewell plays, then closes the room after
+playout drains.
 - optional external/custom tool endpoints
 
 ## Current runtime status
