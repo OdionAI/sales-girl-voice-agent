@@ -30,6 +30,7 @@ from .trace import TraceRecorder
 from .live_metrics import LiveMetricPublisher
 from .outbound import apply_outbound_context, claim_for_route, sip_remote_headers
 from agent import outbound_call_api
+from agent import call_capacity_api
 
 
 logger = logging.getLogger("rvc-livekit-transport")
@@ -358,6 +359,9 @@ async def entrypoint(ctx: JobContext) -> None:
     input_lock = asyncio.Lock()
     outbound_call_ref = ""
     outbound_claim: dict[str, Any] = {}
+    capacity_reservation_id = ""
+    capacity_heartbeat_task: asyncio.Task | None = None
+    capacity_heartbeat_stop = asyncio.Event()
     failure_reason = ""
     try:
         sip_route = resolve_sip_route(ctx.job.metadata, ctx.room.name)
@@ -378,6 +382,14 @@ async def entrypoint(ctx: JobContext) -> None:
             identity = sip_participant_identity(sip_route, participant, ctx.room.name,
                                                rtc.ParticipantKind.PARTICIPANT_KIND_SIP,
                                                called_override=sip_headers.get("to", ""))
+            capacity_reservation_id = call_capacity_api.reservation_id_from_sip_headers(
+                sip_headers, str(identity.get("business_id") or "")
+            )
+            if capacity_reservation_id:
+                await call_capacity_api.claim_call(
+                    reservation_id=capacity_reservation_id,
+                    room_name=str(ctx.room.name or ""),
+                )
             outbound_required = bool(identity.get("outbound_required"))
             outbound_recipient = str(identity.get("caller_number") or "").strip()
             if outbound_required and not outbound_recipient:
@@ -466,8 +478,44 @@ async def entrypoint(ctx: JobContext) -> None:
                 )
             await pipeline.conversations.mark_transfer(reason, result)
             pipeline.handoff_active = result.get("status") == "connected"
+            if pipeline.handoff_active:
+                await release_capacity_slot()
             trace.record("livekit_transfer_result", **result)
             return result
+
+        async def release_capacity_slot() -> None:
+            nonlocal capacity_reservation_id
+            if not capacity_reservation_id:
+                return
+            reservation_id = capacity_reservation_id
+            capacity_reservation_id = ""
+            capacity_heartbeat_stop.set()
+            try:
+                await call_capacity_api.release_call(
+                    reservation_id=reservation_id,
+                    room_name=str(ctx.room.name or ""),
+                )
+            except Exception:
+                logger.exception("Could not release MoMo call capacity reservation")
+
+        async def maintain_capacity_lease() -> None:
+            interval = max(10.0, float(os.getenv("MOMO_CALL_CAPACITY_HEARTBEAT_INTERVAL_SECONDS", "45")))
+            while not capacity_heartbeat_stop.is_set():
+                try:
+                    await asyncio.wait_for(capacity_heartbeat_stop.wait(), timeout=interval)
+                    return
+                except asyncio.TimeoutError:
+                    pass
+                try:
+                    await call_capacity_api.heartbeat_call(
+                        reservation_id=capacity_reservation_id,
+                        room_name=str(ctx.room.name or ""),
+                    )
+                except Exception:
+                    logger.exception("Could not renew MoMo call capacity reservation")
+
+        if capacity_reservation_id:
+            capacity_heartbeat_task = asyncio.create_task(maintain_capacity_lease())
 
         source = rtc.AudioSource(sample_rate=24000, num_channels=1, queue_size_ms=240)
         output_track = rtc.LocalAudioTrack.create_audio_track("rvc-tts", source)
@@ -678,6 +726,18 @@ async def entrypoint(ctx: JobContext) -> None:
         )
         logger.exception("RVC LiveKit transport failed")
     finally:
+        capacity_heartbeat_stop.set()
+        if capacity_heartbeat_task is not None:
+            capacity_heartbeat_task.cancel()
+            await asyncio.gather(capacity_heartbeat_task, return_exceptions=True)
+        if capacity_reservation_id:
+            try:
+                await call_capacity_api.release_call(
+                    reservation_id=capacity_reservation_id,
+                    room_name=str(ctx.room.name or ""),
+                )
+            except Exception:
+                logger.exception("Could not release MoMo call capacity reservation during cleanup")
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
