@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import re
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -61,71 +60,16 @@ PASSKEY_START_TOOL = "wema_start_passkey"
 TRANSFER_TO_AICC_TOOL = "transfer_to_aicc"
 
 
-def explicit_end_call_intent(text: str) -> bool:
-    """Return true only for a caller utterance that clearly closes this call."""
-
-    normalized = re.sub(r"[^a-z0-9' ]+", " ", str(text or "").lower())
-    normalized = " ".join(normalized.split())
-    if not normalized:
-        return False
-
-    # A negative instruction always wins, even if the sentence also contains
-    # words such as "hang up" or "end the call".
-    negative_patterns = (
-        r"\b(?:do not|don't|dont|please don't|please dont|not yet)\s+(?:end|hang up|disconnect|terminate)\b",
-        r"\b(?:do not|don't|dont)\s+say\s+goodbye\b",
-        r"\bi\s+(?:do not|don't|dont)\s+want\s+to\s+(?:end|hang up|disconnect|terminate)\b",
-    )
-    if any(re.search(pattern, normalized) for pattern in negative_patterns):
-        return False
-
-    # Standalone farewells are explicit. Keep this bounded so explanatory
-    # questions such as "what does goodbye mean" cannot terminate a call.
-    farewell = re.fullmatch(
-        r"(?:(?:ok(?:ay)?|alright|all right|well|thanks|thank you|cheers)[ ]+)*"
-        r"(?:goodbye|good bye|bye|bye bye)"
-        r"(?:[ ]+(?:thanks|thank you|for now|then|sarah|helen))?",
-        normalized,
-    )
-    if farewell:
-        return True
-
-    combined_farewell_request = re.fullmatch(
-        r"(?:goodbye|good bye|bye|bye bye)[ ]+(?:and[ ]+)?(?:please[ ]+)?"
-        r"(?:end|terminate|disconnect)\s+(?:the|this|our)\s+call(?:[ ]+now)?",
-        normalized,
-    )
-    if combined_farewell_request:
-        return True
-
-    direct_request_patterns = (
-        r"^(?:(?:ok(?:ay)?|alright|all right|thanks|thank you)[ ]+)*"
-        r"(?:please[ ]+)?(?:end|terminate|disconnect)\s+(?:the|this|our)\s+call(?:[ ]+now)?$",
-        r"^(?:(?:ok(?:ay)?|alright|all right|thanks|thank you)[ ]+)*"
-        r"(?:please[ ]+)?(?:hang up|disconnect)(?:[ ]+(?:the|this|our)\s+call)?(?:[ ]+now)?$",
-        r"^(?:(?:ok(?:ay)?|alright|all right)[ ]+)*"
-        r"(?:you|we)\s+can\s+(?:end|terminate|disconnect)\s+(?:the|this|our)\s+call(?:[ ]+now)?$",
-        r"^(?:(?:ok(?:ay)?|alright|all right)[ ]+)*"
-        r"you\s+can\s+hang up(?:[ ]+now)?$",
-    )
-    if any(re.fullmatch(pattern, normalized) for pattern in direct_request_patterns):
-        return True
-
-    finished_patterns = (
-        r"^(?:(?:no|ok(?:ay)?|alright|all right|thanks|thank you)[ ]+)*(?:that's|that is|thats)\s+all(?:[ ]+(?:thanks|thank you|for now))?$",
-        r"^(?:(?:no|ok(?:ay)?|alright|all right|thanks|thank you)[ ]+)*nothing else(?:[ ]+(?:thanks|thank you))?$",
-        r"^(?:(?:ok(?:ay)?|alright|all right|thanks|thank you)[ ]+)*(?:i am|i'm|im|we are|we're|were)\s+done$",
-        r"^(?:(?:no|ok(?:ay)?|alright|all right)[ ]+)*i\s+(?:have|have got|haven't got|havent got)\s+no\s+more\s+questions(?:[ ]+(?:thanks|thank you))?$",
-        r"^(?:(?:ok(?:ay)?|alright|all right|thanks|thank you)[ ]+)*(?:that|this)\s+will\s+be\s+all(?:[ ]+(?:thanks|thank you))?$",
-    )
-    return any(re.fullmatch(pattern, normalized) for pattern in finished_patterns)
-
-
 @dataclass(frozen=True)
 class ActionToolCall:
     id: str
     name: str
     arguments: dict[str, Any]
+    # DeepSeek thinking mode requires the provider's hidden reasoning field on
+    # the matching assistant tool-call message. Keep it session-local; never
+    # expose it to the caller or persist it to conversation storage.
+    reasoning_content: str = ""
+    assistant_content: str | None = None
 
 
 @dataclass
