@@ -88,6 +88,12 @@ The worker sends the dashboard-signed Wema `customer_id` to `/verify`. A
 successful health check does not prove an enrolled caller matches; confirm with
 a real Wema call before relying on transactions.
 
+Before any Wema banking tool runs, the worker now speaks a short wait cue if
+the response has not already acknowledged the check. If a background bank call
+still runs after eight seconds, it gives one progress update while the call is
+idle. The voice trace records caller barge-in and session-disconnect reasons;
+these cancel unfinished speech because the call or response was interrupted.
+
 `.github/workflows/deploy-lagos.yml` is the Lagos path. A `main` push starts a
 release unless the commit message contains `[skip deploy]`. Manual workflow
 dispatch defaults to `verify_only=true` and checks the pinned SSH route,
