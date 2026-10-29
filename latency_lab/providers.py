@@ -942,8 +942,24 @@ class RLLMClient:
             first_text_ns = None
             provider_done = False
             observed_usage = {}
+            scope = _llm_trace_scope.get() or {}
+            phase = str(scope.get("phase") or "")
+            # Full provider frames can contain generated text. Keep them only for
+            # the targeted end-call follow-up diagnostics, never normal turns.
+            capture_raw_response = phase in {"end_call_recovery", "end_call_goodbye"}
+            raw_response_frames: list[str] = []
+            raw_response_bytes = 0
+            raw_response_truncated = False
+            finish_reasons: list[str | None] = []
+            response_status: int | None = None
+            response_content_type: str | None = None
+            raw_http_error_body: str | None = None
+            parsed_choice_count = 0
+            parsed_text_chars = 0
+            parsed_tool_call_count = 0
             self._observe("llm_provider_request_start", request_id=request_id,
-                          request_index=request_index + 1)
+                          request_index=request_index + 1,
+                          capture_raw_response=capture_raw_response)
             pending_calls = {}
             produced_this_request = False
             usage_request = self.usage.llm_started() if self.usage is not None else None
@@ -953,6 +969,13 @@ class RLLMClient:
                     json=payload,
                     headers=headers,
                 ) as response:
+                    response_status = int(response.status)
+                    response_headers = getattr(response, "headers", {})
+                    response_content_type = str(response_headers.get("Content-Type") or "") or None
+                    if capture_raw_response and response.status >= 400:
+                        error_body = await response.content.read(16 * 1024 + 1)
+                        raw_http_error_body = error_body[:16 * 1024].decode("utf-8", errors="replace")
+                        raw_response_truncated = len(error_body) > 16 * 1024
                     if (
                         response.status in self._retryable_statuses
                         and request_index < len(self._retry_delays_seconds)
@@ -1009,11 +1032,34 @@ class RLLMClient:
                             if not line.startswith("data:"):
                                 continue
                             data = line[5:].strip()
+                            if capture_raw_response:
+                                # Include the provider's exact SSE data payload,
+                                # bounded to 16 KiB per attempt for trace safety.
+                                encoded_size = len(data.encode("utf-8"))
+                                remaining = max(0, 16 * 1024 - raw_response_bytes)
+                                if remaining:
+                                    if encoded_size <= remaining:
+                                        raw_response_frames.append(data)
+                                        raw_response_bytes += encoded_size
+                                    else:
+                                        raw_response_frames.append(
+                                            data.encode("utf-8")[:remaining].decode("utf-8", errors="ignore")
+                                        )
+                                        raw_response_bytes += remaining
+                                        raw_response_truncated = True
+                                else:
+                                    raw_response_truncated = True
                             if data == "[DONE]":
                                 done = True
                                 break
                             try:
                                 item = json.loads(data)
+                                choices = item.get("choices") or []
+                                for choice in choices:
+                                    parsed_choice_count += 1
+                                    reason = choice.get("finish_reason")
+                                    if reason is not None:
+                                        finish_reasons.append(str(reason))
                                 if isinstance(item.get("usage"), dict):
                                     usage = item["usage"]
                                     cached = usage.get("prompt_tokens_details") or {}
@@ -1028,7 +1074,9 @@ class RLLMClient:
                                     continue
                                 choice_delta = item["choices"][0].get("delta", {})
                                 delta = choice_delta.get("content") or ""
+                                parsed_text_chars += len(str(delta))
                                 for fragment in choice_delta.get("tool_calls") or []:
+                                    parsed_tool_call_count += 1
                                     index = int(fragment.get("index") or 0)
                                     current = pending_calls.setdefault(
                                         index, {"id": "", "name": "", "arguments": ""}
@@ -1095,6 +1143,23 @@ class RLLMClient:
                     first_text_observed=first_text_ns is not None,
                     total_ms=round(((request_finished_ns or time.perf_counter_ns()) - request_started) / 1e6, 3),
                     **observed_usage)
+                if capture_raw_response:
+                    self._observe(
+                        "llm_provider_raw_response",
+                        request_id=request_id,
+                        request_index=request_index + 1,
+                        model=self.config.llm_model,
+                        http_status=response_status,
+                        content_type=response_content_type,
+                        finish_reasons=finish_reasons,
+                        parsed_choice_count=parsed_choice_count,
+                        parsed_text_chars=parsed_text_chars,
+                        parsed_tool_call_fragments=parsed_tool_call_count,
+                        raw_sse_data=raw_response_frames,
+                        raw_sse_bytes=raw_response_bytes,
+                        raw_sse_truncated=raw_response_truncated,
+                        raw_http_error_body=raw_http_error_body,
+                    )
         for index in sorted(pending_calls):
             call = pending_calls[index]
             if call["name"]:
