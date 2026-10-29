@@ -44,9 +44,11 @@ Agents should pull GitHub `main`, make changes on a branch, and promote through
   The worker applies the saved Wema cached ICL voice when no signed session
   override is present. The supported IDs are `wema-en-us-female`,
   `wema-en-us-male`, `wema-en-ng-female`, and `wema-en-ng-male`. The matching
-  short-reference IDs append `-short` and must be registered in the gateway
-  before they can synthesize. All Wema IDs use `x_vector_only_mode=false` and
-  the same deterministic seed as the configured Helen clone.
+  short-reference IDs append `-short` and are enrolled in the gateway for
+  testing. All Wema IDs use `x_vector_only_mode=false` and the same
+  deterministic seed as the configured Helen clone. The runtime changes still
+  require merge and a Lagos rollout before the live SAW worker applies the
+  saved short voice IDs.
 
 The shared Lagos LLM can be switched for all agents through the repository
 variable `RVC_LAB_LLM_PROVIDER` (`qwen` or `deepseek`; defaults to `qwen`).
