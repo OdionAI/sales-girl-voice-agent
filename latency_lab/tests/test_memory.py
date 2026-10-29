@@ -293,8 +293,9 @@ class PipelineMemoryTest(unittest.IsolatedAsyncioTestCase):
         attempt.task = asyncio.create_task(self.pipe._run_banking_tools(attempt, [], [call]))
         await completed.wait()
         await self.pipe._cancel_attempt("user_barge_in")
-        self.assertEqual([m["role"] for m in self.pipe.history], ["user", "assistant", "tool"])
-        self.assertIn("100.00", self.pipe.history[-1]["content"])
+        self.assertEqual([m["role"] for m in self.pipe.history], ["user", "assistant", "tool", "assistant"])
+        self.assertIn("100.00", self.pipe.history[2]["content"])
+        self.assertIn("One moment while I check that for you.", self.pipe.history[3]["content"])
         self.assertEqual(self.pipe.banking._execute.await_count, 1)
 
     async def test_summary_is_nonblocking_single_flight_and_yields_to_foreground(self):
