@@ -35,13 +35,6 @@ LAGOS_ASR_ENV = {
     ),
 }
 LEADWAY_CALLER_ROUTES = {
-    "+2348112812216": {
-        "business_id": "762d1f6d-9a7a-4e41-9088-bc6dcbb6ef4e",
-        "config_agent_id": "c4f4925d-0188-431e-a881-15533f6bb31b",
-        "configured_agent_name": "Amaka",
-        "voice_auth_required": False,
-        "override_did_routes": True,
-    },
     "+2349040760651": {
         "business_id": "762d1f6d-9a7a-4e41-9088-bc6dcbb6ef4e",
         "config_agent_id": "c4f4925d-0188-431e-a881-15533f6bb31b",
@@ -50,6 +43,7 @@ LEADWAY_CALLER_ROUTES = {
         "override_did_routes": True,
     },
 }
+MOMO_FEEDBACK_CALLERS = {"+2348112812216"}
 
 
 def run(*args, **kwargs):
@@ -122,11 +116,22 @@ def momo_feedback_route(previous_env, agent_id):
 
 
 def leadway_caller_routes(previous_env):
-    """Add the verified Leadway caller numbers without changing other routes."""
+    """Apply explicit Leadway caller routes and clear callers using the MoMo DID."""
     route = json.loads(previous_env.get('RVC_AICC_SIP_ROUTE') or '{}')
     caller_routes = route.setdefault('caller_routes', {})
     if not isinstance(caller_routes, dict):
         raise RuntimeError('Lagos SIP caller route map is invalid')
+
+    momo_digits = {
+        ''.join(character for character in number if character.isdigit())[-10:]
+        for number in MOMO_FEEDBACK_CALLERS
+    }
+    for existing_number in list(caller_routes):
+        digits = ''.join(
+            character for character in str(existing_number) if character.isdigit()
+        )[-10:]
+        if digits in momo_digits:
+            del caller_routes[existing_number]
 
     for number, target in LEADWAY_CALLER_ROUTES.items():
         digits = ''.join(character for character in number if character.isdigit())[-10:]
