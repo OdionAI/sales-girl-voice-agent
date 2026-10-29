@@ -382,14 +382,15 @@ async def entrypoint(ctx: JobContext) -> None:
             identity = sip_participant_identity(sip_route, participant, ctx.room.name,
                                                rtc.ParticipantKind.PARTICIPANT_KIND_SIP,
                                                called_override=sip_headers.get("to", ""))
-            capacity_reservation_id = call_capacity_api.reservation_id_from_sip_headers(
+            capacity_caller_number = call_capacity_api.caller_number_from_sip_headers(
                 sip_headers, str(identity.get("business_id") or "")
             )
-            if capacity_reservation_id:
-                await call_capacity_api.claim_call(
-                    reservation_id=capacity_reservation_id,
+            if capacity_caller_number:
+                claimed_capacity = await call_capacity_api.claim_call_by_caller(
+                    caller_number=capacity_caller_number,
                     room_name=str(ctx.room.name or ""),
                 )
+                capacity_reservation_id = str(claimed_capacity["reservation_id"])
             outbound_required = bool(identity.get("outbound_required"))
             outbound_recipient = str(identity.get("caller_number") or "").strip()
             if outbound_required and not outbound_recipient:

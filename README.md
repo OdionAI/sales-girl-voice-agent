@@ -67,13 +67,14 @@ agent; `+2349040760651` retains its explicit Leadway check-in route.
 ### MoMo inbound call capacity
 
 When `MOMO_CALL_CAPACITY_BUSINESS_ID` matches the routed business, inbound SIP
-calls require a reservation ID in `X-Odion-Capacity-Reservation`. The worker
-claims the reservation from Conversation Service before loading the AI agent,
-renews its active lease while the AI is handling the call, and releases the
-slot on cleanup or a successful human transfer. A missing, expired, or
-invalid reservation fails closed. Enable this worker-side check only after
-AICC is calling the reservation endpoint and passing the header on the SIP
-INVITE. `MOMO_CALL_CAPACITY_HEARTBEAT_INTERVAL_SECONDS` defaults to 45 seconds.
+calls require a live reservation for the caller number parsed from SIP `From`.
+The worker claims the matching reservation from Conversation Service before
+loading the AI agent, renews its active lease while the AI is handling the
+call, and releases the slot on cleanup or a successful human transfer. A
+missing, expired, or invalid reservation fails closed. No custom SIP header is
+required. Enable this worker-side check only after AICC is calling the
+reservation endpoint and preserving the caller number in SIP `From`.
+`MOMO_CALL_CAPACITY_HEARTBEAT_INTERVAL_SECONDS` defaults to 45 seconds.
 
 For `builtin://end_call`, the model's natural farewell and tool call are handled
 in one response. The worker ignores additional speech/transcripts after the

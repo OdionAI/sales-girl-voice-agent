@@ -25,13 +25,16 @@ def is_enabled_for_business(business_id: str) -> bool:
     return bool(configured and str(business_id or "").strip() == configured)
 
 
-def reservation_id_from_sip_headers(headers: dict[str, str], business_id: str) -> str:
+def caller_number_from_sip_headers(headers: dict[str, str], business_id: str) -> str:
     if not is_enabled_for_business(business_id):
         return ""
-    reservation_id = str(headers.get("x-odion-capacity-reservation") or "").strip()
-    if not reservation_id:
-        raise CallCapacityError("MoMo AI call is missing its AICC capacity reservation.")
-    return reservation_id
+    value = str(headers.get("from") or "").strip()
+    if value.lower().startswith("sip:") or value.lower().startswith("sips:"):
+        value = value.split(":", 1)[1].split("@", 1)[0]
+    number = "".join(ch for ch in value if ch.isdigit())
+    if len(number) < 7:
+        raise CallCapacityError("MoMo AI call is missing a usable SIP From number.")
+    return number
 
 
 async def _post(reservation_id: str, action: str, room_name: str) -> dict[str, Any]:
@@ -68,6 +71,26 @@ async def _post(reservation_id: str, action: str, room_name: str) -> dict[str, A
 
 async def claim_call(*, reservation_id: str, room_name: str) -> dict[str, Any]:
     return await _post(reservation_id, "claim", room_name)
+
+
+async def claim_call_by_caller(*, caller_number: str, room_name: str) -> dict[str, Any]:
+    base_url, token, timeout = _settings()
+    if not base_url or not token:
+        raise CallCapacityError("Call capacity service is not configured.")
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.post(
+                f"{base_url}/v1/internal/aicc/capacity/reservations/claim-by-caller",
+                json={"caller_number": caller_number, "room_name": room_name},
+                headers={"Content-Type": "application/json", "X-Service-Token": token,
+                         "X-Service-Name": "sales-girl-voice-agent"},
+            )
+    except httpx.HTTPError as exc:
+        raise CallCapacityError("Call capacity service is unavailable.") from exc
+    payload = response.json() if response.status_code < 500 else {}
+    if response.status_code >= 400 or not isinstance(payload, dict):
+        raise CallCapacityError(str(payload.get("detail") or f"Call capacity request failed ({response.status_code})."))
+    return payload
 
 
 async def heartbeat_call(*, reservation_id: str, room_name: str) -> dict[str, Any]:
