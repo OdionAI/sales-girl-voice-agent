@@ -350,7 +350,8 @@ class EngagementTests(unittest.IsolatedAsyncioTestCase):
         self.pipe._stream_llm_and_tts = followup
         await self.pipe._run_banking_tools(attempt, [], [calls[0]])
         self.assertEqual(completed, ["0", "1", "2", "3", "4"])
-        self.assertEqual(len(self.pipe.tts.texts), 5)
+        self.assertEqual(len(self.pipe.tts.texts), 6)
+        self.assertEqual(self.pipe.tts.texts[0], "One moment while I check that for you.")
         self.assertIn("Account 4: 500.", attempt.answer)
 
     async def test_owned_account_selection_keeps_balance_tool_available_once(self):
