@@ -1211,8 +1211,10 @@ class RLLMClient:
                     id=call["id"] or f"tool-call-{index}",
                     name=call["name"],
                     arguments=parse_tool_arguments(call["arguments"]),
-                    reasoning_content=reasoning_content,
-                    assistant_content=assistant_content or None,
+                    reasoning_content=(reasoning_content
+                                       if self.config.llm_provider == "deepseek" else ""),
+                    assistant_content=(assistant_content or None
+                                       if self.config.llm_provider == "deepseek" else None),
                 )
 
 
