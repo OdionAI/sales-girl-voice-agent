@@ -1,5 +1,30 @@
 # RVC natural-conversation latency lab
 
+## Wema English cached ICL voices
+
+For Wema agents, the saved Agent Config `tts_voice_id` selects a gateway-cached
+Qwen ICL voice. Legacy IDs are `wema-en-us-female`, `wema-en-us-male`,
+`wema-en-ng-female`, and `wema-en-ng-male`. Short-reference IDs append
+`-short`; the four short-reference IDs were enrolled in the live TTS gateway
+on 2026-10-29 after the user confirmed approval for cloning. The original
+source-pack consent files remain unchanged. The aliases are available for
+testing; the SAW worker still needs the voice-runtime PR merged and deployed to
+apply the selected saved voice ID.
+Explicit signed per-session voice overrides retain precedence. Each request
+uses Base synthesis with `x_vector_only_mode=false`; all Wema IDs share the
+same deterministic seed derived from the configured Helen voice, matching
+Helen's clone-seed behavior. The worker does not send a reference WAV on each
+phrase because these are named cached voices.
+
+To prepare short enrollment references from the private voice pack, run
+`python scripts/prepare_wema_icl_references.py <source-voices-dir> <output-dir>`.
+The generated WAVs stay outside the repository, and the script carries source
+consent metadata forward unchanged.
+
+The four short references synthesize successfully with the Helen-equivalent
+seed (`3536072912`) and Base ICL mode. Local audio previews are in
+`/Users/woron/Downloads/sales-girl-voices-wema-short-icl/synth-previews/`.
+
 This lab lives in `sales-girl-voice-agent` on the `speculative-generation` branch. It does **not** replace the production LiveKit worker (`python main.py` / `make run`). Production SIP and room dispatch stay on that worker.
 
 This is the experimental speculative-generation pipeline for measuring the natural-conversation critical path using the Ascend realtime STT (`RSTT`), streaming LLM (`RLLM`), and streaming TTS (`RTTS`). Voice Lab loads each session-scoped agent configuration, supports read-only retrieval from only its attached knowledge bases, and exposes its configured ticket, email, and live-call hang-up actions.

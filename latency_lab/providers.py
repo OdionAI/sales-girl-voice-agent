@@ -1228,6 +1228,8 @@ def tts_token_budget(text: str) -> int:
 
 WEMA_VOICES = frozenset({
     "wema-en-ng-female", "wema-en-ng-male", "wema-en-us-female", "wema-en-us-male",
+    "wema-en-ng-female-short", "wema-en-ng-male-short",
+    "wema-en-us-female-short", "wema-en-us-male-short",
 })
 
 
@@ -1236,9 +1238,9 @@ def clone_seed(voice: str) -> str:
     return str(int(hashlib.sha256(str(voice).encode("utf-8")).hexdigest()[:8], 16))
 
 
-# The four Wema voices send the SAME constant clone seed that Helen's voice uses
-# ("Helen's way") so they never drift between generations. Overridable with
-# RVC_LAB_WEMA_TTS_SEED.
+# The Wema cached voices, including short-reference versions, send the SAME
+# constant clone seed that Helen's voice uses ("Helen's way") so they never
+# drift between generations. Overridable with RVC_LAB_WEMA_TTS_SEED.
 HELEN_VOICE = os.getenv("RVC_LAB_TTS_VOICE", "helen-mavino-0030")
 WEMA_TTS_SEED = os.getenv("RVC_LAB_WEMA_TTS_SEED", "") or clone_seed(HELEN_VOICE)
 

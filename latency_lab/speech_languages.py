@@ -6,6 +6,7 @@ from dataclasses import replace
 import aiohttp
 
 from .pidgin import SBPN_MODEL, SBPN_URL, SBPN_WS_URL, apply_pidgin_stack, is_pidgin, split_text, LANGUAGE_RULES
+from .providers import is_wema_voice
 
 
 LANGUAGES = {
@@ -81,7 +82,21 @@ def apply_language_stack(config, context=None, identity=None):
                 or getattr(context, "tts_language_hint", "") or config.tts_language)
     profile = LANGUAGES.get(language_code(selected))
     if profile is None:
-        return apply_pidgin_stack(config, context, identity)
+        config = apply_pidgin_stack(config, context, identity)
+        selected_language = str(selected or "").strip().lower().replace("_", " ")
+        has_runtime_voice = bool(overrides.get("tts_voice_id") or overrides.get("tts_voice"))
+        saved_voice = str(getattr(context, "tts_voice_id", "") or "").strip()
+        if (
+            not has_runtime_voice
+            and selected_language in {"", "en", "english", "american english", "nigerian english"}
+            and is_wema_voice(saved_voice)
+        ):
+            # English voice selection is persisted with the agent config. Apply
+            # only the supported Wema cached ICL IDs here; other agent voice
+            # routing and explicit signed session overrides keep their current
+            # behavior.
+            return replace(config, tts_voice=saved_voice, tts_ref_audio="", tts_ref_text="")
+        return config
     model, voice = profile["model"], profile["voice"]
     if language_code(selected) == "ig":
         saved = (getattr(context, "tts_voice_id", "")
