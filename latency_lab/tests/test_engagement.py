@@ -310,9 +310,9 @@ class EngagementTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.policy.loop_task.cancelled())
         self.assertIsNone(self.policy.opportunity())
 
-    async def test_tool_starts_while_initial_ack_audio_is_still_generating(self):
+    async def test_tool_waits_until_initial_ack_audio_is_fully_played(self):
         attempt = self.attempt()
-        call = ActionToolCall("read", "wema_account_balance", {})
+        call = ActionToolCall("read", "wema_get_balance", {})
 
         class ToolLLM:
             async def stream(self, messages, **kwargs):
@@ -323,12 +323,25 @@ class EngagementTests(unittest.IsolatedAsyncioTestCase):
         self.pipe.tts.release.clear()
         calls = await self.pipe._stream_llm_and_tts(attempt, [], phase="prompt_first")
         await self.pipe.tts.started.wait()
-        invoke = AsyncMock(return_value={"status": "success"})
-        await self.policy.run_tool(attempt, calls[0], invoke)
-        invoke.assert_awaited_once()
+        bank_started = asyncio.Event()
+
+        async def execute(tool_call, *, on_result=None):
+            self.assertIn({"type": "tts_segment_end"}, self.sent)
+            bank_started.set()
+            result = {"status": "success", "data": {"balance": "100.00"}}
+            if on_result:
+                on_result(result)
+            return result
+
+        self.pipe.banking.execute = execute
+        self.pipe._stream_llm_and_tts = AsyncMock(return_value=[])
+        bank_task = self.task(self.pipe._run_banking_tools(attempt, [], calls))
+        await asyncio.sleep(0)
+        self.assertFalse(bank_started.is_set())
         self.assertFalse(attempt.speech_tasks[0].done())
         self.pipe.tts.release.set()
-        await self.pipe._finish_speech(attempt)
+        await bank_task
+        self.assertTrue(bank_started.is_set())
 
     async def test_five_sequential_accounts_report_every_result(self):
         attempt = self.attempt()
@@ -350,8 +363,11 @@ class EngagementTests(unittest.IsolatedAsyncioTestCase):
         self.pipe._stream_llm_and_tts = followup
         await self.pipe._run_banking_tools(attempt, [], [calls[0]])
         self.assertEqual(completed, ["0", "1", "2", "3", "4"])
-        self.assertEqual(len(self.pipe.tts.texts), 6)
-        self.assertEqual(self.pipe.tts.texts[0], "One moment while I check that for you.")
+        self.assertEqual(len(self.pipe.tts.texts), 10)
+        self.assertEqual(
+            self.pipe.tts.texts[::2],
+            ["One moment while I check that for you."] * 5,
+        )
         self.assertIn("Account 4: 500.", attempt.answer)
 
     async def test_owned_account_selection_keeps_balance_tool_available_once(self):
