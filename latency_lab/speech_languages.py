@@ -19,9 +19,11 @@ LANGUAGES = {
            "opening": "Sannu da zuwa. Ta yaya zan iya taimaka muku yau?",
            "goodbye": "Na gode sosai. Sai an jima.",
            "acknowledgement": "Don Allah, ku ba ni ɗan lokaci in duba muku."},
-    "ig": {"name": "Igbo", "model": "qwen-igbo-cleaned5h-epoch20", "voice": "igbo",
+    "ig": {"name": "Igbo", "model": "igbo-sorotts-three-voices-v1", "voice": "chinedu",
            "url": "http://102.88.137.124:8080/tts-igbo/v1/audio/speech",
            "request_language": "ig",
+           # CPU research endpoint emits PCM only after generating each sentence.
+           "request_timeout_seconds": 1800,
            "opening": "Ndeewo. Kedu ka m ga-esi nyere gị aka taa?",
            "goodbye": "Daalụ nke ukwuu. Ka ọ dị.",
            "acknowledgement": "Biko, chere obere oge ka m lelee ya."},
@@ -30,6 +32,20 @@ LANGUAGES = {
 # CLEAR Global TWB Voice Hausa 1.0 is CC-BY-NC-4.0, for opted-in research only.
 HAUSA_TWB_VOICES = {"haisha": "spk_f_1", "adamu": "spk_m_1", "muhammad": "spk_m_2"}
 HAUSA_LEGACY_VOICES = {"", "default", "hausa", "musa", "coqui-hausa-vits", "hausa-twb-voice-1.0"}
+# SoroTTS is CC-BY-NC-SA-4.0: these speakers are for noncommercial evaluation.
+IGBO_VOICES = {"chinedu": "ibo1", "eze": "ibo2", "ada": "ibo3"}
+IGBO_LEGACY_VOICES = {"", "default", "igbo", "igbo-sorotts-three-voices-v1",
+                      "qwen-igbo-cleaned5h-epoch20", "qwen-igbo-epoch20"}
+
+
+def igbo_voice(value):
+    selected = str(value or "").strip().lower()
+    if selected in IGBO_LEGACY_VOICES:
+        return "chinedu"
+    for name, speaker in IGBO_VOICES.items():
+        if selected in {name, speaker}:
+            return name
+    raise ValueError("Unknown Igbo voice selection")
 
 
 def hausa_voice(value):
@@ -67,6 +83,13 @@ def apply_language_stack(config, context=None, identity=None):
     if profile is None:
         return apply_pidgin_stack(config, context, identity)
     model, voice = profile["model"], profile["voice"]
+    if language_code(selected) == "ig":
+        saved = (getattr(context, "tts_voice_id", "")
+                 if language_code(getattr(context, "tts_language_hint", "")) == "ig" else "")
+        configured = str(config.tts_voice or "").strip().lower()
+        if configured not in IGBO_VOICES and configured not in IGBO_VOICES.values():
+            configured = ""
+        voice = igbo_voice(overrides.get("tts_voice_id") or overrides.get("tts_voice") or saved or configured)
     if language_code(selected) == "ha":
         saved = (getattr(context, "tts_voice_id", "")
                  if language_code(getattr(context, "tts_language_hint", "")) == "ha" else "")
@@ -128,7 +151,7 @@ class NativeLanguageTTSClient:
                 if profile.get("request_language"):
                     payload["language"] = profile["request_language"]
                 async with self.session.post(self.config.tts_url, json=payload,
-                                            timeout=aiohttp.ClientTimeout(total=60)) as response:
+                    timeout=aiohttp.ClientTimeout(total=profile.get("request_timeout_seconds", 60))) as response:
                     response.raise_for_status()
                     if (response.content_type != "audio/pcm" or
                         response.headers.get("X-Audio-Sample-Rate") != "24000" or
