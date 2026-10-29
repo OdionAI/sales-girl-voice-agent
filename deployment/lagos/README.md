@@ -89,11 +89,15 @@ The worker sends the dashboard-signed Wema `customer_id` to `/verify`. A
 successful health check does not prove an enrolled caller matches; confirm with
 a real Wema call before relying on transactions.
 
-Before any Wema banking tool runs, the worker now speaks a short wait cue if
-the response has not already acknowledged the check. If a background bank call
-still runs after eight seconds, it gives one progress update while the call is
-idle. The voice trace records caller barge-in and session-disconnect reasons;
-these cancel unfinished speech because the call or response was interrupted.
+Before any Wema banking tool runs, the worker finishes any generated speech and
+waits for its LiveKit playout queue to drain. If that speech did not acknowledge
+the check, it speaks and drains a short application-owned wait cue before
+starting authentication or bank I/O. Each sequential banking tool gets the same
+check, so an earlier acknowledgement cannot mask a later silent gap. If a
+background bank call still runs after eight seconds, it gives one progress
+update once the voice pipeline is idle. The voice trace records caller barge-in
+and session-disconnect reasons; these cancel unfinished speech because the
+caller or call interrupted it.
 
 `.github/workflows/deploy-lagos.yml` is the Lagos path. A `main` push starts a
 release unless the commit message contains `[skip deploy]`. Manual workflow
