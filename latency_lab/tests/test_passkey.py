@@ -46,7 +46,7 @@ def make(recorder, outcomes, *, timeout=90.0):
     )
 
 
-def proof(authentication_id="abc-123", correlation="ceremony-op-1", body=None):
+def proof(authentication_id="abc-123", correlation="", body=None):
     return json.dumps(
         {
             "type": "fido2_proof",
@@ -75,7 +75,23 @@ class StartTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(ceremony["authenticationId"], "abc-123")
         self.assertEqual(ceremony["options"]["challenge"], "AQID")
         self.assertTrue(ceremony["usePasskey"])
+        self.assertTrue(ceremony["correlationId"].startswith("ceremony-"))
         self.assertTrue(flow.awaiting())
+
+    async def test_retry_for_same_operation_uses_a_fresh_correlation_id(self):
+        rec, out = Recorder(), []
+        flow = make(rec, out)
+        await flow.start(workflow="transfer", operation_id="op-1", customer_id="C", display_name="D")
+        first_correlation = flow.pending.correlation_id
+        await flow.receive(json.dumps({
+            "type": "fido2_failed", "authenticationId": "abc-123",
+            "correlationId": first_correlation, "reason": "presentation_unavailable",
+        }).encode())
+        rec.begin_reply["data"]["authentication_id"] = "abc-456"
+        await flow.start(workflow="transfer", operation_id="op-1", customer_id="C", display_name="D")
+        self.assertEqual(flow.pending.operation_id, "op-1")
+        self.assertNotEqual(flow.pending.correlation_id, first_correlation)
+        self.assertEqual(rec.sent[-1]["authenticationId"], "abc-456")
 
     async def test_airtime_maps_to_the_airtime_feature(self):
         rec, out = Recorder(), []
@@ -118,9 +134,10 @@ class ProofTests(unittest.IsolatedAsyncioTestCase):
         await self.flow.start(
             workflow="transfer", operation_id="op-1", customer_id="R008448055", display_name="Woron"
         )
+        self.correlation = self.flow.pending.correlation_id
 
     async def test_valid_proof_executes_with_the_ceremony(self):
-        await self.flow.receive(proof())
+        await self.flow.receive(proof(correlation=self.correlation))
         path, body = self.rec.posts[-1]
         self.assertEqual(path, "/v1/tools/wema_execute_prepared")
         self.assertEqual(body["operation_id"], "op-1")
@@ -134,20 +151,20 @@ class ProofTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_mismatched_authentication_id_is_ignored(self):
         before = len(self.rec.posts)
-        await self.flow.receive(proof(authentication_id="other"))
+        await self.flow.receive(proof(authentication_id="other", correlation=self.correlation))
         self.assertEqual(len(self.rec.posts), before)
         self.assertTrue(self.flow.awaiting())
 
     async def test_proof_is_single_use(self):
-        await self.flow.receive(proof())
+        await self.flow.receive(proof(correlation=self.correlation))
         posts = len(self.rec.posts)
-        await self.flow.receive(proof())
+        await self.flow.receive(proof(correlation=self.correlation))
         self.assertEqual(len(self.rec.posts), posts)
 
     async def test_cancel_never_executes(self):
         await self.flow.receive(
             json.dumps(
-                {"type": "fido2_cancelled", "authenticationId": "abc-123", "correlationId": "ceremony-op-1"}
+                {"type": "fido2_cancelled", "authenticationId": "abc-123", "correlationId": self.correlation}
             ).encode()
         )
         paths = [p for p, _ in self.rec.posts]
@@ -156,14 +173,14 @@ class ProofTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_expired_proof_never_executes(self):
         self.flow.pending.expires = 0
-        await self.flow.receive(proof())
+        await self.flow.receive(proof(correlation=self.correlation))
         paths = [p for p, _ in self.rec.posts]
         self.assertNotIn("/v1/tools/wema_execute_prepared", paths)
         self.assertEqual(self.out[0][1]["status"], "expired")
 
     async def test_bank_rejection_is_reported(self):
         self.rec.execute_reply = {"status": "failed", "message": "The bank declined the transfer."}
-        await self.flow.receive(proof())
+        await self.flow.receive(proof(correlation=self.correlation))
         self.assertEqual(self.rec.sent[-1]["accepted"], False)
         self.assertEqual(self.out[0][1]["status"], "rejected")
         self.assertIn("declined", self.out[0][0])
@@ -174,9 +191,10 @@ class CloseTests(unittest.IsolatedAsyncioTestCase):
         rec, out = Recorder(), []
         flow = make(rec, out)
         await flow.start(workflow="transfer", operation_id="op-1", customer_id="C", display_name="D")
+        correlation = flow.pending.correlation_id
         await flow.close()
         self.assertFalse(flow.awaiting())
-        await flow.receive(proof())
+        await flow.receive(proof(correlation=correlation))
         self.assertEqual([p for p, _ in rec.posts], ["/v1/fido2/begin"])
 
 

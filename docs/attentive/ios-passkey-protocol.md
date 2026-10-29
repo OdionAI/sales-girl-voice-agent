@@ -121,7 +121,10 @@ and keeps the call usable. Failure sends `fido2_failed` with both IDs and `reaso
 
 The optional matching `fido2_abort` withdraws a ceremony and returns it to pending.
 No native prompt, proof or completed ceremony is automatically retried. A fresh
-ceremony is needed after reconnect. Legacy action-status messages and spoken or
+ceremony uses a new correlation ID, including when retrying the same prepared
+operation, and is needed after reconnect. Once AuthenticationServices returns a
+credential, the SDK forwards it for backend verification even if the presenting
+SwiftUI window or scene state changed while the Face ID sheet was open. Legacy action-status messages and spoken or
 typed confirmation cannot substitute for bank acceptance while passkeys are enabled.
 Never log, record or expose options/proofs/device IDs to the model or public events.
 
