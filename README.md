@@ -63,6 +63,8 @@ Configure `CONVERSATION_API_BASE_URL` (or the legacy
 `CONVERSATION_SERVICE_BASE_URL`) and `CONVERSATION_SERVICE_TOKEN` in the worker
 runtime for this path. SIP header propagation must be verified with AICC before
 release.
+Caller `+2348112812216` follows the `0301051` DID route to the MoMo feedback
+agent; `+2349040760651` retains its explicit Leadway check-in route.
 - optional external/custom tool endpoints
 
 ## Current runtime status

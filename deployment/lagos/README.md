@@ -79,12 +79,12 @@ recreates only `voice`, checks the new image and container health, environment
 and mounts, and restores the prior image if verification fails. A post-release
 real call still needs to confirm worker registration and the RNNoise trace.
 `deployment/lagos/deploy.py` also maintains explicit caller-number routes in
-`RVC_AICC_SIP_ROUTE`. Leadway caller IDs resolve to the Leadway new-member
-check-in agent (`c4f4925d-0188-431e-a881-15533f6bb31b`), with an explicit
-per-caller override so a carrier-rewritten shared DID cannot take precedence
-for those callers. Other callers retain DID-first
-routing. Existing routes are preserved; conflicting numbers fail the release
-instead of being silently reassigned.
+`RVC_AICC_SIP_ROUTE`. The caller `+2348112812216` follows the `0301051` DID
+route to the MoMo PSB feedback agent; its prior Leadway override is removed.
+The separate `+2349040760651` Leadway caller route remains mapped to the
+Leadway new-member check-in agent (`c4f4925d-0188-431e-a881-15533f6bb31b`),
+with an explicit per-caller override so a carrier-rewritten shared DID cannot
+take precedence for that caller. Other callers retain DID-first routing.
 `deploy.yml` remains available only for an explicit legacy node-B run.
 
 For the explicitly opted-in noncommercial Hausa research pilot, set the GitHub
