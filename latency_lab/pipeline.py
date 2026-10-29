@@ -715,7 +715,7 @@ class ConversationPipeline:
         client_sent_ms: float | None,
         client_network_ms: float | None,
     ) -> None:
-        if self.call_ending:
+        if getattr(self, "call_ending", False):
             self._clear_speech_candidate()
             self.trace.record(
                 "caller_speech_ignored_call_ending",
@@ -904,7 +904,7 @@ class ConversationPipeline:
         await self.send({"type": "lab_status", "content": "listening"})
 
     async def on_partial(self, text: str, raw: str) -> None:
-        if self.call_ending:
+        if getattr(self, "call_ending", False):
             self.trace.record(
                 "stt_partial_ignored_call_ending",
                 turn_id=self.turn_id or self.last_closed_turn_id,
@@ -998,7 +998,7 @@ class ConversationPipeline:
             return
 
     async def on_final(self, text: str, *, publish_transcript: bool = True) -> None:
-        if self.call_ending:
+        if getattr(self, "call_ending", False):
             self.trace.record(
                 "stt_final_ignored_call_ending",
                 turn_id=self.turn_id or self.last_closed_turn_id,
