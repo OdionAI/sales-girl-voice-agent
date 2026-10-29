@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock
 
 from latency_lab.action_tools import ActionToolCall
 from latency_lab.agentic import KnowledgeMatch, KnowledgeResult
-from latency_lab.config import LabConfig, apply_runtime_overrides
+from latency_lab.config import LabConfig, apply_runtime_overrides, for_inactivity_pilot
 from latency_lab.pipeline import Attempt, ConversationPipeline
 from latency_lab.trace import TraceRecorder
 
@@ -99,6 +99,74 @@ class EngagementTests(unittest.IsolatedAsyncioTestCase):
         self.pipe.turn_id = "one"
         self.pipe.state = "releasing"
         return attempt
+
+    def enable_inactivity_pilot(self):
+        self.pipe.config = replace(
+            self.pipe.config, inactivity_pilot_enabled=True,
+            inactivity_pilot_close_seconds=15.0,
+        )
+        self.policy.config = self.pipe.config
+
+    async def test_browser_pilot_checks_in_then_ends_after_playout(self):
+        self.enable_inactivity_pilot()
+        self.pipe.llm = DecisionLLM(text="Are you still there? I can help with those accounts.")
+        await self.policy.reconsider("idle", None)
+        self.assertEqual(self.policy.idle_close_at, 115.0)
+        self.assertFalse(any(item["type"] == "end_call" for item in self.sent))
+        self.now = 115.0
+        await self.policy._close_idle_call()
+        self.assertTrue(self.pipe.call_ending)
+        self.assertEqual(self.sent[-1], {
+            "type": "end_call", "reason": "inactivity_pilot_caller_absent",
+        })
+
+    async def test_browser_pilot_cancels_close_when_caller_returns(self):
+        self.enable_inactivity_pilot()
+        await self.policy.reconsider("idle", None)
+        self.policy.caller_started()
+        self.now = 120.0
+        await self.policy._close_idle_call()
+        self.assertIsNone(self.policy.idle_close_at)
+        self.assertFalse(any(item["type"] == "end_call" for item in self.sent))
+
+    async def test_browser_pilot_waits_for_running_tool(self):
+        self.enable_inactivity_pilot()
+        await self.policy.reconsider("idle", None)
+        self.pipe.inflight_tools["one"] = {"tool": "lookup"}
+        self.now = 120.0
+        await self.policy._close_idle_call()
+        self.assertFalse(any(item["type"] == "end_call" for item in self.sent))
+
+    async def test_browser_pilot_closes_without_approving_pending_action(self):
+        self.enable_inactivity_pilot()
+        self.pipe.pending_action = object()
+        self.assertEqual(self.policy.opportunity(), ("idle", None))
+        await self.policy.reconsider("idle", None)
+        self.now = 115.0
+        await self.policy._close_idle_call()
+        self.assertEqual(self.sent[-1]["type"], "end_call")
+        self.assertIsNotNone(self.pipe.pending_action)
+
+    async def test_browser_pilot_checks_in_when_model_chooses_silence(self):
+        self.enable_inactivity_pilot()
+        self.pipe.llm = DecisionLLM(speak=False)
+        await self.policy.reconsider("idle", None)
+        self.assertIn("still there", self.pipe.tts.texts[-1])
+        self.assertEqual(self.policy.idle_close_at, 115.0)
+
+    def test_pilot_scope_requires_selected_agent_and_browser(self):
+        base = replace(
+            LabConfig(), inactivity_pilot_agent_ids=("ccc440c5-452d-4690-abc0-61758c11cebd",),
+        )
+        self.assertTrue(for_inactivity_pilot(
+            base, agent_id="ccc440c5-452d-4690-abc0-61758c11cebd", is_browser=True,
+        ).inactivity_pilot_enabled)
+        self.assertFalse(for_inactivity_pilot(
+            base, agent_id="ccc440c5-452d-4690-abc0-61758c11cebd", is_browser=False,
+        ).inactivity_pilot_enabled)
+        self.assertFalse(for_inactivity_pilot(
+            base, agent_id="another-agent", is_browser=True,
+        ).inactivity_pilot_enabled)
 
     async def test_reply_grace_waits_for_continuation_and_keeps_prior_words(self):
         self.pipe.config = replace(

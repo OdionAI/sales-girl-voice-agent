@@ -2,6 +2,35 @@
 
 Status: opt-in local evaluation. `RVC_LAB_ENGAGEMENT_ENABLED=false` by default.
 
+## Amaka browser inactivity pilot
+
+The browser-only pilot is off until an operator sets
+`RVC_LAB_INACTIVITY_PILOT_AGENT_IDS=ccc440c5-452d-4690-abc0-61758c11cebd`
+on the voice worker. The public ID `agt_3b5c72fdf2` resolves to this internal
+config ID for a browser call. The
+worker checks the loaded agent ID and requires a dashboard browser call (a
+signed web identity or the public RVC room route); Amaka's
+inbound phone calls and every other agent remain outside this pilot. A signed
+per-call override cannot enable it. Clearing the environment variable disables
+it for new calls.
+
+For eligible browser calls, the existing contextual engagement controller gets
+an opportunity after 10 seconds waiting for the caller. It uses the current
+conversation to ask one short check-in; a bounded fallback asks whether the
+caller is still there if the model declines or fails. If there is no confirmed
+caller response for another 15 seconds after that audio drains, it plays a
+brief goodbye and deletes the LiveKit room. Caller speech or text cancels the
+pending close. Running tools, speech generation, and playout block the idle
+close. A pending confirmation never becomes approval through silence; it can
+expire with the call. The same controller can give truthful updates
+while a tool is pending, without invoking or repeating that tool.
+
+The pilot's first check-in and tool-update intervals are 10 seconds. The close
+interval can be adjusted with `RVC_LAB_INACTIVITY_PILOT_CLOSE_SECONDS`. Timers
+start after playout, so model and TTS latency are additional. The pilot is
+implemented on a task branch and is not live until the normal branch promotion
+and Lagos release complete.
+
 Current implementation: the normal conversation LLM controls an output gate via
 `set_speech_enabled`. The earlier separate caller-preference review is removed.
 The dated evaluation notes below retain the history of that superseded design.
