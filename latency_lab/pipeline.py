@@ -2188,6 +2188,18 @@ class ConversationPipeline:
             for call in calls:
                 if call.name not in BANK_TOOLS:
                     continue
+                # A tool call can arrive without any spoken preamble. Always give
+                # the caller a short, application-owned wait cue before entering
+                # authentication, passkey, or bank I/O. LLM-generated acknowledgments
+                # are optional and can be omitted or delayed until after the tool.
+                if not self._answer_acknowledges_tool_wait(attempt.answer):
+                    wait_text = self._bank_tool_wait_text(call.name)
+                    self.trace.record(
+                        "bank_tool_wait_acknowledgement",
+                        turn_id=self.turn_id, attempt_id=attempt.id,
+                        tool_name=call.name, text=wait_text,
+                    )
+                    await self._speak_text(attempt, wait_text, phase="tool_acknowledged")
                 if call.name == "wema_execute_prepared" and self.passkey is not None:
                     # Money-moves are approved on the device, not by posting to the
                     # bank. Intercept at the point the tool is actually called, so
@@ -2322,20 +2334,28 @@ class ConversationPipeline:
             "ask_confirmation": ["Shall I go ahead?"],
         }.get(kind, ["One moment."]))
 
+    @staticmethod
+    def _bank_tool_wait_text(tool_name: str) -> str:
+        if tool_name == "wema_execute_prepared":
+            return "One moment while I verify this request."
+        if tool_name.startswith("wema_prepare_"):
+            return "One moment while I prepare that request."
+        return "One moment while I check that for you."
+
+    @staticmethod
+    def _answer_acknowledges_tool_wait(answer: str) -> bool:
+        return bool(re.search(
+            r"\b(one moment|please wait|hold on|checking|check that|look into|looking up|preparing|verify|verifying|processing)\b",
+            str(answer or ""), re.IGNORECASE,
+        ))
+
     async def _dispatch_background_tool(self, attempt: Attempt, call) -> None:
-        """Acknowledge naturally, start the bank call in the background, return at once."""
-        # Acknowledge the request. When the engagement is on it writes this line
-        # itself (contextually, at tool start) so we must not duplicate it; only
-        # fall back to our own line when the engagement is disabled.
-        if not self.engagement.enabled:
-            ack = await self._natural_line("acknowledge_tool_start",
-                                           {"tool": call.name, "arguments": call.arguments})
-            if ack:
-                await self._speak_text(attempt, ack, phase="tool_acknowledged")
+        """Start an already acknowledged bank call in the background."""
         self.inflight_tools[call.id] = {"tool": call.name, "arguments": dict(call.arguments),
                                         "started_utc": datetime.now(timezone.utc).isoformat()}
         self.trace.record("background_tool_started", turn_id=self.turn_id,
                           attempt_id=attempt.id, tool_name=call.name)
+        tool_finished = asyncio.Event()
 
         async def run() -> None:
             try:
@@ -2344,6 +2364,7 @@ class ConversationPipeline:
             except Exception as exc:
                 body = {"status": "failed", "message": f"{type(exc).__name__}", "data": {}}
             finally:
+                tool_finished.set()
                 self.inflight_tools.pop(call.id, None)
                 # Stop interim updates for this tool; the result is delivered below.
                 self.engagement.finish_operation(op)
@@ -2357,11 +2378,25 @@ class ConversationPipeline:
                                   tool_name=call.name, reason=type(exc).__name__)
 
         task = asyncio.create_task(run(), name=f"bg-tool-{call.id}")
+        async def update_if_still_waiting() -> None:
+            try:
+                await asyncio.wait_for(tool_finished.wait(), timeout=8.0)
+            except TimeoutError:
+                if (not tool_finished.is_set() and not attempt.cancelled
+                        and self.state == "idle"):
+                    self.trace.record("background_tool_wait_update", turn_id=self.turn_id,
+                                      attempt_id=attempt.id, tool_name=call.name,
+                                      elapsed_seconds=8)
+                    await self.announce("I'm still working on that. Please stay with me.")
+
+        progress_task = asyncio.create_task(update_if_still_waiting(), name=f"tool-wait-{call.id}")
         # Let the engagement see the tool while it runs, so it can say something
         # natural after a few seconds of silence instead of leaving dead air.
         op = self.engagement.register_operation(call, attempt, task)
         self._background_tasks.add(task)
         task.add_done_callback(self._background_tasks.discard)
+        self._background_tasks.add(progress_task)
+        progress_task.add_done_callback(self._background_tasks.discard)
 
     async def _deliver_tool_result(self, call, body: dict) -> None:
         """Speak the outcome of a background tool — naturally, and never a dead end."""
