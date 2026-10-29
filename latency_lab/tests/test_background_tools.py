@@ -40,6 +40,9 @@ class FakeBanking:
 
     async def execute(self, call, *, confirmed_operation="", on_result=None):
         self.calls.append(call.name)
+        gate = getattr(self, "gate", None)
+        if gate is not None:
+            await gate.wait()
         if on_result:
             on_result(self.body)
         if call.name.startswith("wema_prepare_") and self.body.get("status") == "prepared":
@@ -94,15 +97,15 @@ class BackgroundToolTests(unittest.IsolatedAsyncioTestCase):
         await self.pipe._dispatch_background_tool(self.attempt(), call)
         await asyncio.gather(*list(self.pipe._background_tasks), return_exceptions=True)
 
-    async def test_acknowledges_naturally_and_does_not_block(self):
+    async def test_acknowledges_before_tool_and_does_not_block(self):
         self.pipe.banking = FakeBanking({"status": "ok"})
         self.pipe.engagement.enabled = False  # exercise the fallback ack line
         call = ActionToolCall("c1", "wema_get_balance", {"source_account": "0000000001"})
         gate = asyncio.Event()
         self.pipe.banking.gate = gate  # keep the tool running
-        await self.pipe._dispatch_background_tool(self.attempt(), call)
+        await self.pipe._run_banking_tools(self.attempt(), [], [call])
         # the acknowledgement is spoken immediately, before the tool finishes
-        self.assertEqual(self.spoken[0][0], "Let me pull that up for you.")
+        self.assertEqual(self.spoken[0][0], "One moment while I check that for you.")
         self.assertEqual(self.spoken[0][1], "tool_acknowledged")
         # the conversation is free: the tool is running in the background
         self.assertEqual(len(self.pipe.inflight_tools), 1)
