@@ -84,7 +84,12 @@ which supplies the two mounted ONNX models. The workflow passes the
 `WEMA_BLOB_CONNECTION_STRING` Actions secret through stdin; the deploy script
 writes it to a root-only environment file on the app VM. It builds an image
 labelled with the exact commit, switches the sidecar to `VOICE_AUTH_STORE=wema`,
-checks health, and restores the previous local-store image if health fails.
+sets `VOICE_AUTH_COSINE_THRESHOLD` from the Actions variable
+`WEMA_VOICE_AUTH_COSINE_THRESHOLD` (default `0.60`), checks health, and restores
+the previous local-store image if health fails. For the current diagnostic test,
+setting that variable to `0.50` will let the latest observed `0.515` score pass;
+restore it to `0.60` after the test. A passing score alone is not proof that the
+threshold is safe for normal transaction authorization.
 The worker sends the dashboard-signed Wema `customer_id` to `/verify`. A
 successful health check does not prove an enrolled caller matches; confirm with
 a real Wema call before relying on transactions.
