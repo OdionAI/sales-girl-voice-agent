@@ -6,12 +6,16 @@ import asyncio
 import copy
 import io
 import json
+import logging
 import os
 import re
 import time
 import wave
 from typing import Any
 from urllib.parse import urlsplit
+
+
+logger = logging.getLogger(__name__)
 
 import aiohttp
 from jsonschema import Draft202012Validator, SchemaError
@@ -174,7 +178,10 @@ class BankingTools:
 
     async def compare(self, clip: bytes) -> dict:
         if not (self.owner or self.customer_id) or not self.sidecar or len(clip) < 1.2 * 16000 * 2:
-            return {"matched": False, "reason": "audio_too_short_or_not_enrolled"}
+            result = {"matched": False, "reason": "audio_too_short_or_not_enrolled"}
+            logger.warning("[VOICE-AUTH] verify matched=false reason=%s audio_bytes=%d customer_id_present=%s sidecar_configured=%s",
+                           result["reason"], len(clip), bool(self.customer_id), bool(self.sidecar))
+            return result
         output = io.BytesIO()
         with wave.open(output, "wb") as wav:
             wav.setnchannels(1)
@@ -193,8 +200,18 @@ class BankingTools:
                                       timeout=aiohttp.ClientTimeout(total=30)) as response:
                 response.raise_for_status()
                 result = await response.json()
-                return result if isinstance(result, dict) else {"matched": False}
-        except (aiohttp.ClientError, TimeoutError, ValueError):
+                if not isinstance(result, dict):
+                    result = {"matched": False, "reason": "invalid_verification_response"}
+                logger.info(
+                    "[VOICE-AUTH] verify matched=%s enrolled=%s score=%s threshold=%s reason=%s prints=%s store=%s embedder=%s model_tag=%s",
+                    result.get("matched"), result.get("enrolled"), result.get("score"),
+                    result.get("threshold"), result.get("reason") or "none",
+                    result.get("prints"), result.get("store"), result.get("embedder"),
+                    result.get("model_tag"),
+                )
+                return result
+        except (aiohttp.ClientError, TimeoutError, ValueError) as exc:
+            logger.warning("[VOICE-AUTH] verify unavailable error_type=%s", type(exc).__name__)
             return {"matched": False, "reason": "voice_verification_unavailable"}
 
     async def check_session(self, generation: int, clip: bytes) -> None:
@@ -223,6 +240,12 @@ class BankingTools:
         await self.check_session(generation, clip)
         result = await self.compare(clip)
         passed = result.get("matched") is True and generation == self.generation
+        if not (self.session_status == "verified" and passed):
+            logger.warning(
+                "[VOICE-AUTH] transaction blocked session_status=%s matched=%s reason=%s generation_current=%s",
+                self.session_status, result.get("matched"), result.get("reason") or self.last_reason or "none",
+                generation == self.generation,
+            )
         await self.emit("odion.auth.action_status", {
             "status": "verified" if passed else "failed", "authenticated": passed,
             "score": result.get("score"), "reason": result.get("reason", ""),
