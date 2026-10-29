@@ -43,8 +43,11 @@ Agents should pull GitHub `main`, make changes on a branch, and promote through
 
 The shared Lagos LLM can be switched for all agents through the repository
 variable `RVC_LAB_LLM_PROVIDER` (`qwen` or `deepseek`; defaults to `qwen`).
-DeepSeek uses `deepseek-flash` with thinking enabled and the configured
-`RVC_LAB_DEEPSEEK_REASONING_EFFORT`. Set the private Actions secret
+DeepSeek uses `deepseek-flash` with thinking disabled. This is required for
+tool-enabled conversational requests: DeepSeek rejects `tool_choice` while
+thinking mode is enabled. The configured
+`RVC_LAB_DEEPSEEK_REASONING_EFFORT` is sent as `none` while thinking is off.
+Set the private Actions secret
 `DEEPSEEK_API_KEY` before selecting DeepSeek. The release workflow passes the
 secret through stdin to the deploy script; neither the key nor model reasoning
 is written to source control or diagnostics. Roll back by setting the provider

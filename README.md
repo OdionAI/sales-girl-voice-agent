@@ -106,6 +106,9 @@ Current stable contract:
   (`qwen3.8_27b` at `QWEN_LLM_BASE_URL`) with thinking disabled for English and
   French sessions; Huawei MaaS `glm-5.2` remains an opt-in alternative via
   `LLM_PROVIDER=maas`
+- the Lagos latency-lab worker can select DeepSeek for all agents through its
+  release workflow; DeepSeek thinking is disabled because its tool-enabled
+  conversation requests fail when thinking mode is enabled
 - optional post-call summary/intent analysis also uses Huawei MaaS and reads
   only messages belonging to the completed session, not older calls in the
   same conversation

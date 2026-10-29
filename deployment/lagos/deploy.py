@@ -202,7 +202,7 @@ def deploy(release, revision, enable_hausa_research=False, momo_feedback_agent_i
         updates.update({
             'RVC_LAB_DEEPSEEK_BASE_URL': 'https://api.deepseek.com',
             'RVC_LAB_DEEPSEEK_MODEL': model,
-            'RVC_LAB_DEEPSEEK_THINKING': 'true',
+            'RVC_LAB_DEEPSEEK_THINKING': 'false',
             'RVC_LAB_DEEPSEEK_REASONING_EFFORT': effort,
             'RVC_LAB_DEEPSEEK_API_KEY': str(deepseek_api_key).strip(),
         })
