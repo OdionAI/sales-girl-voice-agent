@@ -45,6 +45,15 @@ Agents should pull GitHub `main`, make changes on a branch, and promote through
 Keep the previous image tag and the exact `-f` chain. Rollback = recreate `voice` from the
 previous chain (or the earlier override). Do not prune rollback images.
 
+The optional reply-grace trial is controlled by GitHub repository variables
+`RVC_LAB_REPLY_GRACE_AGENT_IDS` and `RVC_LAB_REPLY_GRACE_MS`. The Lagos release
+passes them into the voice runtime environment; it is off when the ID list is
+empty or the delay is `0`. To stop the trial, set the delay to `0` and run the
+normal Lagos release workflow with `verify_only=false` on `main`. The active
+Compose environment is shared by agents, so the ID list limits the trial to
+the selected agent rather than changing all calls. The release checks both
+settings and restores the previous values if deployment fails.
+
 ## GitHub release
 `.github/workflows/deploy-lagos.yml` is the Lagos path. A `main` push starts a
 release unless the commit message contains `[skip deploy]`. Manual workflow
@@ -58,9 +67,10 @@ recreates only `voice`, checks the new image and container health, environment
 and mounts, and restores the prior image if verification fails. A post-release
 real call still needs to confirm worker registration and the RNNoise trace.
 `deployment/lagos/deploy.py` also maintains explicit caller-number routes in
-`RVC_AICC_SIP_ROUTE`. Leadway caller IDs resolve to the active Leadway Amaka
-agent, with an explicit per-caller override so a carrier-rewritten shared DID
-cannot take precedence for those callers. Other callers retain DID-first
+`RVC_AICC_SIP_ROUTE`. Leadway caller IDs resolve to the Leadway new-member
+check-in agent (`c4f4925d-0188-431e-a881-15533f6bb31b`), with an explicit
+per-caller override so a carrier-rewritten shared DID cannot take precedence
+for those callers. Other callers retain DID-first
 routing. Existing routes are preserved; conflicting numbers fail the release
 instead of being silently reassigned.
 `deploy.yml` remains available only for an explicit legacy node-B run.

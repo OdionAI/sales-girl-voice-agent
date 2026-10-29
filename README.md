@@ -22,6 +22,16 @@ This service owns the realtime voice runtime:
 - persisting conversation and session activity
 - reporting call billing usage
 
+For a reversible trial of caller continuations, the latency lab can delay
+starting a reply for selected agent IDs through
+`RVC_LAB_REPLY_GRACE_AGENT_IDS` and `RVC_LAB_REPLY_GRACE_MS`. Both settings
+default to off. A caller who resumes speaking during the grace window has
+their next committed message considered together with the previous one;
+removing the agent ID or setting the delay to `0` in the GitHub release
+variables restores immediate replies after the normal Lagos voice release.
+This does not recover an empty ASR transcript. See
+[`latency_lab/README.md`](latency_lab/README.md) for the exact behavior.
+
 ## Core interactions
 
 This worker talks to:
