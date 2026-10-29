@@ -141,6 +141,8 @@ class LabConfig:
     ).rstrip("/")
     llm_model: str = os.getenv("RVC_LAB_LLM_MODEL", "qwen3.8-27b")
     llm_api_key: str = os.getenv("RVC_LAB_LLM_API_KEY", "local-npu")
+    llm_provider: str = "qwen"
+    llm_reasoning_effort: str = "high"
     llm_enable_thinking: bool = _bool("RVC_LAB_LLM_ENABLE_THINKING", False)
     # If the provider returns a 200 with no spoken text and no tool call, re-issue
     # the request a few times before giving up. Off by default; deployments turn it
@@ -303,16 +305,19 @@ def apply_runtime_overrides(
     stt_context = str(payload.get("stt_context") or "").strip()
     if stt_context:
         updates["stt_context"] = stt_context
-    if llm_model:
-        updates["llm_model"] = llm_model
-    if llm_base_url:
-        updates["llm_base_url"] = normalize_llm_base_url(llm_base_url)
-    if llm_api_key:
-        updates["llm_api_key"] = llm_api_key
-    if thinking in {"true", "1", "yes", "on"}:
-        updates["llm_enable_thinking"] = False
-    elif thinking in {"false", "0", "no", "off"}:
-        updates["llm_enable_thinking"] = True
+    # The Lagos release's operator-selected provider is authoritative. Session
+    # metadata must not silently switch its endpoint or credential.
+    if config.llm_provider != "deepseek":
+        if llm_model:
+            updates["llm_model"] = llm_model
+        if llm_base_url:
+            updates["llm_base_url"] = normalize_llm_base_url(llm_base_url)
+        if llm_api_key:
+            updates["llm_api_key"] = llm_api_key
+        if thinking in {"true", "1", "yes", "on"}:
+            updates["llm_enable_thinking"] = False
+        elif thinking in {"false", "0", "no", "off"}:
+            updates["llm_enable_thinking"] = True
     if tts_model:
         updates["tts_model"] = tts_model
     if tts_base_url:
@@ -331,7 +336,31 @@ def apply_runtime_overrides(
 
 def lab_config_from_environ() -> LabConfig:
     """Build a config after platform env files have been loaded."""
+    provider = os.getenv("RVC_LAB_LLM_PROVIDER", "qwen").strip().lower()
+    if provider not in {"qwen", "deepseek"}:
+        raise ValueError(f"Unsupported RVC_LAB_LLM_PROVIDER: {provider}")
+    llm_base_url = os.getenv("RVC_LAB_LLM_BASE_URL", "http://102.88.137.124:8080/qwen38/v1").rstrip("/")
+    llm_model = os.getenv("RVC_LAB_LLM_MODEL", "qwen3.8-27b")
+    llm_api_key = os.getenv("RVC_LAB_LLM_API_KEY", "local-npu")
+    llm_enable_thinking = _bool("RVC_LAB_LLM_ENABLE_THINKING", False)
+    reasoning_effort = os.getenv("RVC_LAB_LLM_REASONING_EFFORT", "high").strip().lower()
+    if provider == "deepseek":
+        llm_base_url = os.getenv("RVC_LAB_DEEPSEEK_BASE_URL", "https://api.deepseek.com").rstrip("/")
+        llm_model = os.getenv("RVC_LAB_DEEPSEEK_MODEL", "deepseek-flash").strip()
+        llm_api_key = os.getenv("RVC_LAB_DEEPSEEK_API_KEY", "").strip()
+        if not llm_api_key:
+            raise ValueError("RVC_LAB_DEEPSEEK_API_KEY is required when DeepSeek is selected")
+        llm_enable_thinking = _bool("RVC_LAB_DEEPSEEK_THINKING", True)
+        reasoning_effort = os.getenv("RVC_LAB_DEEPSEEK_REASONING_EFFORT", "high").strip().lower()
+        if reasoning_effort not in {"low", "high", "max"}:
+            raise ValueError("RVC_LAB_DEEPSEEK_REASONING_EFFORT must be low, high, or max")
     return LabConfig(
+        llm_provider=provider,
+        llm_base_url=llm_base_url,
+        llm_model=llm_model,
+        llm_api_key=llm_api_key,
+        llm_enable_thinking=llm_enable_thinking,
+        llm_reasoning_effort=reasoning_effort,
         hausa_twb_voices_enabled=_bool("RVC_LAB_ENABLE_HAUSA_TWB_VOICES", False),
         agent_config_api_base_url=_url(
             "AGENT_CONFIG_API_BASE_URL", "AGENT_CONFIG_SERVICE_BASE_URL"

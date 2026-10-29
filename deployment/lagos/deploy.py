@@ -8,6 +8,7 @@ from pathlib import Path
 import re
 import socket
 import subprocess
+import sys
 import time
 import uuid
 
@@ -170,7 +171,9 @@ def reply_grace_env(delay_ms='0', agent_ids=''):
 
 
 def deploy(release, revision, enable_hausa_research=False, momo_feedback_agent_id='',
-           reply_grace_ms='0', reply_grace_agent_ids=''):
+           reply_grace_ms='0', reply_grace_agent_ids='', llm_provider='qwen',
+           deepseek_model='deepseek-flash', deepseek_reasoning_effort='high',
+           deepseek_api_key=''):
     if not re.fullmatch(r'[0-9a-f]{40}', revision):
         raise ValueError('Expected a full Git commit SHA')
     if (release.parent != RELEASE_ROOT
@@ -183,6 +186,30 @@ def deploy(release, revision, enable_hausa_research=False, momo_feedback_agent_i
     # endpoints each release so stale Whisper overrides cannot persist.
     updates = dict(LAGOS_ASR_ENV)
     updates.update(reply_grace_env(reply_grace_ms, reply_grace_agent_ids))
+    provider = str(llm_provider).strip().lower()
+    if provider not in {'qwen', 'deepseek'}:
+        raise ValueError('RVC_LAB_LLM_PROVIDER must be qwen or deepseek')
+    updates['RVC_LAB_LLM_PROVIDER'] = provider
+    if provider == 'deepseek':
+        model = str(deepseek_model).strip()
+        effort = str(deepseek_reasoning_effort).strip().lower()
+        if not re.fullmatch(r'[A-Za-z0-9._-]{1,80}', model):
+            raise ValueError('Invalid DeepSeek model name')
+        if effort not in {'low', 'high', 'max'}:
+            raise ValueError('DeepSeek reasoning effort must be low, high, or max')
+        if not str(deepseek_api_key).strip():
+            raise ValueError('DeepSeek API key is required when DeepSeek is selected')
+        updates.update({
+            'RVC_LAB_DEEPSEEK_BASE_URL': 'https://api.deepseek.com',
+            'RVC_LAB_DEEPSEEK_MODEL': model,
+            'RVC_LAB_DEEPSEEK_THINKING': 'true',
+            'RVC_LAB_DEEPSEEK_REASONING_EFFORT': effort,
+            'RVC_LAB_DEEPSEEK_API_KEY': str(deepseek_api_key).strip(),
+        })
+    else:
+        # Qwen's existing URL/model/key remain untouched for one-variable rollback.
+        # Remove the unused DeepSeek credential from the new container environment.
+        updates['RVC_LAB_DEEPSEEK_API_KEY'] = ''
     if enable_hausa_research:
         updates[HAUSA_RESEARCH_KEY] = 'true'
     if not momo_feedback_agent_id:
@@ -203,10 +230,14 @@ def deploy(release, revision, enable_hausa_research=False, momo_feedback_agent_i
         'import pyrnnoise; import latency_lab.livekit_worker')
     if inspect_voice()[0]['Id'] != previous['Id']:
         raise RuntimeError('Voice container changed during build; rerun')
+    plan_updates = {
+        key: ('[redacted]' if key.endswith('_API_KEY') and value else value)
+        for key, value in updates.items()
+    }
     plan = {'revision': revision, 'previous_image': old_image,
             'previous_image_id': previous['Image'], 'image': new_image,
             'compose_files': [str(file) for file in files],
-            'environment_updates': updates}
+            'environment_updates': plan_updates}
     (release / 'plan.json').write_text(json.dumps(plan, indent=2) + '\n')
     override = release / 'voice-ci.json'
     image_override(override, new_image, updates)
@@ -245,6 +276,10 @@ if __name__ == '__main__':
     parser.add_argument('--momo-feedback-agent-id', default='')
     parser.add_argument('--reply-grace-ms', default='0')
     parser.add_argument('--reply-grace-agent-ids', default='')
+    parser.add_argument('--llm-provider', default='qwen')
+    parser.add_argument('--deepseek-model', default='deepseek-flash')
+    parser.add_argument('--deepseek-reasoning-effort', default='high')
+    parser.add_argument('--deepseek-api-key-stdin', action='store_true')
     args = parser.parse_args()
     if args.verify_only:
         current, files = inspect_voice()
@@ -255,8 +290,11 @@ if __name__ == '__main__':
         if args.release is None or args.revision is None:
             parser.error('--release and --revision are required for deployment')
         os.umask(0o077)
+        deepseek_api_key = sys.stdin.read().strip() if args.deepseek_api_key_stdin else ''
         with open('/var/lock/attentive-voice-auth-deploy.lock', 'w') as lock:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             deploy(args.release.resolve(), args.revision, args.enable_hausa_research,
                    args.momo_feedback_agent_id, args.reply_grace_ms,
-                   args.reply_grace_agent_ids)
+                   args.reply_grace_agent_ids, args.llm_provider,
+                   args.deepseek_model, args.deepseek_reasoning_effort,
+                   deepseek_api_key)

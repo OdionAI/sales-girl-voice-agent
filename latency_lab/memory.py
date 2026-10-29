@@ -107,10 +107,13 @@ class ConversationMemory:
         turn.messages.extend(copy.deepcopy([request, reply]))
         self.trace.record("memory_tool_retained", turn_id=turn_id, call_id=reply["tool_call_id"])
 
-    def answer(self, turn_id: str, text: str) -> None:
+    def answer(self, turn_id: str, text: str, *, reasoning_content: str = "") -> None:
         turn = self.turn(turn_id)
         if not turn.answered:
-            turn.messages.append({"role": "assistant", "content": text})
+            message = {"role": "assistant", "content": text}
+            if reasoning_content:
+                message["reasoning_content"] = reasoning_content
+            turn.messages.append(message)
             turn.answered = True
 
     def finish(self, turn_id: str, *, interrupted: bool = False) -> None:
@@ -143,11 +146,13 @@ class ConversationMemory:
         return groups
 
     @staticmethod
-    def _messages(turns: list[MemoryTurn]) -> list[dict]:
+    def _messages(turns: list[MemoryTurn], *, include_reasoning: bool = False) -> list[dict]:
         messages = []
         for turn in turns:
             for original in turn.messages:
                 message = copy.deepcopy(original)
+                if not include_reasoning:
+                    message.pop("reasoning_content", None)
                 if turn.listening_only and message["role"] == "user":
                     message["content"] = (
                         "[Listening-only speech: retained context, not a request to execute "
@@ -156,7 +161,8 @@ class ConversationMemory:
                 messages.append(message)
         return messages
 
-    def context(self, *, exclude_turn_id: str | None = None) -> list[dict]:
+    def context(self, *, exclude_turn_id: str | None = None,
+                include_reasoning: bool = False) -> list[dict]:
         budget = max(512, self.config.memory_context_tokens)
         prefix = []
         if self.summary:
@@ -171,7 +177,7 @@ class ConversationMemory:
         kept = []
         used = estimated_tokens(prefix) + 80
         for group in reversed(groups):
-            messages = self._messages(group)
+            messages = self._messages(group, include_reasoning=include_reasoning)
             cost = estimated_tokens(messages)
             if used + cost > budget:
                 omitted = True
