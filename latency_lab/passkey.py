@@ -19,6 +19,7 @@ import json
 import os
 import re
 import time
+import uuid
 from dataclasses import dataclass, field
 from typing import Awaitable, Callable
 
@@ -141,7 +142,9 @@ class PasskeyFlow:
             return {"status": "failed", "message": "I could not start the passkey confirmation right now."}
         self.pending = Pending(
             authentication_id=authentication_id,
-            correlation_id=f"ceremony-{operation_id}",
+            # A retry for the same prepared operation is a new ceremony. The SDK
+            # remembers prior correlation IDs for the connection and rejects reuse.
+            correlation_id=f"ceremony-{uuid.uuid4().hex}",
             operation_id=operation_id,
             workflow=workflow,
             feature=feature,
