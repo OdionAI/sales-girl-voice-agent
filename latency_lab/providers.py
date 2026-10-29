@@ -972,6 +972,10 @@ class RLLMClient:
                     response_status = int(response.status)
                     response_headers = getattr(response, "headers", {})
                     response_content_type = str(response_headers.get("Content-Type") or "") or None
+                    if capture_raw_response and response.status >= 400:
+                        error_body = await response.content.read(16 * 1024 + 1)
+                        raw_http_error_body = error_body[:16 * 1024].decode("utf-8", errors="replace")
+                        raw_response_truncated = len(error_body) > 16 * 1024
                     if (
                         response.status in self._retryable_statuses
                         and request_index < len(self._retry_delays_seconds)
@@ -980,10 +984,6 @@ class RLLMClient:
                         request_finished_ns = time.perf_counter_ns()
                         await asyncio.sleep(self._retry_delays_seconds[request_index])
                         continue
-                    if capture_raw_response and response.status >= 400:
-                        error_body = await response.content.read(16 * 1024 + 1)
-                        raw_http_error_body = error_body[:16 * 1024].decode("utf-8", errors="replace")
-                        raw_response_truncated = len(error_body) > 16 * 1024
                     response.raise_for_status()
                     buffered = ""
                     decoder = codecs.getincrementaldecoder("utf-8")()
