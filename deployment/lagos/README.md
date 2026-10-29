@@ -43,9 +43,10 @@ Agents should pull GitHub `main`, make changes on a branch, and promote through
 - Wema English voice selection is stored in Agent Config as `tts_voice_id`.
   The worker applies the saved Wema cached ICL voice when no signed session
   override is present. The supported IDs are `wema-en-us-female`,
-  `wema-en-us-male`, `wema-en-ng-female`, and `wema-en-ng-male`; all use
-  `x_vector_only_mode=false` and the same deterministic seed as the configured
-  Helen clone.
+  `wema-en-us-male`, `wema-en-ng-female`, and `wema-en-ng-male`. The matching
+  short-reference IDs append `-short` and must be registered in the gateway
+  before they can synthesize. All Wema IDs use `x_vector_only_mode=false` and
+  the same deterministic seed as the configured Helen clone.
 
 The shared Lagos LLM can be switched for all agents through the repository
 variable `RVC_LAB_LLM_PROVIDER` (`qwen` or `deepseek`; defaults to `qwen`).
