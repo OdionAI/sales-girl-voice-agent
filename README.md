@@ -426,6 +426,11 @@ runtime never forwards this credential to a different scheme, host, or port.
   intended Amaka agent, with automatic realtime-final fallback on an empty or
   failed chat result. Other agents remain outside this chat scope. The active
   vocabulary context is preserved during releases.
+- banking voice checks submit the Wema `customer_id` from the dashboard-signed
+  room identity to the sidecar. An email is included only when the signed owner
+  is email-shaped. The sidecar must have Wema enrollment lookup enabled to use
+  `customer_id`; this worker change alone does not switch the deployed sidecar
+  from its local email-keyed store.
 - it does not authenticate to GCP, publish to Artifact Registry, or use IAP
 - the approved personal-GCP dependency is the external NG/Odion TTS endpoint;
   Huawei MaaS `glm-5.2` remains the live and post-call text model
