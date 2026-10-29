@@ -9,7 +9,7 @@ import os
 final class PasskeyDiagnostics {
     enum Stage: String { case configuration, connection, context, receipt, validation, presentation, proof, verification, cleanup }
     enum Outcome: String { case started, requested, succeeded, failed, ignored, cancelled }
-    enum Check: String { case envelope, options, challenge, credentials, registrationIdentity, algorithms, authenticatorSelection, relyingParty }
+    enum Check: String { case envelope, options, challenge, credentials, registrationIdentity, algorithms, authenticatorSelection, relyingParty, presentationAnchor, foregroundScene, visibleWindow }
     struct Entry: Equatable, CustomStringConvertible {
         let stage: Stage
         let outcome: Outcome
