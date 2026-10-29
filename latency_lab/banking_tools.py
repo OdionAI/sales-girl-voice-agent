@@ -84,6 +84,9 @@ class BankingTools:
         profile = self.identity.get("wema_context")
         self.profile = profile if isinstance(profile, dict) else {}
         self.owner = str(self.identity.get("voice_auth_owner") or "").strip()
+        # The dashboard signs this Wema profile into the room identity. The
+        # sidecar's Wema store uses customer_id to find enrolled voiceprints.
+        self.customer_id = str(self.profile.get("customer_id") or "").strip()
         self.sidecar = os.getenv("VOICE_AUTH_SIDECAR_URL", "").rstrip("/")
         self.session_status = "pending"
         self.generation = 0
@@ -170,7 +173,7 @@ class BankingTools:
             })
 
     async def compare(self, clip: bytes) -> dict:
-        if not self.owner or not self.sidecar or len(clip) < 1.2 * 16000 * 2:
+        if not (self.owner or self.customer_id) or not self.sidecar or len(clip) < 1.2 * 16000 * 2:
             return {"matched": False, "reason": "audio_too_short_or_not_enrolled"}
         output = io.BytesIO()
         with wave.open(output, "wb") as wav:
@@ -179,7 +182,10 @@ class BankingTools:
             wav.setframerate(16000)
             wav.writeframes(clip)
         form = aiohttp.FormData()
-        form.add_field("email", self.owner)
+        if "@" in self.owner:
+            form.add_field("email", self.owner)
+        if self.customer_id:
+            form.add_field("customer_id", self.customer_id)
         form.add_field("audio", output.getvalue(), filename="utterance.wav", content_type="audio/wav")
         # Threshold stays owned by the existing sidecar, never by the caller/model.
         try:

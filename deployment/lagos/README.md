@@ -75,6 +75,19 @@ the selected agent rather than changing all calls. The release checks both
 settings and restores the previous values if deployment fails.
 
 ## GitHub release
+The same `main` workflow now releases the Wema voice-auth sidecar before the
+voice worker. The sidecar source is `agent/voice_auth.py`,
+`agent/voice_enroll_http.py`, `agent/wema_store.py`, and
+`agent/wema_voiceprint.py`. Its image extends the existing Lagos model image,
+which supplies the two mounted ONNX models. The workflow passes the
+`WEMA_BLOB_CONNECTION_STRING` Actions secret through stdin; the deploy script
+writes it to a root-only environment file on the app VM. It builds an image
+labelled with the exact commit, switches the sidecar to `VOICE_AUTH_STORE=wema`,
+checks health, and restores the previous local-store image if health fails.
+The worker sends the dashboard-signed Wema `customer_id` to `/verify`. A
+successful health check does not prove an enrolled caller matches; confirm with
+a real Wema call before relying on transactions.
+
 `.github/workflows/deploy-lagos.yml` is the Lagos path. A `main` push starts a
 release unless the commit message contains `[skip deploy]`. Manual workflow
 dispatch defaults to `verify_only=true` and checks the pinned SSH route,
