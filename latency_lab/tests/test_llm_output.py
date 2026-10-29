@@ -102,8 +102,8 @@ class LLMOutputTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(calls[0].id, "call-1")
         self.assertEqual(calls[0].name, "wema_list_data_plans")
         self.assertEqual(calls[0].arguments, {"network": "MTN"})
-        self.assertEqual(calls[0].reasoning_content, "private")
-        self.assertIn("<think>private</think>", calls[0].assistant_content)
+        self.assertEqual(calls[0].reasoning_content, "")
+        self.assertIsNone(calls[0].assistant_content)
 
     async def test_ordinary_text_and_unicode_survive_network_byte_boundaries(self):
         text = "It costs \u20a6100. 2 < 3 and 5 > 4."
