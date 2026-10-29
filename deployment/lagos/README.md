@@ -84,3 +84,19 @@ remove it if previously absent). Without that repository variable the workflow
 preserves the current environment. Pair this with the dashboard production
 build flag `NEXT_PUBLIC_ENABLE_HAUSA_TWB_VOICES=true`. These are account-wide
 research controls, not commercial licensing clearance.
+
+## Igbo evaluation speakers
+
+Igbo agents can save `chinedu` (Ibo1), `eze` (Ibo2) or `ada` (Ibo3).
+The worker preserves that choice on every sentence and routes input through SBPN,
+without changing the configured LLM. Legacy generic Igbo IDs resolve to Chinedu,
+matching the endpoint default. Unknown explicit speakers fail rather than silently
+switching voices. The model is `igbo-sorotts-three-voices-v1` at the existing
+`/tts-igbo/v1/audio/speech` jumper route, 24 kHz mono PCM16 with `stream:true`.
+
+This SoroTTS checkpoint is CC-BY-NC-SA-4.0 and is for noncommercial evaluation,
+not commercial licensing clearance. Its current CPU deployment emits audio only
+after fully generating each sentence; it is not token-streaming or real-time ready.
+Only this route uses the endpoint's bounded 1800-second request timeout so the
+old 60-second cap does not truncate generation. Caller cancellation still closes
+the client stream; no retries or fallback to another speaker are performed.
