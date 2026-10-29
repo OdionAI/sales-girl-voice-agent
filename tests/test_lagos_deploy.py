@@ -117,6 +117,8 @@ class LagosReleaseTests(unittest.TestCase):
                     route['caller_routes']['+2347012345678'],
                     {'config_agent_id': 'existing-agent'},
                 )
+                self.assertNotIn('08112812216', route['caller_routes'])
+                self.assertNotIn('+2348112812216', route['caller_routes'])
                 for number, target in release.LEADWAY_CALLER_ROUTES.items():
                     self.assertEqual(route['caller_routes'][number], target)
                     self.assertEqual(
@@ -217,7 +219,7 @@ class LagosReleaseTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, 'MoMo route is missing'):
                     release.deploy(target, revision, False, AGENT_ID)
 
-    def test_conflicting_leadway_caller_route_fails_closed(self):
+    def test_momo_feedback_caller_override_is_removed(self):
         env = {
             'RVC_AICC_SIP_ROUTE': json.dumps({
                 'caller_routes': {
@@ -225,32 +227,35 @@ class LagosReleaseTests(unittest.TestCase):
                 }
             })
         }
-        with self.assertRaisesRegex(RuntimeError, 'already has a different route'):
-            release.leadway_caller_routes(env)
+        updated = json.loads(release.leadway_caller_routes(env))['caller_routes']
+        self.assertNotIn('08112812216', updated)
+        self.assertIn('+2349040760651', updated)
 
-    def test_existing_leadway_caller_route_is_upgraded_with_did_override(self):
+    def test_existing_leadway_caller_route_is_retained_with_did_override(self):
         legacy_route = {
-            'business_id': release.LEADWAY_CALLER_ROUTES['+2348112812216']['business_id'],
-            'config_agent_id': release.LEADWAY_CALLER_ROUTES['+2348112812216']['config_agent_id'],
+            'business_id': release.LEADWAY_CALLER_ROUTES['+2349040760651']['business_id'],
+            'config_agent_id': release.LEADWAY_CALLER_ROUTES['+2349040760651']['config_agent_id'],
             'configured_agent_name': 'Amaka',
             'voice_auth_required': False,
         }
         env = {'RVC_AICC_SIP_ROUTE': json.dumps({
-            'caller_routes': {'08112812216': legacy_route}
+            'caller_routes': {'09040760651': legacy_route}
         })}
 
         upgraded = json.loads(release.leadway_caller_routes(env))['caller_routes']
 
-        self.assertTrue(upgraded['08112812216']['override_did_routes'])
-        self.assertTrue(upgraded['+2349040760651']['override_did_routes'])
+        self.assertTrue(upgraded['09040760651']['override_did_routes'])
+        self.assertEqual(
+            upgraded['09040760651']['config_agent_id'],
+            'c4f4925d-0188-431e-a881-15533f6bb31b',
+        )
 
-    def test_existing_leadway_route_with_wrong_agent_still_fails_closed(self):
+    def test_existing_momo_caller_override_is_removed_even_if_stale(self):
         env = {'RVC_AICC_SIP_ROUTE': json.dumps({
             'caller_routes': {'08112812216': {
-                **release.LEADWAY_CALLER_ROUTES['+2348112812216'],
-                'config_agent_id': 'different-agent',
+                'config_agent_id': 'stale-agent',
             }}
         })}
 
-        with self.assertRaisesRegex(RuntimeError, 'already has a different route'):
-            release.leadway_caller_routes(env)
+        updated = json.loads(release.leadway_caller_routes(env))['caller_routes']
+        self.assertNotIn('08112812216', updated)
