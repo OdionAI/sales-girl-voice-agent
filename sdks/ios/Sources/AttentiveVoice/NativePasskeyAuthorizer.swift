@@ -33,9 +33,19 @@ final class NativePasskeyAuthorizer: NSObject, PasskeyAuthorizing, ASAuthorizati
     func authorize(_ request: PasskeyRequest) async throws -> PasskeyProof {
         diagnostics?.record(.presentation, .started)
         guard controller == nil else { throw PasskeyFailure.busy }
-        guard let window = anchor(), window.windowScene?.activationState == .foregroundActive,
-              !window.isHidden else {
-            diagnostics?.record(.presentation, .failed, reason: .presentationUnavailable)
+        guard let window = anchor() else {
+            diagnostics?.record(.presentation, .failed, reason: .presentationUnavailable,
+                                check: .presentationAnchor)
+            throw PasskeyFailure.presentationUnavailable
+        }
+        guard window.windowScene?.activationState == .foregroundActive else {
+            diagnostics?.record(.presentation, .failed, reason: .presentationUnavailable,
+                                check: .foregroundScene)
+            throw PasskeyFailure.presentationUnavailable
+        }
+        guard !window.isHidden else {
+            diagnostics?.record(.presentation, .failed, reason: .presentationUnavailable,
+                                check: .visibleWindow)
             throw PasskeyFailure.presentationUnavailable
         }
         let authorization = try authorizationRequest(for: request)
@@ -93,9 +103,9 @@ final class NativePasskeyAuthorizer: NSObject, PasskeyAuthorizing, ASAuthorizati
         guard self.controller === controller else { return }
         diagnostics?.record(.presentation, .succeeded)
         diagnostics?.record(.proof, .started)
-        guard let window, anchor() === window, window.windowScene?.activationState == .foregroundActive else {
-            complete(.failure(PasskeyFailure.presentationUnavailable)); return
-        }
+        // AuthenticationServices returned a credential. Do not discard that
+        // proof because SwiftUI replaced the anchor or iOS changed scene state
+        // while the Face ID sheet was onscreen; the backend still verifies it.
         if mode == .authenticate, let credential = authorization.credential as? ASAuthorizationPlatformPublicKeyCredentialAssertion,
            !credential.credentialID.isEmpty, !credential.rawClientDataJSON.isEmpty,
            !credential.rawAuthenticatorData.isEmpty, !credential.signature.isEmpty {

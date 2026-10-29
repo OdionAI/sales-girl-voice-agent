@@ -90,7 +90,8 @@ filter subsystem `ai.odion.attentive` and category `Passkeys`.
 Stages cover configuration, connection/context, request receipt, validation,
 native presentation, proof production/delivery, backend verification and cleanup.
 Validation failures include a fixed check label such as `challenge` or
-`relyingParty`. Native failures include a bounded system error category and numeric
+`relyingParty`; presentation setup failures identify a missing anchor, inactive
+scene, or hidden window. Native failures include a bounded system error category and numeric
 Apple error code; system descriptions and nested payloads are not logged.
 `presentation outcome=requested` means the SDK asked iOS to present, not that a
 sheet was visibly shown. `verification outcome=started` means a proof was sent,
@@ -122,8 +123,13 @@ fix the underlying failure or guarantee that every Apple code explains its cause
 - Dismissing the sheet leaves the call usable, pending, without a call-failure
   alert. Local failures/expiry set action authentication to failed, not call failure.
   Quote expiry/cancellation remains a backend responsibility.
+- After Face ID returns a credential, the SDK does not discard it because the
+  host window or scene changed while the native sheet was visible. The backend
+  still verifies the credential before any protected action.
 - One ceremony at a time. No automatic prompt retry, proof replay, or spoken/typed
-  substitute. Reconnect invalidates the active ceremony; the backend must start anew.
+  substitute. Each new ceremony, including a retry for the same prepared action,
+  has a fresh correlation ID. Reconnect invalidates the active ceremony; the
+  backend must start anew.
 - Sensitive options, proofs and device identifiers never enter chat, transcripts,
   tool activity or the public event callback. Do not log the device property yourself.
 
