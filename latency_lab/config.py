@@ -350,7 +350,7 @@ def lab_config_from_environ() -> LabConfig:
         llm_api_key = os.getenv("RVC_LAB_DEEPSEEK_API_KEY", "").strip()
         if not llm_api_key:
             raise ValueError("RVC_LAB_DEEPSEEK_API_KEY is required when DeepSeek is selected")
-        llm_enable_thinking = _bool("RVC_LAB_DEEPSEEK_THINKING", True)
+        llm_enable_thinking = _bool("RVC_LAB_DEEPSEEK_THINKING", False)
         reasoning_effort = os.getenv("RVC_LAB_DEEPSEEK_REASONING_EFFORT", "high").strip().lower()
         if reasoning_effort not in {"low", "high", "max"}:
             raise ValueError("RVC_LAB_DEEPSEEK_REASONING_EFFORT must be low, high, or max")
