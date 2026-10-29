@@ -13,7 +13,8 @@ REASONS = frozenset({"invalid_request", "unsupported_options", "untrusted_relyin
                      "replayed", "unavailable", "presentation_unavailable", "cancelled", "authorization_failed",
                      "invalid_credential", "begin_failed", "send_failed", "unknown"})
 CHECKS = frozenset({"envelope", "options", "challenge", "credentials", "registrationIdentity", "algorithms",
-                    "authenticatorSelection", "relyingParty"})
+                    "authenticatorSelection", "relyingParty", "presentationAnchor", "foregroundScene",
+                    "visibleWindow"})
 DOMAINS = frozenset({"authorization", "localAuthentication", "other"})
 
 

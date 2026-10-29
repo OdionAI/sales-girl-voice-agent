@@ -8,9 +8,10 @@ from latency_lab.passkey_diagnostics import client_failure, record
 class DiagnosticTests(unittest.TestCase):
     def test_sdk_reason_and_system_code_are_preserved(self):
         self.assertEqual(client_failure({"reason": "authorization_failed", "diagnostics": {
-            "stage": "presentation", "systemDomain": "authorization", "systemCode": 1004}}),
+            "stage": "presentation", "check": "presentationAnchor",
+            "systemDomain": "authorization", "systemCode": 1004}}),
             {"reason": "authorization_failed", "client_stage": "presentation",
-             "system_domain": "authorization", "system_code": 1004})
+             "check": "presentationAnchor", "system_domain": "authorization", "system_code": 1004})
 
     def test_untrusted_values_never_enter_logs_or_trace(self):
         trace = Mock()
