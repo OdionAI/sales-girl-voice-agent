@@ -13,13 +13,15 @@ def test_explicit_seed_wins():
 
 
 def test_one_constant_seed_for_all_four_wema_voices():
-    # Helen's way: one constant clone seed on the request for all four voices.
+    # Helen's way: the four Wema voices use the SAME constant clone seed as
+    # Helen's own voice.
     assert {resolve_tts_seed(LabConfig(tts_voice=v)) for v in WEMA} == {WEMA_TTS_SEED}
-    assert WEMA_TTS_SEED == "0"
+    assert WEMA_TTS_SEED == resolve_tts_seed(LabConfig(tts_voice="helen-mavino-0030"))
+    assert WEMA_TTS_SEED == "3536072912"
 
 
-def test_non_wema_voice_seed_is_unchanged():
-    seed = resolve_tts_seed(LabConfig(tts_voice="helen-mavino-0030"))
+def test_unrelated_voice_keeps_its_own_derived_seed():
+    seed = resolve_tts_seed(LabConfig(tts_voice="some-other-cloned-voice"))
     assert seed and seed.isdigit() and seed != WEMA_TTS_SEED
 
 
@@ -74,7 +76,7 @@ def test_wema_request_pins_voice_with_constant_seed_and_icl():
     for v in WEMA:
         payload = _request_payload(v)
         assert payload["voice"] == v
-        assert payload["seed"] == WEMA_TTS_SEED == "0"
+        assert payload["seed"] == WEMA_TTS_SEED
         assert payload["x_vector_only_mode"] is False
 
 

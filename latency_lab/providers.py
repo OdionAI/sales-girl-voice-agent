@@ -1116,10 +1116,18 @@ def tts_token_budget(text: str) -> int:
 WEMA_VOICES = frozenset({
     "wema-en-ng-female", "wema-en-ng-male", "wema-en-us-female", "wema-en-us-male",
 })
-# Preserve the Wema sampling seed while comparing full ICL conditioning with
-# Helen. A fixed seed controls sampling; it does not guarantee speaker identity.
-# Overridable with RVC_LAB_WEMA_TTS_SEED.
-WEMA_TTS_SEED = os.getenv("RVC_LAB_WEMA_TTS_SEED", "0")
+
+
+def clone_seed(voice: str) -> str:
+    """The stable clone seed the worker derives from a voice name."""
+    return str(int(hashlib.sha256(str(voice).encode("utf-8")).hexdigest()[:8], 16))
+
+
+# The four Wema voices send the SAME constant clone seed that Helen's voice uses
+# ("Helen's way") so they never drift between generations. Overridable with
+# RVC_LAB_WEMA_TTS_SEED.
+HELEN_VOICE = os.getenv("RVC_LAB_TTS_VOICE", "helen-mavino-0030")
+WEMA_TTS_SEED = os.getenv("RVC_LAB_WEMA_TTS_SEED", "") or clone_seed(HELEN_VOICE)
 
 
 def is_wema_voice(voice: str) -> bool:
@@ -1129,16 +1137,17 @@ def is_wema_voice(voice: str) -> bool:
 def resolve_tts_seed(config: LabConfig) -> str:
     """Return the seed to pin a TTS voice.
 
-    An explicit configured seed wins; the four Wema voices use one constant
-    clone seed for repeatable sampling; otherwise derive
-    a stable per-voice seed from the voice id.
+    An explicit configured seed wins; the four Wema voices use the same
+    constant clone seed Helen's voice uses; every other named voice derives a
+    stable seed from its own name. Either way a seed is always sent on the
+    request, so no cloned voice drifts between generations.
     """
     seed = str(getattr(config, "tts_seed", "") or "").strip()
     voice = str(getattr(config, "tts_voice", "") or "").strip()
     if not seed and is_wema_voice(voice):
-        return WEMA_TTS_SEED
+        seed = WEMA_TTS_SEED
     if not seed and voice:
-        seed = str(int(hashlib.sha256(voice.encode("utf-8")).hexdigest()[:8], 16))
+        seed = clone_seed(voice)
     return seed
 
 
