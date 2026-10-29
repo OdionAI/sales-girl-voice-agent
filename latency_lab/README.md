@@ -278,6 +278,15 @@ single-request path with no added delay. If a committed turn still cannot reach
 the LLM after those retries, the agent speaks a deterministic temporary-service
 message instead of leaving the caller in silence; traces distinguish the
 provider error, degraded response, and completed fallback playout.
+
+For the targeted `end_call_recovery` and `end_call_goodbye` phases, traces also
+record `llm_provider_raw_response`: HTTP status/content type, provider
+`finish_reason` values, parsed choice/text/tool-fragment counts, and the exact
+SSE `data:` payloads (or an HTTP error body). Raw data is capped at 16 KiB per
+request attempt and is not collected for ordinary conversation turns. Since a
+provider response can contain generated caller-specific text, these diagnostics
+are stored only in the existing private trace directory and should be handled
+like conversation traces. They never include request headers or API keys.
 The current end-of-turn experiment uses 300 ms of silence instead of 500 ms. When
 `RVC_LAB_TTS_REF_AUDIO` and its exact `RVC_LAB_TTS_REF_TEXT` are supplied, the lab
 uses fixed ICL Base synthesis rather than generating a new VoiceDesign speaker.
