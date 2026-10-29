@@ -131,6 +131,7 @@ class Attempt:
     tool_messages: list[dict[str, Any]] = field(default_factory=list)
     turn_id: str | None = None
     audio_sent: bool = False
+    audio_pending_playout: bool = False
     speech_tasks: list[asyncio.Task] = field(default_factory=list)
     proactive: bool = False
 
@@ -2188,11 +2189,29 @@ class ConversationPipeline:
             for call in calls:
                 if call.name not in BANK_TOOLS:
                     continue
+                # Tool-call responses may have yielded a spoken preamble whose TTS
+                # task is deliberately allowed to drain in parallel. Do not start
+                # authentication or bank I/O until that speech has finished and
+                # LiveKit has played its queued audio; otherwise a result or a new
+                # turn can cut the caller off mid-sentence.
+                if attempt.speech_tasks:
+                    self.trace.record(
+                        "bank_tool_waiting_for_speech",
+                        turn_id=self.turn_id, attempt_id=attempt.id,
+                        tool_name=call.name, pending_tts_tasks=len(attempt.speech_tasks),
+                    )
+                    await self._finish_speech(attempt)
+                if attempt.cancelled or not attempt.authorized:
+                    return
+                await self._drain_tool_wait_audio(attempt, call.name)
+                if attempt.cancelled or not attempt.authorized:
+                    return
                 # A tool call can arrive without any spoken preamble. Always give
                 # the caller a short, application-owned wait cue before entering
-                # authentication, passkey, or bank I/O. LLM-generated acknowledgments
-                # are optional and can be omitted or delayed until after the tool.
-                if not self._answer_acknowledges_tool_wait(attempt.answer):
+                # authentication, passkey, or bank I/O. Generated text counts as an
+                # acknowledgement only after its audio has actually been sent.
+                if (not self._answer_acknowledges_tool_wait(attempt.answer)
+                        or not attempt.audio_sent):
                     wait_text = self._bank_tool_wait_text(call.name)
                     self.trace.record(
                         "bank_tool_wait_acknowledgement",
@@ -2200,6 +2219,9 @@ class ConversationPipeline:
                         tool_name=call.name, text=wait_text,
                     )
                     await self._speak_text(attempt, wait_text, phase="tool_acknowledged")
+                    await self._drain_tool_wait_audio(attempt, call.name)
+                if attempt.cancelled or not attempt.authorized:
+                    return
                 if call.name == "wema_execute_prepared" and self.passkey is not None:
                     # Money-moves are approved on the device, not by posting to the
                     # bank. Intercept at the point the tool is actually called, so
@@ -2344,10 +2366,24 @@ class ConversationPipeline:
 
     @staticmethod
     def _answer_acknowledges_tool_wait(answer: str) -> bool:
+        # A prior acknowledgement in the same turn must not mask a quiet gap
+        # before a later, sequential banking tool.
+        latest_sentence = re.split(r"(?<=[.!?])\s+", str(answer or "").strip())[-1]
         return bool(re.search(
             r"\b(one moment|please wait|hold on|checking|check that|look into|looking up|preparing|verify|verifying|processing)\b",
-            str(answer or ""), re.IGNORECASE,
+            latest_sentence, re.IGNORECASE,
         ))
+
+    async def _drain_tool_wait_audio(self, attempt: Attempt, tool_name: str) -> None:
+        """Wait for queued LiveKit speech to play before starting a banking tool."""
+        if self.transport != "livekit" or not attempt.audio_pending_playout:
+            return
+        self.trace.record(
+            "bank_tool_waiting_for_playout",
+            turn_id=self.turn_id, attempt_id=attempt.id, tool_name=tool_name,
+        )
+        await self.send({"type": "tts_segment_end"})
+        attempt.audio_pending_playout = False
 
     async def _dispatch_background_tool(self, attempt: Attempt, call) -> None:
         """Start an already acknowledged bank call in the background."""
@@ -2801,6 +2837,7 @@ class ConversationPipeline:
         if attempt.cancelled or not self.engagement.speech_enabled:
             return
         attempt.audio_sent = True
+        attempt.audio_pending_playout = True
         await self.send(
             {
                 "type": "tts_chunk",
@@ -2913,6 +2950,8 @@ class ConversationPipeline:
             )
             self._transition("playing", f"{self.transport}_confirmed_playback")
         elif kind == "tts_stop":
+            if self.attempt:
+                self.attempt.audio_pending_playout = False
             self.engagement.playback_stopped()
             self.trace.record(
                 f"{self.transport}_playback_stop",
@@ -2941,6 +2980,8 @@ class ConversationPipeline:
             self.turn_id = None
             self.attempt = None
         elif kind == "tts_segment_stop":
+            if self.attempt:
+                self.attempt.audio_pending_playout = False
             self.engagement.playback_stopped()
             if self.attempt and not self.attempt.cancelled:
                 self._transition("releasing", "engagement_segment_drained")
