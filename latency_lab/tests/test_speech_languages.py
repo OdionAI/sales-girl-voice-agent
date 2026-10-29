@@ -52,7 +52,6 @@ class SpeechLanguageTests(unittest.IsolatedAsyncioTestCase):
                     self.assertIsInstance(pipeline.stt, SBPNClient)
                     self.assertIn(f"CALL LANGUAGE: {profile['name']} ({code})", pipeline.system_prompt)
                     self.assertEqual(pipeline.opening_greeting_text(), profile["opening"])
-                    self.assertEqual(pipeline.closing_goodbye_text(), profile["goodbye"])
                     pipeline.stt.append = AsyncMock()
                     pipeline.stt.recover = AsyncMock()
                     await pipeline.audio(b"\0\0" * 16000)

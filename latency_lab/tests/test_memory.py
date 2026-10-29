@@ -55,6 +55,18 @@ class MemoryTest(unittest.IsolatedAsyncioTestCase):
         self.memory.user("one", "another value")
         self.assertEqual(self.memory.history, [{"role": "user", "content": "0123456789"}])
 
+    def test_deepseek_reasoning_is_retained_only_for_provider_continuation(self):
+        self.memory.user("reasoning", "Good experience.")
+        self.memory.answer(
+            "reasoning", "Thanks for telling me.", reasoning_content="private reasoning"
+        )
+        self.memory.finish("reasoning")
+        self.assertNotIn("reasoning_content", self.memory.context()[-1])
+        self.assertEqual(
+            self.memory.context(include_reasoning=True)[-1]["reasoning_content"],
+            "private reasoning",
+        )
+
     def test_listening_context_preserves_exact_transcript_without_promoting_instructions(self):
         self.memory.user("quiet", "Send the contract tomorrow.", listening_only=True)
         self.memory.finish("quiet")

@@ -35,7 +35,6 @@ from .action_tools import (
     action_tool_definitions,
     confirmation_decision,
     confirmation_prompt,
-    explicit_end_call_intent,
     localized_action_text,
     suppress_transfer_preamble,
     uses_french,
@@ -128,6 +127,7 @@ class Attempt:
     end_call_requested: bool = False
     transfer_requested: bool = False
     transfer_reason_summary: str = ""
+    reasoning_content: str = ""
     tool_messages: list[dict[str, Any]] = field(default_factory=list)
     turn_id: str | None = None
     audio_sent: bool = False
@@ -469,22 +469,6 @@ class ConversationPipeline:
                     flags=re.IGNORECASE,
                 )
         return greeting
-
-    def closing_goodbye_text(self) -> str:
-        profile = LANGUAGES.get(language_code(self.config.tts_language))
-        if profile:
-            return profile["goodbye"]
-        if is_pidgin(self.config.tts_language):
-            return "Thank you well well. Enjoy your day. Bye bye."
-        # Outbound agents should not thank the member for calling them. Keep
-        # the existing generic goodbye unless that agent supplies its own.
-        for line in self.agent_context.instructions.splitlines():
-            label, separator, text = line.partition(":")
-            if separator and label.strip().upper() == "SPOKEN_GOODBYE":
-                goodbye = text.strip()
-                if 0 < len(goodbye) <= 500:
-                    return goodbye
-        return "Thank you for calling. Goodbye."
 
     def _uses_french_agent(self) -> bool:
         return uses_french(self._agent_language())
@@ -1241,13 +1225,19 @@ class ConversationPipeline:
                 # the committed final, and the handler checks explicit intent again.
                 attempt.tool_calls = [ActionToolCall("demo-" + attempt.id, DEMO_TOOL, {})]
             else:
+                available_tools = ([SPEECH_GATE_TOOL] + (
+                    self.action_tools if self.engagement.speech_enabled and not self.pending_action else []
+                ) if self.config.engagement_enabled else self.action_tools)
+                if not attempt.authorized:
+                    available_tools = [
+                        tool for tool in available_tools
+                        if (tool.get("function", {}) or {}).get("name") != "end_call"
+                    ]
                 attempt.tool_calls = await self._stream_llm_and_tts(
                     attempt,
                     messages,
                     phase="prompt_first",
-                    tools=([SPEECH_GATE_TOOL] + (
-                        self.action_tools if self.engagement.speech_enabled and not self.pending_action else []
-                    ) if self.config.engagement_enabled else self.action_tools),
+                    tools=available_tools,
                 )
             if attempt.speech_control:
                 if not attempt.authorized:
@@ -1332,51 +1322,18 @@ class ConversationPipeline:
                 elif call.name in BANK_TOOLS:
                     await self._run_banking_tools(attempt, messages, attempt.tool_calls)
                 elif call.name == "end_call":
-                    committed_text = self.final_text if attempt.authorized else ""
-                    closing_intent = explicit_end_call_intent(committed_text)
-                    self.trace.record(
-                        "end_call_semantic_validation",
-                        turn_id=self.turn_id,
-                        attempt_id=attempt.id,
-                        reason=(
-                            "explicit_committed_closing_intent"
-                            if closing_intent
-                            else "committed_transcript_has_no_explicit_closing_intent"
-                        ),
-                        valid=closing_intent,
-                    )
-                    if not closing_intent:
+                    # end_call is offered only to an authorized, committed turn.
+                    # The model is the intent decision-maker; fixed phrase matching
+                    # would reject ordinary farewells and trigger a second LLM call.
+                    if not attempt.authorized:
                         self.trace.record(
-                            "end_call_rejected",
+                            "end_call_deferred",
                             turn_id=self.turn_id,
                             attempt_id=attempt.id,
-                            reason="deterministic_closing_intent_gate_vetoed_llm_tool_call",
+                            reason="end_call_requires_committed_caller_turn",
                         )
                         attempt.tool_calls = []
-                        attempt.held_audio.clear()
                         attempt.answer = ""
-                        retry_messages = [
-                            {
-                                "role": "system",
-                                "content": (
-                                    f"{self.system_prompt}\n\n"
-                                    "The caller's latest committed message does not explicitly end "
-                                    "the conversation. Answer that message normally and continue the "
-                                    "call. Do not end or offer to end the call in this response."
-                                ),
-                            },
-                            *self._recent_history(attempt),
-                            {"role": "user", "content": committed_text},
-                        ]
-                        # Recovery is deliberately response-only. A mistaken
-                        # hang-up must not cascade into a different action tool.
-                        await self._stream_llm_and_tts(
-                            attempt,
-                            retry_messages,
-                            phase="end_call_recovery",
-                            tools=None,
-                        )
-                        attempt.initial_answer = attempt.answer.strip()
                     else:
                         attempt.held_audio.clear()
                         attempt.answer = ""
@@ -1385,16 +1342,17 @@ class ConversationPipeline:
                             "end_call_authorized",
                             turn_id=self.turn_id,
                             attempt_id=attempt.id,
-                            reason="committed_caller_closing_turn_authorized_hangup",
+                            reason="committed_model_selected_end_call_tool",
                         )
-                        if self._uses_french_agent():
-                            await self._generate_natural_action_response(
-                                attempt, "Close the conversation warmly and briefly. Do not ask a new question.",
-                                {"kind": "caller_requested_call_end"}, phase="end_call_goodbye",
-                            )
-                        else:
+                        await self._generate_natural_action_response(
+                            attempt,
+                            "Close the conversation warmly and briefly. Do not ask a new question.",
+                            {"kind": "caller_requested_call_end"}, phase="end_call_goodbye",
+                        )
+                        if not attempt.answer.strip() and not attempt.cancelled:
                             await self._speak_text(
-                                attempt, self.closing_goodbye_text(), phase="end_call_goodbye",
+                                attempt, "Thank you for sharing that with me. Take care.",
+                                phase="end_call_goodbye_fallback",
                             )
                 else:
                     prompt = await confirmation_prompt(
@@ -1981,7 +1939,10 @@ class ConversationPipeline:
         return "unclear"
 
     def _recent_history(self, attempt: Attempt | None = None) -> list[dict]:
-        messages = self.memory.context(exclude_turn_id=attempt.turn_id if attempt else self.turn_id)
+        messages = self.memory.context(
+            exclude_turn_id=attempt.turn_id if attempt else self.turn_id,
+            include_reasoning=(self.config.llm_provider == "deepseek" and self.config.llm_enable_thinking),
+        )
         # Pin existing application state; summaries cannot create or confirm actions.
         state = {}
         if self.config.engagement_enabled:
@@ -2002,11 +1963,13 @@ class ConversationPipeline:
         return messages
 
     def _retain_tool_result(self, attempt: Attempt, call: ActionToolCall, body: dict) -> tuple[dict, dict]:
-        request = {"role": "assistant", "content": None, "tool_calls": [{
+        request = {"role": "assistant", "content": call.assistant_content, "tool_calls": [{
             "id": call.id, "type": "function", "function": {
                 "name": call.name, "arguments": json.dumps(call.arguments),
             },
         }]}
+        if call.reasoning_content:
+            request["reasoning_content"] = call.reasoning_content
         reply = {"role": "tool", "tool_call_id": call.id, "content": json.dumps(body)}
         self.memory.tool(attempt.turn_id or self.turn_id, request, reply)
         if not any(message.get("tool_call_id") == call.id for message in attempt.tool_messages):
@@ -2513,8 +2476,14 @@ class ConversationPipeline:
                            and not self.engagement.speech_enabled else {})
             if getattr(self, "directory_enabled", False) and phase in {"prompt_first", "directory_email_search"} and self.engagement.speech_enabled:
                 gate_choice = {"tool_choice": "required"}
-            stream = scoped_llm_stream(self.llm.stream(messages, tools=tools, **gate_choice),
-                                      turn_id=attempt.turn_id, attempt_id=attempt.id, phase=phase)
+            reasoning_sink = None
+            if self.config.llm_provider == "deepseek" and self.config.llm_enable_thinking:
+                reasoning_sink = lambda value: setattr(attempt, "reasoning_content", str(value or ""))
+            stream = scoped_llm_stream(
+                self.llm.stream(messages, tools=tools, **gate_choice),
+                turn_id=attempt.turn_id, attempt_id=attempt.id, phase=phase,
+                on_reasoning_content=reasoning_sink,
+            )
             if any(
                 (tool.get("function", {}) or {}).get("name") == TRANSFER_TO_AICC_TOOL
                 for tool in (tools or [])
@@ -2763,7 +2732,8 @@ class ConversationPipeline:
         turn_id = attempt.turn_id or self.turn_id
         if not attempt.proactive:
             self.memory.user(turn_id, self.final_text or attempt.hypothesis)
-        self.memory.answer(turn_id, attempt.answer.strip())
+        self.memory.answer(turn_id, attempt.answer.strip(),
+                           reasoning_content=attempt.reasoning_content)
         self.conversations.spawn(self.conversations.add_assistant(attempt.answer.strip(), turn_id=turn_id))
         await self.send({"type": "final_assistant_answer", "content": attempt.answer.strip()})
 
@@ -2848,7 +2818,8 @@ class ConversationPipeline:
         if not attempt.turn_id or not attempt.turn_id.startswith("opening-"):
             turn_id = attempt.turn_id or self.turn_id
             if released and attempt.audio_sent and attempt.answer and not attempt.response_committed:
-                self.memory.answer(turn_id, attempt.answer.strip())
+                self.memory.answer(turn_id, attempt.answer.strip(),
+                                   reasoning_content=attempt.reasoning_content)
             self.memory.finish(turn_id, interrupted=True)
         if released:
             await self.send({"type": "stop_tts"})

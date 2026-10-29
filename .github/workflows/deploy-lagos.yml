@@ -54,11 +54,18 @@ jobs:
           MOMO_FEEDBACK_AGENT_ID: ${{ vars.AICC_MOMO_FEEDBACK_AGENT_ID }}
           REPLY_GRACE_MS: ${{ vars.RVC_LAB_REPLY_GRACE_MS || '0' }}
           REPLY_GRACE_AGENT_IDS: ${{ vars.RVC_LAB_REPLY_GRACE_AGENT_IDS || '' }}
+          LLM_PROVIDER: ${{ vars.RVC_LAB_LLM_PROVIDER || 'qwen' }}
+          DEEPSEEK_MODEL: ${{ vars.RVC_LAB_DEEPSEEK_MODEL || 'deepseek-flash' }}
+          DEEPSEEK_REASONING_EFFORT: ${{ vars.RVC_LAB_DEEPSEEK_REASONING_EFFORT || 'high' }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY || '' }}
         run: |
           set -euo pipefail
           test -n "$MOMO_FEEDBACK_AGENT_ID"
           [[ "$REPLY_GRACE_MS" =~ ^[0-9]{1,4}$ ]] || { printf 'Invalid RVC_LAB_REPLY_GRACE_MS value\n' >&2; exit 1; }
           [[ "$REPLY_GRACE_AGENT_IDS" =~ ^[0-9a-fA-F,-]*$ ]] || { printf 'Invalid RVC_LAB_REPLY_GRACE_AGENT_IDS value\n' >&2; exit 1; }
+          [[ "$LLM_PROVIDER" == qwen || "$LLM_PROVIDER" == deepseek ]] || { printf 'Invalid RVC_LAB_LLM_PROVIDER value\n' >&2; exit 1; }
+          [[ "$DEEPSEEK_REASONING_EFFORT" == low || "$DEEPSEEK_REASONING_EFFORT" == high || "$DEEPSEEK_REASONING_EFFORT" == max ]] || { printf 'Invalid DeepSeek reasoning effort\n' >&2; exit 1; }
+          llm_args=(--llm-provider "$LLM_PROVIDER" --deepseek-model "$DEEPSEEK_MODEL" --deepseek-reasoning-effort "$DEEPSEEK_REASONING_EFFORT")
           research_args=()
           case "$ENABLE_HAUSA_RESEARCH" in
             true) research_args+=(--enable-hausa-research) ;;
@@ -68,7 +75,12 @@ jobs:
           release="/opt/attentive/releases/voice-ci/${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           ssh lagos-app "install -d -m 700 '$release'"
           git archive HEAD | ssh lagos-app "tar -xf - --no-same-owner -C '$release'"
-          ssh lagos-app python3 "$release/deployment/lagos/deploy.py" --release "$release" --revision "$GITHUB_SHA" --momo-feedback-agent-id "$MOMO_FEEDBACK_AGENT_ID" --reply-grace-ms "$REPLY_GRACE_MS" --reply-grace-agent-ids "$REPLY_GRACE_AGENT_IDS" "${research_args[@]}"
+          if [[ "$LLM_PROVIDER" == deepseek ]]; then
+            test -n "$DEEPSEEK_API_KEY"
+            printf '%s' "$DEEPSEEK_API_KEY" | ssh lagos-app python3 "$release/deployment/lagos/deploy.py" --release "$release" --revision "$GITHUB_SHA" --momo-feedback-agent-id "$MOMO_FEEDBACK_AGENT_ID" --reply-grace-ms "$REPLY_GRACE_MS" --reply-grace-agent-ids "$REPLY_GRACE_AGENT_IDS" "${research_args[@]}" "${llm_args[@]}" --deepseek-api-key-stdin
+          else
+            ssh lagos-app python3 "$release/deployment/lagos/deploy.py" --release "$release" --revision "$GITHUB_SHA" --momo-feedback-agent-id "$MOMO_FEEDBACK_AGENT_ID" --reply-grace-ms "$REPLY_GRACE_MS" --reply-grace-agent-ids "$REPLY_GRACE_AGENT_IDS" "${research_args[@]}" "${llm_args[@]}"
+          fi
           printf 'Lagos voice revision `%s` is deployed.\n' "$GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"
       - name: Remove runner SSH key
         if: always()

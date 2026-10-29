@@ -36,28 +36,35 @@ _LANGUAGE_NAMES = {
 _CJK = re.compile(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
 
 _llm_trace_scope: ContextVar[dict | None] = ContextVar("llm_trace_scope", default=None)
+_llm_reasoning_sink: ContextVar[Callable[[str], None] | None] = ContextVar(
+    "llm_reasoning_sink", default=None
+)
 
 
-async def scoped_llm_stream(stream, *, turn_id, attempt_id, phase):
+async def scoped_llm_stream(stream, *, turn_id, attempt_id, phase, on_reasoning_content=None):
     """Scope observations to this iterator, including concurrent/background turns."""
     context = dict(turn_id=turn_id, attempt_id=attempt_id, phase=phase)
     iterator = stream.__aiter__()
     try:
         while True:
             token = _llm_trace_scope.set(context)
+            reasoning_token = _llm_reasoning_sink.set(on_reasoning_content)
             try:
                 event = await anext(iterator)
             except StopAsyncIteration:
                 break
             finally:
+                _llm_reasoning_sink.reset(reasoning_token)
                 _llm_trace_scope.reset(token)
             yield event
     finally:
         token = _llm_trace_scope.set(context)
+        reasoning_token = _llm_reasoning_sink.set(on_reasoning_content)
         try:
             if hasattr(iterator, "aclose"):
                 await iterator.aclose()
         finally:
+            _llm_reasoning_sink.reset(reasoning_token)
             _llm_trace_scope.reset(token)
 
 
@@ -923,8 +930,18 @@ class RLLMClient:
                 "thinking": bool(self.config.llm_enable_thinking),
             },
         }
+        provider_host = (urlsplit(self.config.llm_base_url).hostname or "").lower()
+        if self.config.llm_provider == "deepseek" or provider_host == "api.deepseek.com":
+            payload.pop("chat_template_kwargs", None)
+            payload.pop("temperature", None)  # DeepSeek thinking mode ignores sampling temperature.
+            payload["thinking"] = {
+                "type": "enabled" if self.config.llm_enable_thinking else "disabled"
+            }
+            payload["reasoning_effort"] = (
+                self.config.llm_reasoning_effort if self.config.llm_enable_thinking else "none"
+            )
         # Groq rejects the self-hosted Qwen chat-template extension.
-        if urlsplit(self.config.llm_base_url).hostname == "api.groq.com":
+        if provider_host == "api.groq.com":
             payload.pop("chat_template_kwargs", None)
         if tools:
             payload["tools"] = tools
@@ -944,13 +961,15 @@ class RLLMClient:
             observed_usage = {}
             scope = _llm_trace_scope.get() or {}
             phase = str(scope.get("phase") or "")
-            # Full provider frames can contain generated text. Keep them only for
-            # the targeted end-call follow-up diagnostics, never normal turns.
-            capture_raw_response = phase in {"end_call_recovery", "end_call_goodbye"}
+            # Capture targeted closing responses and only failed/empty normal
+            # turns. Successful caller-facing output is never copied to traces.
+            capture_raw_response = phase in {"end_call_recovery", "end_call_goodbye", "prompt_first"}
             raw_response_frames: list[str] = []
             raw_response_bytes = 0
             raw_response_truncated = False
             finish_reasons: list[str | None] = []
+            reasoning_content = ""
+            assistant_content = ""
             response_status: int | None = None
             response_content_type: str | None = None
             raw_http_error_body: str | None = None
@@ -1034,16 +1053,29 @@ class RLLMClient:
                             data = line[5:].strip()
                             if capture_raw_response:
                                 # Include the provider's exact SSE data payload,
-                                # bounded to 16 KiB per attempt for trace safety.
-                                encoded_size = len(data.encode("utf-8"))
+                                # bounded to 16 KiB per attempt. DeepSeek's private
+                                # reasoning field is redacted before it can reach disk.
+                                safe_data = data
+                                if self.config.llm_provider == "deepseek" and data != "[DONE]":
+                                    try:
+                                        safe_item = json.loads(data)
+                                        for safe_choice in safe_item.get("choices") or []:
+                                            if isinstance(safe_choice.get("delta"), dict):
+                                                safe_choice["delta"].pop("reasoning_content", None)
+                                            if isinstance(safe_choice.get("message"), dict):
+                                                safe_choice["message"].pop("reasoning_content", None)
+                                        safe_data = json.dumps(safe_item, ensure_ascii=False, separators=(",", ":"))
+                                    except (TypeError, json.JSONDecodeError):
+                                        safe_data = "[unparsed DeepSeek frame redacted]"
+                                encoded_size = len(safe_data.encode("utf-8"))
                                 remaining = max(0, 16 * 1024 - raw_response_bytes)
                                 if remaining:
                                     if encoded_size <= remaining:
-                                        raw_response_frames.append(data)
+                                        raw_response_frames.append(safe_data)
                                         raw_response_bytes += encoded_size
                                     else:
                                         raw_response_frames.append(
-                                            data.encode("utf-8")[:remaining].decode("utf-8", errors="ignore")
+                                            safe_data.encode("utf-8")[:remaining].decode("utf-8", errors="ignore")
                                         )
                                         raw_response_bytes += remaining
                                         raw_response_truncated = True
@@ -1074,6 +1106,9 @@ class RLLMClient:
                                     continue
                                 choice_delta = item["choices"][0].get("delta", {})
                                 delta = choice_delta.get("content") or ""
+                                reasoning_delta = choice_delta.get("reasoning_content") or ""
+                                reasoning_content += str(reasoning_delta)
+                                assistant_content += str(delta)
                                 parsed_text_chars += len(str(delta))
                                 for fragment in choice_delta.get("tool_calls") or []:
                                     parsed_tool_call_count += 1
@@ -1110,6 +1145,10 @@ class RLLMClient:
                 # an empty completion. Re-issue the request a bounded number of times
                 # before letting the caller-facing fallback take over.
                 got_tool_calls = any(str(call.get("name") or "") for call in pending_calls.values())
+                if reasoning_content and produced_this_request and not got_tool_calls:
+                    sink = _llm_reasoning_sink.get()
+                    if sink is not None:
+                        sink(reasoning_content)
                 if not produced_this_request and not got_tool_calls:
                     if empty_retries_used < max_empty_retries:
                         empty_retries_used += 1
@@ -1143,7 +1182,12 @@ class RLLMClient:
                     first_text_observed=first_text_ns is not None,
                     total_ms=round(((request_finished_ns or time.perf_counter_ns()) - request_started) / 1e6, 3),
                     **observed_usage)
-                if capture_raw_response:
+                capture_failed_prompt = (
+                    phase == "prompt_first" and not produced_this_request
+                    and not any(str(call.get("name") or "") not in {"", "end_call"}
+                                for call in pending_calls.values())
+                )
+                if capture_raw_response and (phase != "prompt_first" or capture_failed_prompt):
                     self._observe(
                         "llm_provider_raw_response",
                         request_id=request_id,
@@ -1167,6 +1211,8 @@ class RLLMClient:
                     id=call["id"] or f"tool-call-{index}",
                     name=call["name"],
                     arguments=parse_tool_arguments(call["arguments"]),
+                    reasoning_content=reasoning_content,
+                    assistant_content=assistant_content or None,
                 )
 
 

@@ -28,7 +28,8 @@ BASE_ROUTE = {
 
 class LagosReleaseTests(unittest.TestCase):
     def exercise_release(self, *, enabled=False, old_value=None, drift=False,
-                         reply_grace_ms='0', reply_grace_agent_ids=''):
+                         reply_grace_ms='0', reply_grace_agent_ids='',
+                         llm_provider='qwen', deepseek_api_key=''):
         with TemporaryDirectory() as directory:
             root = Path(directory)
             revision = 'a' * 40
@@ -49,6 +50,16 @@ class LagosReleaseTests(unittest.TestCase):
 
             updates = dict(release.LAGOS_ASR_ENV)
             updates.update(release.reply_grace_env(reply_grace_ms, reply_grace_agent_ids))
+            updates['RVC_LAB_LLM_PROVIDER'] = llm_provider
+            updates['RVC_LAB_DEEPSEEK_API_KEY'] = deepseek_api_key if llm_provider == 'deepseek' else ''
+            if llm_provider == 'deepseek':
+                updates.update({
+                    'RVC_LAB_DEEPSEEK_BASE_URL': 'https://api.deepseek.com',
+                    'RVC_LAB_DEEPSEEK_MODEL': 'deepseek-flash',
+                    'RVC_LAB_DEEPSEEK_THINKING': 'true',
+                    'RVC_LAB_DEEPSEEK_REASONING_EFFORT': 'high',
+                    'RVC_LAB_DEEPSEEK_API_KEY': deepseek_api_key,
+                })
             if enabled:
                 updates[release.HAUSA_RESEARCH_KEY] = 'true'
             momo_route = release.momo_feedback_route(previous_env, AGENT_ID)
@@ -71,12 +82,11 @@ class LagosReleaseTests(unittest.TestCase):
                 if drift:
                     with self.assertRaisesRegex(RuntimeError, 'environment or mounts'):
                         release.deploy(target, revision, enabled, AGENT_ID,
-                                       reply_grace_ms, reply_grace_agent_ids)
+                                       reply_grace_ms, reply_grace_agent_ids,
+                                       llm_provider, 'deepseek-flash', 'high', deepseek_api_key)
                     self.assertFalse((target / 'DEPLOYED').exists())
                     rollback = json.loads((target / 'voice-rollback.json').read_text())
-                    rollback_env = {
-                        key: previous_env.get(key) for key in release.LAGOS_ASR_ENV
-                    }
+                    rollback_env = {key: previous_env.get(key) for key in updates}
                     rollback_env['RVC_AICC_SIP_ROUTE'] = previous_env['RVC_AICC_SIP_ROUTE']
                     rollback_env[release.REPLY_GRACE_MS_KEY] = previous_env.get(
                         release.REPLY_GRACE_MS_KEY)
@@ -88,10 +98,15 @@ class LagosReleaseTests(unittest.TestCase):
                     self.assertIn('before-', rollback['services']['voice']['image'])
                 else:
                     release.deploy(target, revision, enabled, AGENT_ID,
-                                   reply_grace_ms, reply_grace_agent_ids)
+                                   reply_grace_ms, reply_grace_agent_ids,
+                                   llm_provider, 'deepseek-flash', 'high', deepseek_api_key)
                     self.assertTrue((target / 'DEPLOYED').exists())
                 override = json.loads((target / 'voice-ci.json').read_text())['services']['voice']
                 self.assertEqual(override.get('environment', {}), updates)
+                if llm_provider == 'deepseek':
+                    plan = json.loads((target / 'plan.json').read_text())
+                    self.assertEqual(plan['environment_updates']['RVC_LAB_DEEPSEEK_API_KEY'], '[redacted]')
+                    self.assertNotIn(deepseek_api_key, (target / 'plan.json').read_text())
                 route = json.loads(override['environment']['RVC_AICC_SIP_ROUTE'])
                 for number in ('0301051', '301051'):
                     self.assertEqual(route['did_routes'][number]['config_agent_id'], AGENT_ID)
@@ -128,6 +143,25 @@ class LagosReleaseTests(unittest.TestCase):
 
     def test_normal_release_preserves_environment(self):
         self.exercise_release()
+
+    def test_deepseek_release_adds_settings_and_redacts_key_from_plan(self):
+        self.exercise_release(llm_provider='deepseek', deepseek_api_key='test-secret')
+
+    def test_deepseek_release_requires_api_key(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            revision = 'a' * 40
+            target = root / f'{revision}-1-1'
+            target.mkdir()
+            previous = {'Id': 'old-container', 'Image': 'old-image',
+                        'Config': {'Env': ['RVC_AICC_SIP_ROUTE=' + json.dumps(BASE_ROUTE)]},
+                        'Mounts': []}
+            with patch.object(release, 'RELEASE_ROOT', root), \
+                 patch.object(release, 'inspect_voice', return_value=(previous, [root / 'compose.yml'])), \
+                 patch.object(release, 'run'):
+                with self.assertRaisesRegex(ValueError, 'API key is required'):
+                    release.deploy(target, revision, False, AGENT_ID,
+                                   llm_provider='deepseek')
 
     def test_opt_in_adds_only_research_flag(self):
         self.exercise_release(enabled=True)

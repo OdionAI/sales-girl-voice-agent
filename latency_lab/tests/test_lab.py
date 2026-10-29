@@ -90,6 +90,42 @@ class PipelineHelpersTest(unittest.TestCase):
     def test_qwen_model_id_matches_gateway_advertisement(self) -> None:
         self.assertEqual(LabConfig().llm_model, "qwen3.8-27b")
 
+    def test_deepseek_environment_requires_key_and_selects_provider_config(self) -> None:
+        with patch.dict("os.environ", {
+            "RVC_LAB_LLM_PROVIDER": "deepseek",
+            "RVC_LAB_DEEPSEEK_API_KEY": "unit-test-key",
+            "RVC_LAB_DEEPSEEK_MODEL": "deepseek-flash",
+            "RVC_LAB_DEEPSEEK_REASONING_EFFORT": "high",
+        }, clear=True):
+            config = lab_config_from_environ()
+        self.assertEqual(config.llm_provider, "deepseek")
+        self.assertEqual(config.llm_base_url, "https://api.deepseek.com")
+        self.assertEqual(config.llm_model, "deepseek-flash")
+        self.assertEqual(config.llm_api_key, "unit-test-key")
+        self.assertTrue(config.llm_enable_thinking)
+        self.assertEqual(config.llm_reasoning_effort, "high")
+
+    def test_deepseek_provider_cannot_be_switched_by_session_metadata(self) -> None:
+        config = LabConfig(
+            llm_provider="deepseek", llm_base_url="https://api.deepseek.com",
+            llm_model="deepseek-flash", llm_api_key="provider-key",
+            llm_enable_thinking=True,
+        )
+        updated = apply_runtime_overrides(config, {
+            "llm_model": "attacker-model", "llm_base_url": "https://example.invalid/v1",
+            "llm_api_key": "session-key", "llm_disable_thinking": "true",
+        })
+        self.assertEqual(updated.llm_provider, "deepseek")
+        self.assertEqual(updated.llm_base_url, "https://api.deepseek.com")
+        self.assertEqual(updated.llm_model, "deepseek-flash")
+        self.assertEqual(updated.llm_api_key, "provider-key")
+        self.assertTrue(updated.llm_enable_thinking)
+
+    def test_deepseek_environment_requires_a_key(self) -> None:
+        with patch.dict("os.environ", {"RVC_LAB_LLM_PROVIDER": "deepseek"}, clear=True):
+            with self.assertRaisesRegex(ValueError, "API_KEY is required"):
+                lab_config_from_environ()
+
     def test_voice_lab_overrides_remap_model_endpoints(self) -> None:
         config = apply_runtime_overrides(
             LabConfig(),
