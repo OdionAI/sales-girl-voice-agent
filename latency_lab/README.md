@@ -55,8 +55,8 @@ sequenceDiagram
         end
     end
     opt committed caller turn clearly closes a SIP call
-        L-->>C: end_call function with no arguments
-        C->>T: deterministic short goodbye
+        L-->>C: natural farewell and end_call function in one response
+        C->>T: play the model's farewell (short fallback only if empty)
         T->>B: drain final goodbye completely
         C->>B: delete LiveKit room; SIP edge emits BYE
     end
@@ -176,11 +176,15 @@ tools load. Non-SIP browser participants cannot activate this map.
 When that saved agent has active `builtin://end_call`, RVC exposes a native
 zero-argument `end_call` function only on committed caller turns. The LLM decides
 when the conversation is finished; the worker does not veto that decision with
-phrase matching or a second semantic check. After the model selects the tool,
-the worker asks the model for a brief, natural closing line, plays it, then
+phrase matching or a second semantic check. The model's natural farewell and
+`end_call` tool call are handled from the same response. The worker plays that
+farewell, using one short fallback only if the response has no spoken text, then
 deletes the room after playout drains; the existing LiveKit SIP edge emits BYE.
-Speculative turns cannot end a call. Trace events cover the map decision (only a
-phone suffix), authorization, goodbye playout completion, and room deletion.
+After end-call authorization, additional speech/transcription is ignored while
+the farewell drains so stale ASR output cannot trigger more replies. Speculative
+turns cannot end a call. Trace events cover the map decision (only a phone
+suffix), authorization, ignored input during closing, goodbye playout
+completion, and room deletion.
 
 The Lagos release can select one shared LLM provider for all voice agents with
 the GitHub repository variable `RVC_LAB_LLM_PROVIDER`. `qwen` remains the
@@ -287,14 +291,15 @@ the LLM after those retries, the agent speaks a deterministic temporary-service
 message instead of leaving the caller in silence; traces distinguish the
 provider error, degraded response, and completed fallback playout.
 
-For the targeted `end_call_recovery` and `end_call_goodbye` phases, traces also
-record `llm_provider_raw_response`: HTTP status/content type, provider
+For the targeted `end_call_recovery` phase and ordinary prompt-first calls,
+traces also record `llm_provider_raw_response`: HTTP status/content type, provider
 `finish_reason` values, parsed choice/text/tool-fragment counts, and the exact
 SSE `data:` payloads (or an HTTP error body). Raw data is capped at 16 KiB per
-request attempt and is not collected for ordinary conversation turns. Since a
-provider response can contain generated caller-specific text, these diagnostics
-are stored only in the existing private trace directory and should be handled
-like conversation traces. They never include request headers or API keys.
+request attempt and is captured only for prompt-first and recovery requests.
+Since a provider response can contain generated caller-specific text, these
+diagnostics are stored only in the existing private trace directory and should
+be handled like conversation traces. They never include request headers or API
+keys.
 The current end-of-turn experiment uses 300 ms of silence instead of 500 ms. When
 `RVC_LAB_TTS_REF_AUDIO` and its exact `RVC_LAB_TTS_REF_TEXT` are supplied, the lab
 uses fixed ICL Base synthesis rather than generating a new VoiceDesign speaker.
