@@ -102,7 +102,7 @@ class PipelineHelpersTest(unittest.TestCase):
         self.assertEqual(config.llm_base_url, "https://api.deepseek.com")
         self.assertEqual(config.llm_model, "deepseek-flash")
         self.assertEqual(config.llm_api_key, "unit-test-key")
-        self.assertTrue(config.llm_enable_thinking)
+        self.assertFalse(config.llm_enable_thinking)
         self.assertEqual(config.llm_reasoning_effort, "high")
 
     def test_deepseek_provider_cannot_be_switched_by_session_metadata(self) -> None:

@@ -56,7 +56,7 @@ class LagosReleaseTests(unittest.TestCase):
                 updates.update({
                     'RVC_LAB_DEEPSEEK_BASE_URL': 'https://api.deepseek.com',
                     'RVC_LAB_DEEPSEEK_MODEL': 'deepseek-flash',
-                    'RVC_LAB_DEEPSEEK_THINKING': 'true',
+                    'RVC_LAB_DEEPSEEK_THINKING': 'false',
                     'RVC_LAB_DEEPSEEK_REASONING_EFFORT': 'high',
                     'RVC_LAB_DEEPSEEK_API_KEY': deepseek_api_key,
                 })

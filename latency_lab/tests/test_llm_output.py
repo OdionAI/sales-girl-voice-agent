@@ -114,14 +114,14 @@ class LLMOutputTest(unittest.IsolatedAsyncioTestCase):
         events = await self.output([{"content": "Hello. "}, {"content": "How can I help?"}])
         self.assertEqual(events, ["Hello. ", "How can I help?"])
 
-    async def test_deepseek_thinking_payload_and_reasoning_are_kept_out_of_speech(self):
+    async def test_deepseek_thinking_is_disabled_and_reasoning_is_kept_out_of_speech(self):
         session = FakeSession([
             {"reasoning_content": "private reasoning", "content": "Thanks for telling me."},
         ])
         config = LabConfig(
             llm_provider="deepseek", llm_base_url="https://api.deepseek.com",
             llm_model="deepseek-flash", llm_api_key="test-key",
-            llm_enable_thinking=True, llm_reasoning_effort="high",
+            llm_enable_thinking=False, llm_reasoning_effort="high",
         )
         client = RLLMClient(config, session)
         reasoning = []
@@ -132,8 +132,8 @@ class LLMOutputTest(unittest.IsolatedAsyncioTestCase):
         )]
         self.assertEqual(events, ["Thanks for telling me."])
         self.assertEqual(reasoning, ["private reasoning"])
-        self.assertEqual(session.payload["thinking"], {"type": "enabled"})
-        self.assertEqual(session.payload["reasoning_effort"], "high")
+        self.assertEqual(session.payload["thinking"], {"type": "disabled"})
+        self.assertEqual(session.payload["reasoning_effort"], "none")
         self.assertNotIn("chat_template_kwargs", session.payload)
         self.assertNotIn("temperature", session.payload)
 
@@ -147,12 +147,15 @@ class LLMOutputTest(unittest.IsolatedAsyncioTestCase):
         config = LabConfig(
             llm_provider="deepseek", llm_base_url="https://api.deepseek.com",
             llm_model="deepseek-flash", llm_api_key="test-key",
-            llm_enable_thinking=True,
+            llm_enable_thinking=False,
         )
         events = [event async for event in RLLMClient(config, session).stream([], tools=TOOLS)]
         call = next(event for event in events if isinstance(event, ActionToolCall))
         self.assertEqual(call.reasoning_content, "private reasoning")
         self.assertEqual(call.assistant_content, "Checking that.")
+        self.assertEqual(session.payload["thinking"], {"type": "disabled"})
+        self.assertEqual(session.payload["reasoning_effort"], "none")
+        self.assertEqual(session.payload["tool_choice"], "auto")
         self.assertEqual("".join(event for event in events if isinstance(event, str)), "Checking that.")
 
     async def test_filtered_provider_output_is_used_for_transcripts_and_tts(self):
