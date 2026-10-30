@@ -20,7 +20,7 @@ HAUSA_RESEARCH_KEY = 'RVC_LAB_ENABLE_HAUSA_TWB_VOICES'
 REPLY_GRACE_MS_KEY = 'RVC_LAB_REPLY_GRACE_MS'
 REPLY_GRACE_AGENT_IDS_KEY = 'RVC_LAB_REPLY_GRACE_AGENT_IDS'
 INACTIVITY_PILOT_AGENT_IDS_KEY = 'RVC_LAB_INACTIVITY_PILOT_AGENT_IDS'
-DEFAULT_INACTIVITY_PILOT_AGENT_ID = 'ccc440c5-452d-4690-abc0-61758c11cebd'
+DEFAULT_INACTIVITY_PILOT_AGENT_IDS = '*'
 LAGOS_ASR_ENV = {
     'RVC_LAB_STT_PROVIDER': 'self_hosted',
     'RVC_LAB_STT_MODEL': 'Qwen3-ASR',
@@ -178,10 +178,16 @@ def reply_grace_env(delay_ms='0', agent_ids=''):
 
 
 def inactivity_pilot_env(agent_ids=None):
-    # Temporary single-agent production pilot; unset deployments select Amaka.
+    # The runtime applies this only to successfully loaded RVC browser/SIP calls.
     if agent_ids is None:
-        agent_ids = DEFAULT_INACTIVITY_PILOT_AGENT_ID
+        agent_ids = DEFAULT_INACTIVITY_PILOT_AGENT_IDS
     raw_ids = [value.strip() for value in str(agent_ids).split(',') if value.strip()]
+    if raw_ids == ['*']:
+        return {INACTIVITY_PILOT_AGENT_IDS_KEY: '*'}
+    if len(raw_ids) == 1 and raw_ids[0].lower() in {'off', 'none', 'false'}:
+        return {INACTIVITY_PILOT_AGENT_IDS_KEY: ''}
+    if '*' in raw_ids:
+        raise ValueError('Wildcard must be used alone in RVC_LAB_INACTIVITY_PILOT_AGENT_IDS')
     try:
         normalized_ids = [str(uuid.UUID(value)) for value in raw_ids]
     except ValueError as exc:

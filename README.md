@@ -85,12 +85,15 @@ playout drains.
 
 ## Current runtime status
 
-The Amaka browser inactivity pilot is implemented behind a worker-side agent-ID
-allowlist. The Lagos release path enables it for Amaka by default; local workers
-remain off unless explicitly configured. It checks in after
-10 seconds waiting for the caller and ends an unanswered call after a second
-15-second interval. SIP calls are excluded. See
-[`latency_lab/ENGAGEMENT.md`](latency_lab/ENGAGEMENT.md) for the pilot contract.
+Lagos RVC inactivity handling is implemented behind the worker-side
+`RVC_LAB_INACTIVITY_PILOT_AGENT_IDS` setting (default `*`). The release workflow enables it for
+successfully loaded agents on RVC browser and SIP calls; local workers remain off
+unless explicitly configured. It checks in after 10 seconds waiting for the
+caller and ends an unanswered call after a second 15-second interval, with
+language-aware fallback phrases. Set the GitHub Actions variable to `off` to
+disable on the next release, or set comma-separated internal agent IDs to scope
+it. See
+[`latency_lab/ENGAGEMENT.md`](latency_lab/ENGAGEMENT.md) for the runtime contract.
 
 Current stable contract:
 

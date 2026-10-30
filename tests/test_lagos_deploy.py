@@ -177,11 +177,19 @@ class LagosReleaseTests(unittest.TestCase):
     def test_agent_scoped_reply_grace_can_be_released(self):
         self.exercise_release(reply_grace_ms='500', reply_grace_agent_ids=AGENT_ID)
 
-    def test_inactivity_pilot_agent_allowlist_is_validated_and_released(self):
+    def test_inactivity_pilot_supports_all_rvc_agents_and_validates_allowlists(self):
+        self.assertEqual(release.inactivity_pilot_env()[
+            release.INACTIVITY_PILOT_AGENT_IDS_KEY], '*')
+        self.assertEqual(release.inactivity_pilot_env('*')[
+            release.INACTIVITY_PILOT_AGENT_IDS_KEY], '*')
+        self.assertEqual(release.inactivity_pilot_env('off')[
+            release.INACTIVITY_PILOT_AGENT_IDS_KEY], '')
         self.assertEqual(release.inactivity_pilot_env(AGENT_ID)[
             release.INACTIVITY_PILOT_AGENT_IDS_KEY], AGENT_ID)
         with self.assertRaisesRegex(ValueError, 'must contain UUIDs'):
             release.inactivity_pilot_env('not-an-agent')
+        with self.assertRaisesRegex(ValueError, 'Wildcard must be used alone'):
+            release.inactivity_pilot_env(f'*,{AGENT_ID}')
 
     def test_reply_grace_requires_agent_id_and_bounded_delay(self):
         with self.assertRaisesRegex(ValueError, 'AGENT_IDS is required'):

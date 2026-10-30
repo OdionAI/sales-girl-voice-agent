@@ -428,11 +428,13 @@ async def entrypoint(ctx: JobContext) -> None:
                 and (identity.get("identity_type") == "web"
                      or str(ctx.room.name or "").startswith("rvc-livekit-"))
             ),
+            is_sip=bool(sip_route),
         )
         if config.inactivity_pilot_enabled:
             trace.record(
                 "inactivity_pilot_enabled",
-                reason="configured_browser_agent",
+                reason="configured_rvc_call",
+                call_surface="sip" if sip_route else "browser",
                 agent_id=agent_context.agent_id,
             )
 
