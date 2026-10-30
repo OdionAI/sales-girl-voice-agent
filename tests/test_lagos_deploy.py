@@ -182,7 +182,7 @@ class LagosReleaseTests(unittest.TestCase):
             release.INACTIVITY_PILOT_AGENT_IDS_KEY], '*')
         self.assertEqual(release.inactivity_pilot_env('*')[
             release.INACTIVITY_PILOT_AGENT_IDS_KEY], '*')
-        self.assertEqual(release.inactivity_pilot_env('off')[
+        self.assertEqual(release.inactivity_pilot_env('')[
             release.INACTIVITY_PILOT_AGENT_IDS_KEY], '')
         self.assertEqual(release.inactivity_pilot_env(AGENT_ID)[
             release.INACTIVITY_PILOT_AGENT_IDS_KEY], AGENT_ID)

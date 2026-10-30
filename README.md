@@ -90,9 +90,9 @@ Lagos RVC inactivity handling is implemented behind the worker-side
 successfully loaded agents on RVC browser and SIP calls; local workers remain off
 unless explicitly configured. It checks in after 10 seconds waiting for the
 caller and ends an unanswered call after a second 15-second interval, with
-language-aware fallback phrases. Set the GitHub Actions variable to `off` to
-disable on the next release, or set comma-separated internal agent IDs to scope
-it. See
+language-aware fallback phrases. To disable it on a later release, set
+`DEFAULT_INACTIVITY_PILOT_AGENT_IDS` in the Lagos deploy script to an empty
+string and use the normal branch workflow. See
 [`latency_lab/ENGAGEMENT.md`](latency_lab/ENGAGEMENT.md) for the runtime contract.
 
 Current stable contract:

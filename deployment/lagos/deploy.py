@@ -184,8 +184,6 @@ def inactivity_pilot_env(agent_ids=None):
     raw_ids = [value.strip() for value in str(agent_ids).split(',') if value.strip()]
     if raw_ids == ['*']:
         return {INACTIVITY_PILOT_AGENT_IDS_KEY: '*'}
-    if len(raw_ids) == 1 and raw_ids[0].lower() in {'off', 'none', 'false'}:
-        return {INACTIVITY_PILOT_AGENT_IDS_KEY: ''}
     if '*' in raw_ids:
         raise ValueError('Wildcard must be used alone in RVC_LAB_INACTIVITY_PILOT_AGENT_IDS')
     try:

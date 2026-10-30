@@ -5,15 +5,15 @@ remain disabled unless configured.
 
 ## Lagos RVC inactivity handling
 
-The Lagos release defaults the GitHub Actions variable
-`RVC_LAB_INACTIVITY_PILOT_AGENT_IDS` to `*`. Set it to a comma-separated list of
-internal agent IDs to scope behavior, or `off` to disable it. The worker applies
-it only after a
-configured agent has been successfully loaded and only on its RVC browser or SIP
+The Lagos release sets `RVC_LAB_INACTIVITY_PILOT_AGENT_IDS=*` by default. The
+worker applies it only after a configured agent has been successfully loaded
+and only on its RVC browser or SIP
 routes. This includes browser sessions and routed inbound/outbound calls; it does
 not change agents served by other workers or runtimes. Local runs stay disabled
-unless explicitly configured. The setting applies to new calls after the normal
-Lagos release workflow deploys the source.
+unless explicitly configured. The deployment script accepts a comma-separated
+agent ID list to scope the behavior; an empty list disables it. To roll it back,
+change `DEFAULT_INACTIVITY_PILOT_AGENT_IDS` in the Lagos deploy script to an
+empty string and release through the normal branch workflow.
 
 For eligible calls, the existing contextual engagement controller gets an
 opportunity after 10 seconds waiting for the caller. It uses the current
