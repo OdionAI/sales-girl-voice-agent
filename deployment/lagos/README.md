@@ -134,6 +134,25 @@ preserves the current environment. Pair this with the dashboard production
 build flag `NEXT_PUBLIC_ENABLE_HAUSA_TWB_VOICES=true`. These are account-wide
 research controls, not commercial licensing clearance.
 
+## Dynamic Accent Nigerian Pidgin voices
+
+Explicit saved `maro` and `rukky` IDs opt into `dynamic-accent-pidgin-flash`
+at `/tts-pidgin-dynamic/v1/audio/speech`. All other Pidgin choices keep the
+existing Favour route and settings. SBPN, the configured LLM, prompts, tools,
+voice authentication and turn/playback control are unchanged.
+
+This route requests seed 0, speed 1 and native 24 kHz mono PCM16. It must not
+use Favour's 16-to-24 kHz resampler or numeric spelling adapter. Requests are
+losslessly split at 140 characters, with no retries or voice fallback after a
+provider error. The worker checks model, named voice and audio headers before
+forwarding any audio. Closing the generator cancels the request and does not
+start the next segment.
+
+The tested model is a serial NPU/CPU hybrid, not a real-time latency guarantee.
+Its sentence-block HTTP streaming is not token-level streaming. Only enable
+new agents after a verified backend handoff and real public PCM, installed-worker
+and isolated call checks. Unit fixtures alone do not establish call readiness.
+
 ## Igbo evaluation speakers
 
 Igbo agents can save `chinedu` (Ibo1), `eze` (Ibo2) or `ada` (Ibo3).
