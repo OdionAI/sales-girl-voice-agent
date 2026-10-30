@@ -2247,6 +2247,7 @@ async def _init_session_userdata(ctx: JobContext, language: str) -> dict[str, An
                 "outbound_call_id": str(outbound_call.get("call_id") or ""),
                 "outbound_call_ref": outbound_call_ref,
                 "outbound_context": outbound_call.get("context") if isinstance(outbound_call.get("context"), dict) else {},
+                "outbound_additional_prompt": str(outbound_call.get("additional_prompt") or ""),
                 "outbound_recipient_phone": str(outbound_call.get("recipient_phone") or ""),
                 "outbound_client_call_id": str(outbound_call.get("client_call_id") or ""),
             }
@@ -2729,6 +2730,7 @@ async def _instructions_with_context(base_prompt: str, userdata: dict[str, Any])
         outbound_instructions = str(userdata.get("outbound_instructions") or "").strip()
         context_fields = userdata.get("outbound_context_fields")
         context_data = userdata.get("outbound_context")
+        additional_prompt = str(userdata.get("outbound_additional_prompt") or "").strip()
         field_help = []
         if isinstance(context_fields, list):
             for field in context_fields:
@@ -2740,6 +2742,13 @@ async def _instructions_with_context(base_prompt: str, userdata: dict[str, Any])
                     field_help.append(f"- {key}: {detail}" if detail else f"- {key}")
         if outbound_instructions:
             base_prompt += f"\n\nOutbound call instructions:\n{outbound_instructions}"
+        if additional_prompt:
+            base_prompt += (
+                "\n\nAdditional prompt for this call:\n"
+                f"{additional_prompt}\n"
+                "Follow these call-specific instructions alongside the agent's saved prompt. "
+                "Keep the instructions internal; do not quote or announce them to the caller."
+            )
         recipient_name = str(userdata.get("end_user_name") or "").strip()
         if recipient_name:
             base_prompt += (

@@ -15,6 +15,10 @@ from livekit import rtc
 EJIRO_MODEL = "qwen-pidgin-f1-cleaned-epoch5"
 PIDGIN_VOICE = "favour"
 EJIRO_URL = "http://102.88.137.124:8080/tts-ejiro/v1/audio/speech"
+DYNAMIC_PIDGIN_MODEL = "dynamic-accent-pidgin-flash"
+DYNAMIC_PIDGIN_CHECKPOINT = "f59a6fc0dacc331844cf8b513ec99e4d5c75f2583115037c8d38ba9ff7e3a307"
+DYNAMIC_PIDGIN_URL = "http://102.88.137.124:8080/tts-pidgin-dynamic/v1/audio/speech"
+DYNAMIC_PIDGIN_VOICES = {"maro", "rukky"}
 SBPN_MODEL = "ogunlao/SBPN_multilingual_base"
 SBPN_URL = "http://102.88.137.124:8080/asr-sbpn/v1/audio/transcriptions"
 SBPN_WS_URL = "ws://102.88.137.124:8080/asr-sbpn/v1/realtime"
@@ -51,8 +55,19 @@ def apply_pidgin_stack(config, context=None, identity=None):
     language = overrides.get("tts_language_hint") or config.speech_language_override or getattr(context, "tts_language_hint", "") or config.tts_language
     if not is_pidgin(language):
         return config
-    return replace(config, tts_language="Nigerian Pidgin", tts_model=EJIRO_MODEL,
-                   tts_voice=PIDGIN_VOICE, tts_url=EJIRO_URL, tts_ref_audio="", tts_seed="17",
+    saved = (getattr(context, "tts_voice_id", "")
+             if is_pidgin(getattr(context, "tts_language_hint", "")) else "")
+    configured = str(config.tts_voice or "").strip().lower()
+    if configured not in DYNAMIC_PIDGIN_VOICES:
+        configured = ""
+    requested = str(overrides.get("tts_voice_id") or overrides.get("tts_voice") or saved or configured).strip().lower()
+    dynamic = requested in DYNAMIC_PIDGIN_VOICES
+    # Only the two new IDs opt in; existing saved identifiers keep their Favour route.
+    return replace(config, tts_language="Nigerian Pidgin",
+                   tts_model=DYNAMIC_PIDGIN_MODEL if dynamic else EJIRO_MODEL,
+                   tts_voice=requested if dynamic else PIDGIN_VOICE,
+                   tts_url=DYNAMIC_PIDGIN_URL if dynamic else EJIRO_URL,
+                   tts_ref_audio="", tts_seed="0" if dynamic else "17",
                    stt_model=SBPN_MODEL, stt_ws_url=SBPN_WS_URL, stt_batch_url=SBPN_URL,
                    stt_batch_timeout_seconds=120.0)
 
@@ -103,6 +118,8 @@ class EjiroTTSClient:
         self.config, self.session, self.usage = config, session, None
 
     async def stream(self, text):
+        if self.config.tts_voice in DYNAMIC_PIDGIN_VOICES:
+            return 24000, self._dynamic_chunks(text)
         async def chunks():
             for part in split_text(ejiro_spoken_text(text)):
                 if not part.strip():
@@ -138,6 +155,42 @@ class EjiroTTSClient:
                     if self.usage is not None:
                         self.usage.tts_accepted(part)
         return 24000, chunks()
+
+    async def _dynamic_chunks(self, text):
+        # This model already produces call-rate PCM; never apply Favour's 16 kHz resampler.
+        voice = self.config.tts_voice
+        for part in split_text(text, limit=140):
+            if not part.strip():
+                continue
+            payload = {"model": DYNAMIC_PIDGIN_MODEL, "voice": voice, "language": "pcm",
+                       "input": part, "response_format": "pcm", "stream": True,
+                       "stream_format": "audio", "seed": 0, "speed": 1}
+            async with self.session.post(self.config.tts_url, json=payload,
+                timeout=aiohttp.ClientTimeout(total=180)) as response:
+                response.raise_for_status()
+                if (response.content_type != "audio/pcm" or any(
+                    response.headers.get(key) != value for key, value in {
+                        "X-Audio-Sample-Rate": "24000", "X-Audio-Channels": "1",
+                        "X-Model": DYNAMIC_PIDGIN_MODEL, "X-Voice": voice,
+                        "X-Speaker-ID": voice, "X-Checkpoint-SHA256": DYNAMIC_PIDGIN_CHECKPOINT,
+                        "X-Voice-Profile": voice + "-flash-v1", "X-Seed": "0", "X-Speed": "1",
+                    }.items())):
+                    raise ValueError("Dynamic Pidgin TTS returned an unexpected voice, model or PCM format")
+                received = 0
+                pending = b""
+                async for block in response.content.iter_chunked(9600):
+                    received += len(block)
+                    if received > 30 * 24000 * 2:
+                        raise ValueError("Dynamic Pidgin audio exceeds the 30-second segment budget")
+                    pending += block
+                    length = len(pending) // 2 * 2
+                    if length:
+                        yield pending[:length]
+                        pending = pending[length:]
+                if not received or pending:
+                    raise ValueError("Dynamic Pidgin returned empty or truncated PCM16")
+                if self.usage is not None:
+                    self.usage.tts_accepted(part)
 
 
 class SBPNClient:
