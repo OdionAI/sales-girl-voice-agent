@@ -154,7 +154,7 @@ class EngagementTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("still there", self.pipe.tts.texts[-1])
         self.assertEqual(self.policy.idle_close_at, 115.0)
 
-    def test_pilot_scope_requires_selected_agent_and_browser(self):
+    def test_pilot_scope_supports_selected_agent_browser_and_sip_calls(self):
         base = replace(
             LabConfig(), inactivity_pilot_agent_ids=("ccc440c5-452d-4690-abc0-61758c11cebd",),
         )
@@ -164,9 +164,33 @@ class EngagementTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(for_inactivity_pilot(
             base, agent_id="ccc440c5-452d-4690-abc0-61758c11cebd", is_browser=False,
         ).inactivity_pilot_enabled)
+        self.assertTrue(for_inactivity_pilot(
+            base, agent_id="ccc440c5-452d-4690-abc0-61758c11cebd",
+            is_browser=False, is_sip=True,
+        ).inactivity_pilot_enabled)
         self.assertFalse(for_inactivity_pilot(
             base, agent_id="another-agent", is_browser=True,
         ).inactivity_pilot_enabled)
+
+    def test_wildcard_selects_every_loaded_browser_or_sip_agent(self):
+        base = replace(LabConfig(), inactivity_pilot_agent_ids=("*",))
+        for surface in ({"is_browser": True}, {"is_browser": False, "is_sip": True}):
+            with self.subTest(surface=surface):
+                self.assertTrue(for_inactivity_pilot(
+                    base, agent_id="another-loaded-agent", **surface,
+                ).inactivity_pilot_enabled)
+        self.assertFalse(for_inactivity_pilot(
+            base, agent_id="another-loaded-agent", is_browser=False,
+        ).inactivity_pilot_enabled)
+
+    def test_inactivity_safety_phrases_follow_agent_language(self):
+        self.pipe.agent_context = replace(self.pipe.agent_context, tts_language_hint="Hausa")
+        self.assertIn("Kuna nan", self.policy._inactivity_phrase(goodbye=False))
+        self.assertIn("kiran", self.policy._inactivity_phrase(goodbye=True))
+        self.pipe.agent_context = replace(self.pipe.agent_context, tts_language_hint="French")
+        self.assertIn("toujours là", self.policy._inactivity_phrase(goodbye=False))
+        self.pipe.agent_context = replace(self.pipe.agent_context, tts_language_hint="Nigerian Pidgin")
+        self.assertIn("dey there", self.policy._inactivity_phrase(goodbye=False))
 
     async def test_reply_grace_waits_for_continuation_and_keeps_prior_words(self):
         self.pipe.config = replace(
