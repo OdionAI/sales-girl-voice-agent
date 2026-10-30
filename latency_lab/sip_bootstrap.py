@@ -98,7 +98,7 @@ def resolve_route(metadata, room_name):
     return {**route, "expected_trunk_id": trunk}
 
 
-def participant_identity(route, participant, room_name, sip_kind, *, called_override=""):
+def participant_identity(route, participant, room_name, sip_kind, *, called_override="", dynamic_did_route=None):
     attrs = dict(participant.attributes)
     lowered = {str(key).lower(): value for key, value in attrs.items()}
     if participant.kind != sip_kind or lowered.get("sip.trunkid") != route["expected_trunk_id"]:
@@ -137,7 +137,7 @@ def participant_identity(route, participant, room_name, sip_kind, *, called_over
     chosen = (
         caller_route
         if caller_route and caller_route.get("override_did_routes") is True
-        else did_route or caller_route or {}
+        else dynamic_did_route or did_route or caller_route or {}
     )
     return {
         "business_id": chosen.get("business_id") or route["business_id"],

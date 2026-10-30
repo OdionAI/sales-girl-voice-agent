@@ -11,6 +11,7 @@ logger = logging.getLogger(__name__)
 BASE_URL = os.getenv("AGENT_CONFIG_API_BASE_URL", "").rstrip("/")
 SERVICE_TOKEN = os.getenv("AGENT_CONFIG_SERVICE_TOKEN", os.getenv("CONVERSATION_SERVICE_TOKEN", ""))
 DEFAULT_TIMEOUT_SECONDS = float(os.getenv("AGENT_CONFIG_API_TIMEOUT_SECONDS", "8"))
+SIP_ROUTE_TIMEOUT_SECONDS = float(os.getenv("SIP_ROUTE_LOOKUP_TIMEOUT_SECONDS", "2"))
 
 
 def is_enabled() -> bool:
@@ -54,3 +55,42 @@ async def get_runtime_config(*, agent_id: str, business_id: str) -> dict[str, An
         payload["status"] = payload.get("status") or "success"
         return payload
     return {"status": "failed", "detail": "invalid payload"}
+
+
+async def resolve_sip_route(*, number: str) -> dict[str, Any]:
+    """Resolve a called number against the dashboard-managed Agent Config routes."""
+    base_url = str(
+        os.getenv("AGENT_CONFIG_SERVICE_BASE_URL")
+        or os.getenv("AGENT_CONFIG_API_BASE_URL")
+        or BASE_URL
+    ).rstrip("/")
+    service_token = str(
+        os.getenv("AGENT_CONFIG_SERVICE_TOKEN")
+        or os.getenv("CONVERSATION_SERVICE_TOKEN")
+        or SERVICE_TOKEN
+    ).strip()
+    if not base_url or not service_token or not str(number or "").strip():
+        return {"status": "disabled"}
+
+    url = f"{base_url}/v1/agents/internal/sip-routes/resolve"
+    try:
+        async with httpx.AsyncClient(timeout=SIP_ROUTE_TIMEOUT_SECONDS) as client:
+            response = await client.get(
+                url,
+                params={"number": str(number).strip()},
+                headers={
+                    "X-Service-Token": service_token,
+                    "X-Service-Name": "sales-girl-voice-agent",
+                },
+            )
+    except httpx.HTTPError as exc:
+        logger.warning("Agent SIP route lookup unavailable; continuing with static routes: %s", exc)
+        return {"status": "failed"}
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = {}
+    if response.status_code >= 400:
+        logger.error("Agent SIP route lookup failed: status=%s", response.status_code)
+        return {"status": "failed", "http_status": response.status_code}
+    return payload if isinstance(payload, dict) else {"status": "failed"}

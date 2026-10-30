@@ -66,6 +66,20 @@ release.
 Caller `+2348112812216` follows the `0301051` DID route to the MoMo feedback
 agent; `+2349040760651` retains its explicit Leadway check-in route.
 
+### Dashboard-managed inbound SIP routing
+
+For each inbound SIP call, the Lagos RVC worker checks the called number
+against Agent Config Service before loading the prompt. A matching route saved
+from the private dashboard Voice Lab takes precedence over the static DID map;
+an explicitly configured caller route with `override_did_routes` still takes
+precedence. If Agent Config Service is unavailable or there is no saved match,
+the worker continues through the existing static DID and caller routes.
+Configure `AGENT_CONFIG_SERVICE_BASE_URL` and `AGENT_CONFIG_SERVICE_TOKEN`
+(the worker also accepts its existing Agent Config API base URL and
+Conversation Service token fallbacks). Lookups time out after
+`SIP_ROUTE_LOOKUP_TIMEOUT_SECONDS` (2 seconds by default) and then use the
+existing static routes. Route changes affect new calls only.
+
 ### MoMo inbound call capacity
 
 When `MOMO_CALL_CAPACITY_BUSINESS_ID` matches the routed business, inbound SIP
