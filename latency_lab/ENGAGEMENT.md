@@ -4,11 +4,10 @@ Status: opt-in local evaluation. `RVC_LAB_ENGAGEMENT_ENABLED=false` by default.
 
 ## Amaka browser inactivity pilot
 
-The browser-only pilot is off until an operator sets
+The Lagos release path sets
 `RVC_LAB_INACTIVITY_PILOT_AGENT_IDS=ccc440c5-452d-4690-abc0-61758c11cebd`
-on the voice worker. The public ID `agt_3b5c72fdf2` resolves to this internal
-config ID for a browser call. The
-worker checks the loaded agent ID and requires a dashboard browser call (a
+for the production pilot. The public ID `agt_3b5c72fdf2` resolves to this
+internal config ID for a browser call. The worker checks the loaded agent ID and requires a dashboard browser call (a
 signed web identity or the public RVC room route); Amaka's
 inbound phone calls and every other agent remain outside this pilot. A signed
 per-call override cannot enable it. Clearing the environment variable disables
@@ -28,8 +27,7 @@ while a tool is pending, without invoking or repeating that tool.
 The pilot's first check-in and tool-update intervals are 10 seconds. The close
 interval can be adjusted with `RVC_LAB_INACTIVITY_PILOT_CLOSE_SECONDS`. Timers
 start after playout, so model and TTS latency are additional. The pilot is
-implemented on a task branch and is not live until the normal branch promotion
-and Lagos release complete.
+enabled on Lagos only when the normal release workflow deploys the source.
 
 Current implementation: the normal conversation LLM controls an output gate via
 `set_speech_enabled`. The earlier separate caller-preference review is removed.

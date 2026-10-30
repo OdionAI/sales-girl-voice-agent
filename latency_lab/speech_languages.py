@@ -32,6 +32,8 @@ LANGUAGES = {
 
 # CLEAR Global TWB Voice Hausa 1.0 is CC-BY-NC-4.0, for opted-in research only.
 HAUSA_TWB_VOICES = {"haisha": "spk_f_1", "adamu": "spk_m_1", "muhammad": "spk_m_2"}
+ABDUL_MODEL = "hausa-ljspeech-vits-epoch271"
+ABDUL_CHECKPOINT = "a92c761456510945bd1a556987c673bc7768546f97436eb840bf6e06b4f64dc4"
 HAUSA_LEGACY_VOICES = {"", "default", "hausa", "musa", "coqui-hausa-vits", "hausa-twb-voice-1.0"}
 # SoroTTS is CC-BY-NC-SA-4.0: these speakers are for noncommercial evaluation.
 IGBO_VOICES = {"chinedu": "ibo1", "eze": "ibo2", "ada": "ibo3"}
@@ -109,14 +111,17 @@ def apply_language_stack(config, context=None, identity=None):
         saved = (getattr(context, "tts_voice_id", "")
                  if language_code(getattr(context, "tts_language_hint", "")) == "ha" else "")
         configured = str(config.tts_voice or "").strip().lower()
-        if configured not in HAUSA_TWB_VOICES and configured not in HAUSA_TWB_VOICES.values():
+        if configured not in HAUSA_TWB_VOICES and configured not in HAUSA_TWB_VOICES.values() and configured != "abdul":
             configured = ""
         requested = overrides.get("tts_voice_id") or overrides.get("tts_voice") or saved or configured
-        chosen = hausa_voice(requested)
-        if config.hausa_twb_voices_enabled:
-            model, voice = "hausa", chosen
-        elif str(requested or "").strip().lower() not in HAUSA_LEGACY_VOICES:
-            raise ValueError("Hausa research voices are not enabled")
+        if str(requested or "").strip().lower() == "abdul":
+            model, voice = ABDUL_MODEL, "abdul"
+        else:
+            chosen = hausa_voice(requested)
+            if config.hausa_twb_voices_enabled:
+                model, voice = "hausa", chosen
+            elif str(requested or "").strip().lower() not in HAUSA_LEGACY_VOICES:
+                raise ValueError("Hausa research voices are not enabled")
     return replace(config, tts_language=profile["name"], tts_model=model,
                    tts_voice=voice, tts_url=profile["url"], tts_ref_audio="",
                    stt_model=SBPN_MODEL, stt_ws_url=SBPN_WS_URL, stt_batch_url=SBPN_URL,
@@ -150,6 +155,7 @@ class NativeLanguageTTSClient:
         self.config, self.session, self.usage = config, session, None
 
     async def stream(self, text):
+        is_abdul = language_code(self.config.tts_language) == "ha" and self.config.tts_voice == "abdul"
         async def chunks():
             for part in split_text(text, limit=140):
                 if not part.strip():
@@ -159,7 +165,10 @@ class NativeLanguageTTSClient:
                     "input": part, "response_format": "pcm", "stream": True,
                 }
                 profile = LANGUAGES.get(language_code(self.config.tts_language), {})
-                if language_code(self.config.tts_language) == "ha" and self.config.hausa_twb_voices_enabled:
+                if is_abdul:
+                    payload.update(model=ABDUL_MODEL, voice="abdul", speaker_id="abdul",
+                                   language="ha", stream_format="audio", speed=1, seed=17)
+                elif language_code(self.config.tts_language) == "ha" and self.config.hausa_twb_voices_enabled:
                     selected = hausa_voice(self.config.tts_voice)
                     payload.update(model="hausa", voice=selected, speaker_id=HAUSA_TWB_VOICES[selected],
                                    stream_format="audio", speed=1, seed=17)
@@ -172,6 +181,11 @@ class NativeLanguageTTSClient:
                         response.headers.get("X-Audio-Sample-Rate") != "24000" or
                         response.headers.get("X-Audio-Channels") != "1"):
                         raise ValueError("Native-language TTS must stream 24 kHz mono PCM16")
+                    if is_abdul and any(response.headers.get(key) != value for key, value in {
+                        "X-Model": ABDUL_MODEL, "X-Voice": "abdul", "X-Speaker-ID": "abdul",
+                        "X-Checkpoint-SHA256": ABDUL_CHECKPOINT,
+                    }.items()):
+                        raise ValueError("Abdul TTS returned an unexpected voice or checkpoint")
                     pending = b""
                     received = 0
                     async for block in response.content.iter_chunked(9600):

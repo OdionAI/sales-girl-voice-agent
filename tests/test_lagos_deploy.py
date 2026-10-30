@@ -50,6 +50,7 @@ class LagosReleaseTests(unittest.TestCase):
 
             updates = dict(release.LAGOS_ASR_ENV)
             updates.update(release.reply_grace_env(reply_grace_ms, reply_grace_agent_ids))
+            updates.update(release.inactivity_pilot_env())
             updates['RVC_LAB_LLM_PROVIDER'] = llm_provider
             updates['RVC_LAB_DEEPSEEK_API_KEY'] = deepseek_api_key if llm_provider == 'deepseek' else ''
             if llm_provider == 'deepseek':
@@ -92,6 +93,8 @@ class LagosReleaseTests(unittest.TestCase):
                         release.REPLY_GRACE_MS_KEY)
                     rollback_env[release.REPLY_GRACE_AGENT_IDS_KEY] = previous_env.get(
                         release.REPLY_GRACE_AGENT_IDS_KEY)
+                    rollback_env[release.INACTIVITY_PILOT_AGENT_IDS_KEY] = previous_env.get(
+                        release.INACTIVITY_PILOT_AGENT_IDS_KEY)
                     if enabled:
                         rollback_env[release.HAUSA_RESEARCH_KEY] = old_value
                     self.assertEqual(rollback['services']['voice']['environment'], rollback_env)
@@ -173,6 +176,12 @@ class LagosReleaseTests(unittest.TestCase):
 
     def test_agent_scoped_reply_grace_can_be_released(self):
         self.exercise_release(reply_grace_ms='500', reply_grace_agent_ids=AGENT_ID)
+
+    def test_inactivity_pilot_agent_allowlist_is_validated_and_released(self):
+        self.assertEqual(release.inactivity_pilot_env(AGENT_ID)[
+            release.INACTIVITY_PILOT_AGENT_IDS_KEY], AGENT_ID)
+        with self.assertRaisesRegex(ValueError, 'must contain UUIDs'):
+            release.inactivity_pilot_env('not-an-agent')
 
     def test_reply_grace_requires_agent_id_and_bounded_delay(self):
         with self.assertRaisesRegex(ValueError, 'AGENT_IDS is required'):
