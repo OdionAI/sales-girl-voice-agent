@@ -20,6 +20,7 @@ HAUSA_RESEARCH_KEY = 'RVC_LAB_ENABLE_HAUSA_TWB_VOICES'
 REPLY_GRACE_MS_KEY = 'RVC_LAB_REPLY_GRACE_MS'
 REPLY_GRACE_AGENT_IDS_KEY = 'RVC_LAB_REPLY_GRACE_AGENT_IDS'
 INACTIVITY_PILOT_AGENT_IDS_KEY = 'RVC_LAB_INACTIVITY_PILOT_AGENT_IDS'
+DEFAULT_INACTIVITY_PILOT_AGENT_ID = 'ccc440c5-452d-4690-abc0-61758c11cebd'
 LAGOS_ASR_ENV = {
     'RVC_LAB_STT_PROVIDER': 'self_hosted',
     'RVC_LAB_STT_MODEL': 'Qwen3-ASR',
@@ -176,7 +177,10 @@ def reply_grace_env(delay_ms='0', agent_ids=''):
     }
 
 
-def inactivity_pilot_env(agent_ids=''):
+def inactivity_pilot_env(agent_ids=None):
+    # Temporary single-agent production pilot; unset deployments select Amaka.
+    if agent_ids is None:
+        agent_ids = DEFAULT_INACTIVITY_PILOT_AGENT_ID
     raw_ids = [value.strip() for value in str(agent_ids).split(',') if value.strip()]
     try:
         normalized_ids = [str(uuid.UUID(value)) for value in raw_ids]
@@ -188,7 +192,7 @@ def inactivity_pilot_env(agent_ids=''):
 def deploy(release, revision, enable_hausa_research=False, momo_feedback_agent_id='',
            reply_grace_ms='0', reply_grace_agent_ids='', llm_provider='qwen',
            deepseek_model='deepseek-flash', deepseek_reasoning_effort='high',
-           deepseek_api_key='', inactivity_pilot_agent_ids=''):
+           deepseek_api_key='', inactivity_pilot_agent_ids=None):
     if not re.fullmatch(r'[0-9a-f]{40}', revision):
         raise ValueError('Expected a full Git commit SHA')
     if (release.parent != RELEASE_ROOT
@@ -292,7 +296,7 @@ if __name__ == '__main__':
     parser.add_argument('--momo-feedback-agent-id', default='')
     parser.add_argument('--reply-grace-ms', default='0')
     parser.add_argument('--reply-grace-agent-ids', default='')
-    parser.add_argument('--inactivity-pilot-agent-ids', default='')
+    parser.add_argument('--inactivity-pilot-agent-ids')
     parser.add_argument('--llm-provider', default='qwen')
     parser.add_argument('--deepseek-model', default='deepseek-flash')
     parser.add_argument('--deepseek-reasoning-effort', default='high')
