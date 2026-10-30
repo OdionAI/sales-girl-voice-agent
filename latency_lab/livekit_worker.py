@@ -29,6 +29,7 @@ from .sip_bootstrap import resolve_route as resolve_sip_route, participant_ident
 from .trace import TraceRecorder
 from .live_metrics import LiveMetricPublisher
 from .outbound import apply_outbound_context, claim_for_route, sip_remote_headers
+from agent import agent_config_api
 from agent import outbound_call_api
 from agent import call_capacity_api
 
@@ -382,6 +383,18 @@ async def entrypoint(ctx: JobContext) -> None:
             identity = sip_participant_identity(sip_route, participant, ctx.room.name,
                                                rtc.ParticipantKind.PARTICIPANT_KIND_SIP,
                                                called_override=sip_headers.get("to", ""))
+            # Dashboard-controlled inbound target: when this business has an
+            # inbound target configured, route to it instead of the env default.
+            # Never applies to outbound-required routes (those must load the
+            # agent their prepared call was created for).
+            if not identity.get("outbound_required"):
+                inbound_target = await agent_config_api.resolve_inbound_agent(
+                    business_id=str(identity.get("business_id") or "")
+                )
+                if inbound_target and inbound_target != identity.get("config_agent_id"):
+                    identity["config_agent_id"] = inbound_target
+                    trace.record("inbound_target_override", reason="config_service",
+                                 agent_id=inbound_target)
             capacity_reservation_id = call_capacity_api.reservation_id_from_sip_headers(
                 sip_headers, str(identity.get("business_id") or "")
             )

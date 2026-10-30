@@ -5,6 +5,7 @@ import logging
 from typing import Any
 
 import httpx
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -54,3 +55,57 @@ async def get_runtime_config(*, agent_id: str, business_id: str) -> dict[str, An
         payload["status"] = payload.get("status") or "success"
         return payload
     return {"status": "failed", "detail": "invalid payload"}
+
+
+_INBOUND_TARGET_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
+INBOUND_TARGET_CACHE_SECONDS = float(
+    os.getenv("AGENT_CONFIG_INBOUND_TARGET_CACHE_SECONDS", "10")
+)
+
+
+async def get_inbound_target(*, business_id: str) -> dict[str, Any]:
+    """Fetch the business's configured inbound target agent (dashboard switch)."""
+    business_id = str(business_id or "").strip()
+    if not is_enabled() or not business_id:
+        return {"status": "disabled"}
+    url = f"{BASE_URL}/v1/agents/inbound-target"
+    try:
+        async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT_SECONDS) as client:
+            response = await client.get(url, headers=_headers(business_id))
+    except Exception as exc:  # noqa: BLE001
+        logger.error("Inbound target lookup failed: business_id=%s error=%s", business_id, exc)
+        return {"status": "failed", "detail": type(exc).__name__}
+    if response.status_code == 404:
+        return {"status": "unset"}
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = {}
+    if response.status_code >= 400:
+        return {"status": "failed", "http_status": response.status_code}
+    if isinstance(payload, dict):
+        payload["status"] = "success"
+        return payload
+    return {"status": "failed", "detail": "invalid payload"}
+
+
+async def resolve_inbound_agent(*, business_id: str) -> str | None:
+    """Return the configured inbound target agent id for a business, or None.
+
+    Cached briefly so a dashboard switch takes effect within the cache window
+    without adding a lookup to every call. A transient failure returns None so
+    the caller keeps the route's own default agent.
+    """
+    business_id = str(business_id or "").strip()
+    if not is_enabled() or not business_id:
+        return None
+    now = time.monotonic()
+    cached = _INBOUND_TARGET_CACHE.get(business_id)
+    if cached and now - cached[0] < INBOUND_TARGET_CACHE_SECONDS:
+        return cached[1].get("agent_id") or None
+    payload = await get_inbound_target(business_id=business_id)
+    if payload.get("status") in {"success", "unset"}:
+        _INBOUND_TARGET_CACHE[business_id] = (now, payload)
+    if payload.get("status") == "success":
+        return payload.get("agent_id") or None
+    return None
