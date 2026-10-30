@@ -1,12 +1,16 @@
 import asyncio
 import json
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import AsyncMock
 
 from aiohttp import web
 
 from latency_lab.config import LabConfig
-from latency_lab.providers import RSTTClient
+from latency_lab.pipeline import ConversationPipeline
+from latency_lab.providers import RSTTClient, is_asr_context_echo
+from latency_lab.trace import TraceRecorder
 
 
 class FakeBackend:
@@ -80,6 +84,47 @@ class SttChatFinalTest(unittest.IsolatedAsyncioTestCase):
         names = [n for n, _ in events]
         self.assertIn("stt_chat_final", names)
         self.assertFalse(any(n == "stt_realtime_final" and d.get("authoritative") for n, d in events))
+
+    async def test_context_echo_is_suppressed_then_realtime_fallback_is_used(self):
+        context = (
+            "Listen on this call. The bank is Wema Bank; the phone networks are MTN, "
+            "Glo (spelled G-l-o), Airtel, 9mobile; the currency is naira."
+        )
+        final, _, events = await self._run(context, context=context)
+        self.assertEqual(final, "REALTIME")
+        names = [name for name, _ in events]
+        self.assertIn("stt_chat_context_echo_suppressed", names)
+        self.assertNotIn("stt_chat_final", names)
+        suppressed = next(data for name, data in events if name == "stt_chat_context_echo_suppressed")
+        self.assertNotIn("text", suppressed)
+
+    def test_context_echo_detector_keeps_normal_banking_requests(self):
+        context = "Listen on this call. The bank is Wema Bank; network names include MTN and Glo."
+        self.assertTrue(is_asr_context_echo("Listen on this call.", context))
+        self.assertTrue(is_asr_context_echo("The bank is Wema Bank; network names include MTN and Glo.", context))
+        self.assertFalse(is_asr_context_echo("Please check my Wema Bank balance.", context))
+
+    async def test_pipeline_does_not_publish_or_persist_context_echoes(self):
+        context = "Listen on this call. The bank is Wema Bank; network names include MTN and Glo."
+        with tempfile.TemporaryDirectory() as directory:
+            trace = TraceRecorder(Path(directory), "context-echo")
+            send = AsyncMock()
+            pipeline = ConversationPipeline(LabConfig(stt_context=context), trace, send)
+            try:
+                await pipeline.on_partial(context, context)
+                await pipeline.on_final(context)
+            finally:
+                await pipeline.close()
+
+            events = [json.loads(line) for line in trace.path.read_text().splitlines()]
+            self.assertEqual(
+                [event["reason"] for event in events if event["event"] == "stt_context_echo_suppressed"],
+                ["partial_echoed_asr_context", "transcript_echoed_asr_context"],
+            )
+            self.assertFalse(any(event["event"] == "stt_final" for event in events))
+            self.assertFalse(any(event["event"] == "stt_partial" for event in events))
+            self.assertFalse(any(event["event"] == "conversation_persist_user" for event in events))
+            self.assertFalse(any(call.args[0].get("type") == "final_user_request" for call in send.await_args_list))
 
     async def test_empty_chat_final_falls_back_to_realtime(self):
         final, backend, events = await self._run("")

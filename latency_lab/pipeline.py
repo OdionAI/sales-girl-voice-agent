@@ -39,7 +39,10 @@ from .action_tools import (
     suppress_transfer_preamble,
     uses_french,
 )
-from .providers import RLLMClient, RSTTClient, RTTSClient, tts_token_budget, scoped_llm_stream
+from .providers import (
+    RLLMClient, RSTTClient, RTTSClient, tts_token_budget, scoped_llm_stream,
+    is_asr_context_echo,
+)
 from .pidgin import EjiroTTSClient, SBPNClient, is_pidgin
 from .speech_languages import CoquiTTSClient, LANGUAGES, apply_language_stack, language_code, language_rules, uses_sbpn
 from .trace import TraceRecorder
@@ -906,6 +909,14 @@ class ConversationPipeline:
         await self.send({"type": "lab_status", "content": "listening"})
 
     async def on_partial(self, text: str, raw: str) -> None:
+        if text and is_asr_context_echo(text, self.config.stt_context):
+            self.trace.record(
+                "stt_context_echo_suppressed",
+                turn_id=self.turn_id or self.candidate_turn_id,
+                reason="partial_echoed_asr_context",
+                word_count=len(re.findall(r"[a-z0-9]+", text, re.IGNORECASE)),
+            )
+            return
         if getattr(self, "call_ending", False):
             self.trace.record(
                 "stt_partial_ignored_call_ending",
@@ -1000,6 +1011,14 @@ class ConversationPipeline:
             return
 
     async def on_final(self, text: str, *, publish_transcript: bool = True) -> None:
+        if text and is_asr_context_echo(text, self.config.stt_context):
+            self.trace.record(
+                "stt_context_echo_suppressed",
+                turn_id=self.turn_id,
+                reason="transcript_echoed_asr_context",
+                word_count=len(re.findall(r"[a-z0-9]+", text, re.IGNORECASE)),
+            )
+            return
         if getattr(self, "call_ending", False):
             self.trace.record(
                 "stt_final_ignored_call_ending",

@@ -90,6 +90,14 @@ sequenceDiagram
 
 The coordinator is the only application-turn owner. Qwen realtime supplies optional partial evidence for speculation, but its `transcription.done` is never accepted as the committed final. Local VAD buffers exactly the caller-owned utterance and sends it to Qwen's batch endpoint at end-of-speech; only that batch transcript may authorize playback. Because the deployed realtime and batch routes share one Qwen/vLLM EngineCore, the coordinator first closes and awaits the realtime socket, runs the authoritative batch request alone, and reconnects realtime after that request finishes. This prevents the two decode modes from overlapping without adding a fixed delay. Speculation may prepare LLM text and TTS audio early, but only comparison with the batch final authorizes browser playback. A changed partial cancels the active attempt and logs the exact reason, similarity, and discarded audio.
 
+`RVC_LAB_STT_CONTEXT` is private ASR vocabulary context, never caller speech. If
+an ASR final echoes its opening instruction or substantially repeats the
+context, the worker suppresses it before transcript publication, conversation
+memory, persistence, and LLM input. A contaminated chat final falls back to
+the unhinted realtime transcript; contaminated realtime output is also
+suppressed. Trace events record counts and suppression reasons without copying
+the leaked text.
+
 For an agent-scoped caller-continuation trial, set
 `RVC_LAB_REPLY_GRACE_AGENT_IDS` to a comma-separated list of agent IDs and
 `RVC_LAB_REPLY_GRACE_MS` to a small positive delay. After a final caller
