@@ -7,8 +7,9 @@ Qwen ICL voice. Legacy IDs are `wema-en-us-female`, `wema-en-us-male`,
 `wema-en-ng-female`, and `wema-en-ng-male`. Short-reference IDs append
 `-short`; the four short-reference IDs were enrolled in the live TTS gateway
 on 2026-10-29 after the user confirmed approval for cloning. The original
-source-pack consent files remain unchanged. The Lagos runtime applies a saved
-short ID through this same Wema path when the main release is deployed.
+source-pack consent files remain unchanged. The aliases are available for
+testing; the SAW worker still needs the voice-runtime PR merged and deployed to
+apply the selected saved voice ID.
 Explicit signed per-session voice overrides retain precedence. Each request
 uses Base synthesis with `x_vector_only_mode=false`; all Wema IDs share the
 same deterministic seed derived from the configured Helen voice, matching
