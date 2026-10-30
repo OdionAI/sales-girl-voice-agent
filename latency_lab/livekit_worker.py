@@ -26,6 +26,7 @@ from .report import generate_report
 from .session_identity import verify_session_token
 from .aicc_transfer import bridge_call
 from .sip_bootstrap import resolve_route as resolve_sip_route, participant_identity as sip_participant_identity
+from agent.agent_config_api import resolve_sip_route as resolve_dashboard_sip_route
 from .trace import TraceRecorder
 from .live_metrics import LiveMetricPublisher
 from .outbound import apply_outbound_context, claim_for_route, sip_remote_headers
@@ -379,9 +380,46 @@ async def entrypoint(ctx: JobContext) -> None:
                 ctx.wait_for_participant(kind=rtc.ParticipantKind.PARTICIPANT_KIND_SIP), timeout=30,
             )
             sip_headers = await sip_remote_headers(ctx, participant)
+            participant_attributes = {
+                str(key).lower(): value
+                for key, value in dict(participant.attributes).items()
+            }
+            called_number = str(
+                sip_headers.get("to")
+                or next(
+                    (
+                        participant_attributes.get(key)
+                        for key in (
+                            "sip.to",
+                            "sip.h.to",
+                            "sip.h.x-to",
+                            "sip.trunkphonenumber",
+                            "sip.trunk_phone_number",
+                            "sip.h.x-callee-number",
+                            "sip.h.x-odion-callee-number",
+                            "sip.x_callee_number",
+                            "sip.calleenumber",
+                            "sip.callee_number",
+                            "sip.called",
+                        )
+                        if participant_attributes.get(key)
+                    ),
+                    "",
+                )
+                or ""
+            ).strip()
+            dashboard_route = await resolve_dashboard_sip_route(number=called_number) if called_number else {}
+            dynamic_did_route = None
+            if dashboard_route.get("status") == "success":
+                dynamic_did_route = {
+                    "business_id": dashboard_route.get("business_id"),
+                    "config_agent_id": dashboard_route.get("agent_id"),
+                    "configured_agent_name": dashboard_route.get("name"),
+                }
             identity = sip_participant_identity(sip_route, participant, ctx.room.name,
                                                rtc.ParticipantKind.PARTICIPANT_KIND_SIP,
-                                               called_override=sip_headers.get("to", ""))
+                                               called_override=called_number,
+                                               dynamic_did_route=dynamic_did_route)
             capacity_reservation_id = call_capacity_api.reservation_id_from_sip_headers(
                 sip_headers, str(identity.get("business_id") or "")
             )

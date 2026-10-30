@@ -68,6 +68,39 @@ class AiccNumberRoutingTest(unittest.TestCase):
         ident = self._identity(_participant(caller="301050", called="+233308048122"))
         self.assertEqual(ident["config_agent_id"], "agent-sonia")
 
+    def test_dashboard_route_overrides_static_did_route(self) -> None:
+        p = _participant(caller="+2348012345678", called="0301051")
+        ident = sip_bootstrap.participant_identity(
+            {"trunk_ids": ROUTE["trunk_ids"], "room_prefix": ROUTE["room_prefix"],
+             "expected_trunk_id": TRUNK, **ROUTE},
+            p,
+            "aicc-lara-1",
+            "sip",
+            dynamic_did_route={
+                "business_id": "biz-momo",
+                "config_agent_id": "agent-hausa",
+                "configured_agent_name": "Abdul",
+            },
+        )
+        self.assertEqual(ident["config_agent_id"], "agent-hausa")
+        self.assertEqual(ident["configured_agent_name"], "Abdul")
+
+    def test_explicit_caller_override_still_precedes_dashboard_did_route(self) -> None:
+        p = _participant(caller="08112812216", called="0301051")
+        ident = sip_bootstrap.participant_identity(
+            {"trunk_ids": ROUTE["trunk_ids"], "room_prefix": ROUTE["room_prefix"],
+             "expected_trunk_id": TRUNK, **ROUTE},
+            p,
+            "aicc-lara-1",
+            "sip",
+            dynamic_did_route={
+                "business_id": "biz-momo",
+                "config_agent_id": "agent-hausa",
+                "configured_agent_name": "Abdul",
+            },
+        )
+        self.assertEqual(ident["config_agent_id"], "agent-leadway")
+
     def test_sip_to_short_code_routes_to_feedback_agent(self) -> None:
         p = _participant(caller="+2348012345678")
         p.attributes["sip.To"] = "sip:0301051@aicc.example"
