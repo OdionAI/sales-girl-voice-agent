@@ -909,7 +909,8 @@ class ConversationPipeline:
         await self.send({"type": "lab_status", "content": "listening"})
 
     async def on_partial(self, text: str, raw: str) -> None:
-        if text and is_asr_context_echo(text, self.config.stt_context):
+        context = getattr(getattr(self, "config", None), "stt_context", "")
+        if text and is_asr_context_echo(text, context):
             self.trace.record(
                 "stt_context_echo_suppressed",
                 turn_id=self.turn_id or self.candidate_turn_id,
@@ -1011,7 +1012,8 @@ class ConversationPipeline:
             return
 
     async def on_final(self, text: str, *, publish_transcript: bool = True) -> None:
-        if text and is_asr_context_echo(text, self.config.stt_context):
+        context = getattr(getattr(self, "config", None), "stt_context", "")
+        if text and is_asr_context_echo(text, context):
             self.trace.record(
                 "stt_context_echo_suppressed",
                 turn_id=self.turn_id,
