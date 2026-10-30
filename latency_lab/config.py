@@ -70,6 +70,9 @@ def _ids(name: str) -> tuple[str, ...]:
 class LabConfig:
     speech_language_override: str = ""
     engagement_enabled: bool = _bool("RVC_LAB_ENGAGEMENT_ENABLED", False)
+    inactivity_pilot_agent_ids: tuple[str, ...] = _ids("RVC_LAB_INACTIVITY_PILOT_AGENT_IDS")
+    inactivity_pilot_enabled: bool = False  # Set only for an eligible browser call.
+    inactivity_pilot_close_seconds: float = _float("RVC_LAB_INACTIVITY_PILOT_CLOSE_SECONDS", 15.0)
     # Run bank tools as background tasks so a long or failing call never blocks the
     # conversation: the agent acknowledges naturally and delivers the result later.
     # Opt-in (deployments enable it with RVC_LAB_BACKGROUND_TOOLS=true).
@@ -332,6 +335,20 @@ def apply_runtime_overrides(
         updates["tts_language"] = normalize_tts_language(language)
 
     return replace(config, **updates) if updates else config
+
+
+def for_inactivity_pilot(config: LabConfig, *, agent_id: str, is_browser: bool) -> LabConfig:
+    """Enable the browser pilot only for an operator-selected configured agent."""
+    if not is_browser or agent_id not in config.inactivity_pilot_agent_ids:
+        return config
+    return replace(
+        config,
+        engagement_enabled=True,
+        engagement_idle_seconds=10.0,
+        engagement_tool_seconds=10.0,
+        engagement_max_idle_updates=1,
+        inactivity_pilot_enabled=True,
+    )
 
 
 def lab_config_from_environ() -> LabConfig:

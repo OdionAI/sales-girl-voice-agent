@@ -17,7 +17,7 @@ from livekit import rtc
 from livekit.agents import AutoSubscribe, JobContext, WorkerOptions, cli
 
 from .agentic import load_agent_runtime_context, session_routing_context
-from .config import apply_runtime_overrides, lab_config_from_environ, load_platform_env
+from .config import apply_runtime_overrides, for_inactivity_pilot, lab_config_from_environ, load_platform_env
 from .pipeline import ConversationPipeline
 from .passkey_demo import DemoSession, TOPIC as PASSKEY_TOPIC, enabled as passkey_demo_enabled
 from .passkey import PasskeyFlow, TOPIC as PASSKEY_FLOW_TOPIC, enabled as passkey_flow_enabled
@@ -420,6 +420,21 @@ async def entrypoint(ctx: JobContext) -> None:
             raise RuntimeError("Configured agent could not be loaded; refusing an unconfigured call.")
         if outbound_claim:
             agent_context = apply_outbound_context(agent_context, outbound_claim)
+        config = for_inactivity_pilot(
+            config,
+            agent_id=agent_context.agent_id,
+            is_browser=(
+                not sip_route
+                and (identity.get("identity_type") == "web"
+                     or str(ctx.room.name or "").startswith("rvc-livekit-"))
+            ),
+        )
+        if config.inactivity_pilot_enabled:
+            trace.record(
+                "inactivity_pilot_enabled",
+                reason="configured_browser_agent",
+                agent_id=agent_context.agent_id,
+            )
 
         async def end_call_handler(reason: str) -> None:
             trace.record(
