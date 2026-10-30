@@ -17,7 +17,7 @@ from livekit import rtc
 from livekit.agents import AutoSubscribe, JobContext, WorkerOptions, cli
 
 from .agentic import load_agent_runtime_context, session_routing_context
-from .config import apply_runtime_overrides, lab_config_from_environ, load_platform_env
+from .config import apply_runtime_overrides, for_inactivity_pilot, lab_config_from_environ, load_platform_env
 from .pipeline import ConversationPipeline
 from .passkey_demo import DemoSession, TOPIC as PASSKEY_TOPIC, enabled as passkey_demo_enabled
 from .passkey import PasskeyFlow, TOPIC as PASSKEY_FLOW_TOPIC, enabled as passkey_flow_enabled
@@ -382,15 +382,14 @@ async def entrypoint(ctx: JobContext) -> None:
             identity = sip_participant_identity(sip_route, participant, ctx.room.name,
                                                rtc.ParticipantKind.PARTICIPANT_KIND_SIP,
                                                called_override=sip_headers.get("to", ""))
-            capacity_caller_number = call_capacity_api.caller_number_from_sip_headers(
+            capacity_reservation_id = call_capacity_api.reservation_id_from_sip_headers(
                 sip_headers, str(identity.get("business_id") or "")
             )
-            if capacity_caller_number:
-                claimed_capacity = await call_capacity_api.claim_call_by_caller(
-                    caller_number=capacity_caller_number,
+            if capacity_reservation_id:
+                await call_capacity_api.claim_call(
+                    reservation_id=capacity_reservation_id,
                     room_name=str(ctx.room.name or ""),
                 )
-                capacity_reservation_id = str(claimed_capacity["reservation_id"])
             outbound_required = bool(identity.get("outbound_required"))
             outbound_recipient = str(identity.get("caller_number") or "").strip()
             if outbound_required and not outbound_recipient:
@@ -421,6 +420,21 @@ async def entrypoint(ctx: JobContext) -> None:
             raise RuntimeError("Configured agent could not be loaded; refusing an unconfigured call.")
         if outbound_claim:
             agent_context = apply_outbound_context(agent_context, outbound_claim)
+        config = for_inactivity_pilot(
+            config,
+            agent_id=agent_context.agent_id,
+            is_browser=(
+                not sip_route
+                and (identity.get("identity_type") == "web"
+                     or str(ctx.room.name or "").startswith("rvc-livekit-"))
+            ),
+        )
+        if config.inactivity_pilot_enabled:
+            trace.record(
+                "inactivity_pilot_enabled",
+                reason="configured_browser_agent",
+                agent_id=agent_context.agent_id,
+            )
 
         async def end_call_handler(reason: str) -> None:
             trace.record(

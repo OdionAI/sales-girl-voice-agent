@@ -725,6 +725,7 @@ class ConversationPipeline:
             )
             return
         confirmed_turn_id = self.candidate_turn_id or f"turn-{self.turn_number + 1:04d}"
+        self.engagement.caller_started()
         first_client_sent_ms = self.candidate_client_sent_ms
         first_client_network_ms = self.candidate_client_network_ms
         buffered_partial = self.preconfirm_partial
@@ -2425,14 +2426,18 @@ class ConversationPipeline:
                                       elapsed_seconds=8)
                     await self.announce("I'm still working on that. Please stay with me.")
 
-        progress_task = asyncio.create_task(update_if_still_waiting(), name=f"tool-wait-{call.id}")
+        progress_task = (
+            None if self.config.inactivity_pilot_enabled else
+            asyncio.create_task(update_if_still_waiting(), name=f"tool-wait-{call.id}")
+        )
         # Let the engagement see the tool while it runs, so it can say something
         # natural after a few seconds of silence instead of leaving dead air.
         op = self.engagement.register_operation(call, attempt, task)
         self._background_tasks.add(task)
         task.add_done_callback(self._background_tasks.discard)
-        self._background_tasks.add(progress_task)
-        progress_task.add_done_callback(self._background_tasks.discard)
+        if progress_task is not None:
+            self._background_tasks.add(progress_task)
+            progress_task.add_done_callback(self._background_tasks.discard)
 
     async def _deliver_tool_result(self, call, body: dict) -> None:
         """Speak the outcome of a background tool — naturally, and never a dead end."""

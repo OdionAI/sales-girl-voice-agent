@@ -46,35 +46,36 @@ This worker talks to:
 
 ### AICC outbound call context
 
-For outbound calls, the active Lagos `latency_lab.livekit_worker` selects the
-agent from the SIP `To` number and gets the recipient phone from SIP caller
-metadata. For the `0301051` route, the worker claims the matching prepared call
-from Conversation Service and verifies that its agent and business match the
-route before starting the session. The claim binds the record to one LiveKit
-room; a missing, expired, already-finished, or differently-bound call fails
-closed instead of starting with unrelated customer context. The worker adds
-the agent's configured outbound instructions, the call's context values, and
-its optional `additional_prompt` to that call's prompt only. The additional
-prompt is not persisted into the saved agent prompt. The worker finalizes the
-call record during session cleanup.
+For outbound calls, AICC must put the prepared call reference in SIP header
+`X-Odion-Call-Ref`. The worker reads available participant attributes and uses
+LiveKit's `lk.sip.GetRemoteHeaders` RPC when mapped header attributes have not
+arrived yet. The active Lagos `latency_lab.livekit_worker` first selects the
+agent from the SIP `To` number. The `0301051` route is configured from the
+GitHub repository variable `AICC_MOMO_FEEDBACK_AGENT_ID` and requires a call
+reference. The worker claims that reference from Conversation Service before
+loading the agent runtime config and verifies that its agent and business
+match the `To` route. The claim binds the record to one LiveKit
+room; a missing, expired, already-finished, or differently-bound reference
+fails closed instead of starting with unrelated customer context. The worker
+adds the configured outbound instructions and that call's context values to
+the prompt as data, and finalizes the call record during session cleanup.
 Configure `CONVERSATION_API_BASE_URL` (or the legacy
 `CONVERSATION_SERVICE_BASE_URL`) and `CONVERSATION_SERVICE_TOKEN` in the worker
-runtime for this path. Verify with AICC that the SIP caller number is preserved
-and the `To` route selects the intended agent before release.
+runtime for this path. SIP header propagation must be verified with AICC before
+release.
 Caller `+2348112812216` follows the `0301051` DID route to the MoMo feedback
 agent; `+2349040760651` retains its explicit Leadway check-in route.
 
 ### MoMo inbound call capacity
 
 When `MOMO_CALL_CAPACITY_BUSINESS_ID` matches the routed business, inbound SIP
-calls require a live reservation for the caller number parsed from SIP `From`.
-The worker claims the matching reservation from Conversation Service before
-loading the AI agent, renews its active lease while the AI is handling the
-call, and releases the slot on cleanup or a successful human transfer. A
-missing, expired, or invalid reservation fails closed. No custom SIP header is
-required. Enable this worker-side check only after AICC is calling the
-reservation endpoint and preserving the caller number in SIP `From`.
-`MOMO_CALL_CAPACITY_HEARTBEAT_INTERVAL_SECONDS` defaults to 45 seconds.
+calls require a reservation ID in `X-Odion-Capacity-Reservation`. The worker
+claims the reservation from Conversation Service before loading the AI agent,
+renews its active lease while the AI is handling the call, and releases the
+slot on cleanup or a successful human transfer. A missing, expired, or
+invalid reservation fails closed. Enable this worker-side check only after
+AICC is calling the reservation endpoint and passing the header on the SIP
+INVITE. `MOMO_CALL_CAPACITY_HEARTBEAT_INTERVAL_SECONDS` defaults to 45 seconds.
 
 For `builtin://end_call`, the model's natural farewell and tool call are handled
 in one response. The worker ignores additional speech/transcripts after the
@@ -83,6 +84,12 @@ playout drains.
 - optional external/custom tool endpoints
 
 ## Current runtime status
+
+The Amaka browser inactivity pilot is implemented behind a worker-side agent-ID
+allowlist and remains off until that allowlist is configured. It checks in after
+10 seconds waiting for the caller and ends an unanswered call after a second
+15-second interval. SIP calls are excluded. See
+[`latency_lab/ENGAGEMENT.md`](latency_lab/ENGAGEMENT.md) for the pilot contract.
 
 Current stable contract:
 

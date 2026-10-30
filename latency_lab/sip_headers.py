@@ -15,7 +15,7 @@ async def sip_remote_headers(ctx: Any, participant: Any) -> dict[str, str]:
             rpc(
                 destination_identity=participant.identity,
                 method="lk.sip.GetRemoteHeaders",
-                payload=json.dumps({"include": ["To", "From"]}),
+                payload=json.dumps({"include": ["To", "X-Odion-Capacity-Reservation"]}),
             ), timeout=2.0,
         )
     except Exception:
