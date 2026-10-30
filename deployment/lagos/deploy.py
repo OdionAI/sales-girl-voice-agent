@@ -19,6 +19,7 @@ RELEASE_ROOT = Path('/opt/attentive/releases/voice-ci')
 HAUSA_RESEARCH_KEY = 'RVC_LAB_ENABLE_HAUSA_TWB_VOICES'
 REPLY_GRACE_MS_KEY = 'RVC_LAB_REPLY_GRACE_MS'
 REPLY_GRACE_AGENT_IDS_KEY = 'RVC_LAB_REPLY_GRACE_AGENT_IDS'
+INACTIVITY_PILOT_AGENT_IDS_KEY = 'RVC_LAB_INACTIVITY_PILOT_AGENT_IDS'
 LAGOS_ASR_ENV = {
     'RVC_LAB_STT_PROVIDER': 'self_hosted',
     'RVC_LAB_STT_MODEL': 'Qwen3-ASR',
@@ -175,10 +176,19 @@ def reply_grace_env(delay_ms='0', agent_ids=''):
     }
 
 
+def inactivity_pilot_env(agent_ids=''):
+    raw_ids = [value.strip() for value in str(agent_ids).split(',') if value.strip()]
+    try:
+        normalized_ids = [str(uuid.UUID(value)) for value in raw_ids]
+    except ValueError as exc:
+        raise ValueError('RVC_LAB_INACTIVITY_PILOT_AGENT_IDS must contain UUIDs') from exc
+    return {INACTIVITY_PILOT_AGENT_IDS_KEY: ','.join(dict.fromkeys(normalized_ids))}
+
+
 def deploy(release, revision, enable_hausa_research=False, momo_feedback_agent_id='',
            reply_grace_ms='0', reply_grace_agent_ids='', llm_provider='qwen',
            deepseek_model='deepseek-flash', deepseek_reasoning_effort='high',
-           deepseek_api_key=''):
+           deepseek_api_key='', inactivity_pilot_agent_ids=''):
     if not re.fullmatch(r'[0-9a-f]{40}', revision):
         raise ValueError('Expected a full Git commit SHA')
     if (release.parent != RELEASE_ROOT
@@ -191,6 +201,7 @@ def deploy(release, revision, enable_hausa_research=False, momo_feedback_agent_i
     # endpoints each release so stale Whisper overrides cannot persist.
     updates = dict(LAGOS_ASR_ENV)
     updates.update(reply_grace_env(reply_grace_ms, reply_grace_agent_ids))
+    updates.update(inactivity_pilot_env(inactivity_pilot_agent_ids))
     provider = str(llm_provider).strip().lower()
     if provider not in {'qwen', 'deepseek'}:
         raise ValueError('RVC_LAB_LLM_PROVIDER must be qwen or deepseek')
@@ -281,6 +292,7 @@ if __name__ == '__main__':
     parser.add_argument('--momo-feedback-agent-id', default='')
     parser.add_argument('--reply-grace-ms', default='0')
     parser.add_argument('--reply-grace-agent-ids', default='')
+    parser.add_argument('--inactivity-pilot-agent-ids', default='')
     parser.add_argument('--llm-provider', default='qwen')
     parser.add_argument('--deepseek-model', default='deepseek-flash')
     parser.add_argument('--deepseek-reasoning-effort', default='high')
@@ -302,4 +314,4 @@ if __name__ == '__main__':
                    args.momo_feedback_agent_id, args.reply_grace_ms,
                    args.reply_grace_agent_ids, args.llm_provider,
                    args.deepseek_model, args.deepseek_reasoning_effort,
-                   deepseek_api_key)
+                   deepseek_api_key, args.inactivity_pilot_agent_ids)
