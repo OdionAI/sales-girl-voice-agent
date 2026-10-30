@@ -17,7 +17,7 @@ from livekit import rtc
 from livekit.agents import AutoSubscribe, JobContext, WorkerOptions, cli
 
 from .agentic import load_agent_runtime_context, session_routing_context
-from .config import apply_runtime_overrides, for_inactivity_pilot, lab_config_from_environ, load_platform_env
+from .config import apply_agent_configured_voice, apply_runtime_overrides, for_inactivity_pilot, lab_config_from_environ, load_platform_env
 from .pipeline import ConversationPipeline
 from .passkey_demo import DemoSession, TOPIC as PASSKEY_TOPIC, enabled as passkey_demo_enabled
 from .passkey import PasskeyFlow, TOPIC as PASSKEY_FLOW_TOPIC, enabled as passkey_flow_enabled
@@ -458,6 +458,11 @@ async def entrypoint(ctx: JobContext) -> None:
             raise RuntimeError("Configured agent could not be loaded; refusing an unconfigured call.")
         if outbound_claim:
             agent_context = apply_outbound_context(agent_context, outbound_claim)
+        # The agent's own configured voice is the call's baseline (a session
+        # override, e.g. the Wema accent/gender choice, still wins).
+        config = apply_agent_configured_voice(
+            config, agent_context, identity.get("runtime_overrides")
+        )
         config = for_inactivity_pilot(
             config,
             agent_id=agent_context.agent_id,

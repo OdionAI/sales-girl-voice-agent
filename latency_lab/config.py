@@ -337,6 +337,50 @@ def apply_runtime_overrides(
     return replace(config, **updates) if updates else config
 
 
+# Voices enrolled on the TTS server that an agent's own configured voice may
+# use. An agent's `tts_voice_id` is only honoured for voices listed here, so an
+# agent carrying a stale/unenrolled voice id keeps the operator default instead
+# of failing every utterance. Extend or override with the comma-separated
+# RVC_LAB_AGENT_VOICES env var when a new clone is enrolled.
+_AGENT_VOICE_ALLOWLIST_DEFAULT = (
+    "helen-mavino-0030,"
+    "wema-en-ng-female,wema-en-ng-male,wema-en-us-female,wema-en-us-male,"
+    "wema-en-ng-female-short,wema-en-ng-male-short,"
+    "wema-en-us-female-short,wema-en-us-male-short,"
+    "access-ghana-cindy"
+)
+
+
+def agent_voice_allowlist() -> frozenset[str]:
+    """Voice ids whose enrolled clone may be used from an agent's config."""
+    raw = os.getenv("RVC_LAB_AGENT_VOICES", _AGENT_VOICE_ALLOWLIST_DEFAULT)
+    return frozenset(item.strip().lower() for item in raw.split(",") if item.strip())
+
+
+def apply_agent_configured_voice(
+    config: LabConfig,
+    agent_context: Any,
+    overrides: dict[str, Any] | None = None,
+) -> LabConfig:
+    """Use the agent's own configured voice as the call's baseline voice.
+
+    A per-session override (the dashboard's Wema accent/gender choice) always
+    wins. When no session voice is chosen, the agent's configured tts_voice_id
+    is used — but only if it is a voice the platform knows is enrolled, so a
+    stale voice id can never silence the call.
+    """
+    payload = overrides if isinstance(overrides, dict) else {}
+    session_choice = str(
+        payload.get("tts_voice_id") or payload.get("tts_voice") or ""
+    ).strip()
+    if session_choice:
+        return config
+    configured = str(getattr(agent_context, "tts_voice_id", "") or "").strip()
+    if not configured or configured.lower() not in agent_voice_allowlist():
+        return config
+    return replace(config, tts_voice=configured)
+
+
 def for_inactivity_pilot(
     config: LabConfig, *, agent_id: str, is_browser: bool, is_sip: bool = False,
 ) -> LabConfig:
