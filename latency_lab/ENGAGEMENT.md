@@ -1,28 +1,32 @@
 # Contextual engagement
 
-Status: opt-in local evaluation. `RVC_LAB_ENGAGEMENT_ENABLED=false` by default.
+Status: production enabled for successfully loaded Lagos RVC calls; local runs
+remain disabled unless configured.
 
-## Amaka browser inactivity pilot
+## Lagos RVC inactivity handling
 
-The Lagos release path sets
-`RVC_LAB_INACTIVITY_PILOT_AGENT_IDS=ccc440c5-452d-4690-abc0-61758c11cebd`
-for the production pilot. The public ID `agt_3b5c72fdf2` resolves to this
-internal config ID for a browser call. The worker checks the loaded agent ID and requires a dashboard browser call (a
-signed web identity or the public RVC room route); Amaka's
-inbound phone calls and every other agent remain outside this pilot. A signed
-per-call override cannot enable it. Clearing the environment variable disables
-it for new calls.
+The Lagos release sets `RVC_LAB_INACTIVITY_PILOT_AGENT_IDS=*` by default. The
+worker applies it only after a configured agent has been successfully loaded
+and only on its RVC browser or SIP
+routes. This includes browser sessions and routed inbound/outbound calls; it does
+not change agents served by other workers or runtimes. Local runs stay disabled
+unless explicitly configured. The deployment script accepts a comma-separated
+agent ID list to scope the behavior; an empty list disables it. To roll it back,
+change `DEFAULT_INACTIVITY_PILOT_AGENT_IDS` in the Lagos deploy script to an
+empty string and release through the normal branch workflow.
 
-For eligible browser calls, the existing contextual engagement controller gets
-an opportunity after 10 seconds waiting for the caller. It uses the current
-conversation to ask one short check-in; a bounded fallback asks whether the
-caller is still there if the model declines or fails. If there is no confirmed
-caller response for another 15 seconds after that audio drains, it plays a
-brief goodbye and deletes the LiveKit room. Caller speech or text cancels the
-pending close. Running tools, speech generation, and playout block the idle
-close. A pending confirmation never becomes approval through silence; it can
-expire with the call. The same controller can give truthful updates
-while a tool is pending, without invoking or repeating that tool.
+For eligible calls, the existing contextual engagement controller gets an
+opportunity after 10 seconds waiting for the caller. It uses the current
+conversation to ask one short check-in in the configured agent language; the
+bounded fallback phrases cover English, French, Yoruba, Hausa, Igbo and Nigerian
+Pidgin. For other configured languages, it does not substitute English if speech
+generation fails. If there is no confirmed caller response for another 15 seconds
+after check-in playout, it gives a language-matched goodbye when available and
+deletes the LiveKit room. Caller speech or text cancels the pending close. Running
+tools, speech generation, and playout block the idle close. A pending confirmation
+never becomes approval through silence; it can expire with the call. The same
+controller can give truthful updates while a tool is pending, without invoking or
+repeating that tool.
 
 The pilot's first check-in and tool-update intervals are 10 seconds. The close
 interval can be adjusted with `RVC_LAB_INACTIVITY_PILOT_CLOSE_SECONDS`. Timers

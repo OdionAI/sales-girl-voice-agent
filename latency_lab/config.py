@@ -71,7 +71,7 @@ class LabConfig:
     speech_language_override: str = ""
     engagement_enabled: bool = _bool("RVC_LAB_ENGAGEMENT_ENABLED", False)
     inactivity_pilot_agent_ids: tuple[str, ...] = _ids("RVC_LAB_INACTIVITY_PILOT_AGENT_IDS")
-    inactivity_pilot_enabled: bool = False  # Set only for an eligible browser call.
+    inactivity_pilot_enabled: bool = False  # Set only for an eligible RVC browser/SIP call.
     inactivity_pilot_close_seconds: float = _float("RVC_LAB_INACTIVITY_PILOT_CLOSE_SECONDS", 15.0)
     # Run bank tools as background tasks so a long or failing call never blocks the
     # conversation: the agent acknowledges naturally and delivers the result later.
@@ -337,9 +337,13 @@ def apply_runtime_overrides(
     return replace(config, **updates) if updates else config
 
 
-def for_inactivity_pilot(config: LabConfig, *, agent_id: str, is_browser: bool) -> LabConfig:
-    """Enable the browser pilot only for an operator-selected configured agent."""
-    if not is_browser or agent_id not in config.inactivity_pilot_agent_ids:
+def for_inactivity_pilot(
+    config: LabConfig, *, agent_id: str, is_browser: bool, is_sip: bool = False,
+) -> LabConfig:
+    """Enable inactivity handling for selected agents on RVC browser/SIP calls."""
+    selected = ("*" in config.inactivity_pilot_agent_ids
+                or agent_id in config.inactivity_pilot_agent_ids)
+    if not (is_browser or is_sip) or not selected:
         return config
     return replace(
         config,
