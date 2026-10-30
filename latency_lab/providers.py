@@ -34,6 +34,7 @@ _LANGUAGE_NAMES = {
     "pidgin", "none",
 }
 _CJK = re.compile(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
+_ASR_WORD = re.compile(r"[a-z0-9]+", re.IGNORECASE)
 
 _llm_trace_scope: ContextVar[dict | None] = ContextVar("llm_trace_scope", default=None)
 _llm_reasoning_sink: ContextVar[Callable[[str], None] | None] = ContextVar(
@@ -77,6 +78,38 @@ def pcm16_wav(pcm16: bytes, *, sample_rate: int = 16000) -> bytes:
         writer.setframerate(sample_rate)
         writer.writeframes(pcm16)
     return output.getvalue()
+
+
+def is_asr_context_echo(transcript: str, context: str) -> bool:
+    """Return true when an ASR final is mostly copied from its private context.
+
+    Qwen can occasionally transcribe its system vocabulary hint instead of the
+    caller's audio. A short exact copy of the hint's opening instruction is
+    covered too. Keep short, ordinary mentions of a hinted bank/network name.
+    """
+    words = [word.lower() for word in _ASR_WORD.findall(transcript or "")]
+    hint = [word.lower() for word in _ASR_WORD.findall(context or "")]
+    if len(words) < 4 or not hint:
+        return False
+
+    # The current Wema context begins with a short directive that the model has
+    # echoed verbatim. Restrict this short-phrase rule to the hint's prefix.
+    if len(words) <= 5 and words == hint[:len(words)]:
+        return True
+
+    # Find the longest contiguous span shared by transcript and context. A
+    # substantial copied span indicates prompt leakage; a normal request such
+    # as "check my Wema Bank balance" remains untouched.
+    previous = [0] * (len(hint) + 1)
+    longest = 0
+    for word in words:
+        current = [0] * (len(hint) + 1)
+        for index, hint_word in enumerate(hint, start=1):
+            if word == hint_word:
+                current[index] = previous[index - 1] + 1
+                longest = max(longest, current[index])
+        previous = current
+    return len(words) >= 8 and longest / len(words) >= 0.8
 
 
 async def frame_pcm16_chunks(source: AsyncIterator[bytes]) -> AsyncIterator[bytes]:
@@ -722,6 +755,16 @@ class RSTTClient:
                 content = str(payload.get("text") or "")
         final = clean_transcript(content or "")
         elapsed_ms = (time.monotonic() - started) * 1000
+        if final and is_asr_context_echo(final, self.config.stt_context):
+            self.on_provider_event(
+                "stt_chat_context_echo_suppressed",
+                {
+                    "elapsed_ms": round(elapsed_ms, 1),
+                    "word_count": len(_ASR_WORD.findall(final)),
+                    "context_word_count": len(_ASR_WORD.findall(self.config.stt_context)),
+                },
+            )
+            return False
         self.on_provider_event(
             "stt_chat_final",
             {"elapsed_ms": round(elapsed_ms, 1), "text": final, "authoritative": True},
@@ -782,7 +825,12 @@ class RSTTClient:
                     self._drop_hypothesis = False
                     authoritative = self.uses_realtime_final or self._force_realtime_final_once
                     self._force_realtime_final_once = False
-                    if authoritative:
+                    if final and is_asr_context_echo(final, self.config.stt_context):
+                        self.on_provider_event(
+                            "stt_realtime_context_echo_suppressed",
+                            {"word_count": len(_ASR_WORD.findall(final)), "authoritative": authoritative},
+                        )
+                    elif authoritative:
                         self.on_provider_event(
                             "stt_realtime_final",
                             {"text": final, "authoritative": True},
