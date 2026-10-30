@@ -30,7 +30,7 @@ class IgboVoiceRoutingTests(unittest.TestCase):
             AgentRuntimeContext(tts_language_hint="Igbo"))
         self.assertEqual(result.tts_voice, "chinedu")
         self.assertEqual(apply_language_stack(LabConfig(), saved,
-            {"runtime_overrides": {"tts_language_hint": "yo"}}).tts_voice, "yoruba")
+            {"runtime_overrides": {"tts_language_hint": "yo"}}).tts_voice, "balogun")
         for value in ("unknown", "muhammad", "ejiro"):
             with self.assertRaisesRegex(ValueError, "Unknown Igbo"):
                 igbo_voice(value)
