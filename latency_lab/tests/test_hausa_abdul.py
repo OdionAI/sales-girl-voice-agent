@@ -42,7 +42,7 @@ class AbdulRoutingTests(unittest.TestCase):
         result = apply_language_stack(LabConfig(), AgentRuntimeContext(
             tts_language_hint="Hausa", tts_voice_id="abdul"),
             {"runtime_overrides": {"tts_language_hint": "yo"}})
-        self.assertEqual(result.tts_voice, "yoruba")
+        self.assertEqual(result.tts_voice, "balogun")
 
 
 class AbdulStreamTests(SpeechLanguageTests):

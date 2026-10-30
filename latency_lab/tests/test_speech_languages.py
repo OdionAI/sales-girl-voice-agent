@@ -155,6 +155,26 @@ class SpeechLanguageTests(unittest.IsolatedAsyncioTestCase):
                 with self.assertRaises(ValueError):
                     _ = [part async for part in chunks]
 
+    async def test_saved_yoruba_voices_route_every_turn_to_balogun_without_changing_llm(self):
+        for saved_voice in ("balogun", "coqui-yoruba-vits", "yoruba", "yoruba-ljspeech-vits-epoch92"):
+            with self.subTest(saved_voice=saved_voice):
+                base = LabConfig(llm_model="unchanged-llm")
+                context = SimpleNamespace(tts_language_hint="Yoruba", tts_voice_id=saved_voice)
+                config = replace(apply_language_stack(base, context), tts_url=self.url)
+                self.assertEqual(config.tts_model, "yoruba-ljspeech-vits-epoch92")
+                self.assertEqual(config.tts_voice, "balogun")
+                self.assertEqual(config.stt_model, SBPN_MODEL)
+                self.assertEqual(config.llm_model, "unchanged-llm")
+                self.requests.clear()
+                async with aiohttp.ClientSession() as session:
+                    client = NativeLanguageTTSClient(config, session)
+                    for text in ("Ẹ káàbọ̀. " * 20, "Báwo ni mo ṣe lè ràn yín lọ́wọ́?"):
+                        _, chunks = await client.stream(text)
+                        self.assertTrue(b"".join([part async for part in chunks]))
+                self.assertGreater(len(self.requests), 2)
+                self.assertTrue(all(item["model"] == "yoruba-ljspeech-vits-epoch92"
+                                    and item["voice"] == "balogun" for item in self.requests))
+
     async def test_saved_hausa_speaker_reaches_every_streaming_turn(self):
         for voice, speaker_id in HAUSA_TWB_VOICES.items():
             with self.subTest(voice=voice), TemporaryDirectory() as directory:
