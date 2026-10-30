@@ -9,7 +9,7 @@ from aiohttp import web
 
 from latency_lab.config import LabConfig
 from latency_lab.pidgin import (
-    DYNAMIC_PIDGIN_MODEL, DYNAMIC_PIDGIN_URL, EJIRO_MODEL, EJIRO_URL,
+    DYNAMIC_PIDGIN_CHECKPOINT, DYNAMIC_PIDGIN_MODEL, DYNAMIC_PIDGIN_URL, EJIRO_MODEL, EJIRO_URL,
     SBPN_MODEL, EjiroTTSClient, apply_pidgin_stack, split_text,
 )
 
@@ -60,7 +60,9 @@ class DynamicPidginStreamingTests(unittest.IsolatedAsyncioTestCase):
         self.audio = b"\x01\x00" * 4800
         self.headers = {"Content-Type": "audio/pcm", "X-Audio-Sample-Rate": "24000",
                         "X-Audio-Channels": "1", "X-Model": DYNAMIC_PIDGIN_MODEL,
-                        "X-Voice": self.voice}
+                        "X-Voice": self.voice, "X-Speaker-ID": self.voice,
+                        "X-Checkpoint-SHA256": DYNAMIC_PIDGIN_CHECKPOINT,
+                        "X-Voice-Profile": self.voice + "-flash-v1", "X-Seed": "0", "X-Speed": "1"}
         self.delay = False
         self.release = asyncio.Event()
         self.finished = asyncio.Event()
@@ -105,6 +107,8 @@ class DynamicPidginStreamingTests(unittest.IsolatedAsyncioTestCase):
         for voice in ("maro", "rukky"):
             self.voice = voice
             self.headers["X-Voice"] = voice
+            self.headers["X-Speaker-ID"] = voice
+            self.headers["X-Voice-Profile"] = voice + "-flash-v1"
             client = self.client()
             client.usage = SimpleNamespace(tts_accepted=Mock())
             with patch("latency_lab.pidgin.rtc.AudioResampler", side_effect=AssertionError("Do not resample")):
@@ -113,7 +117,8 @@ class DynamicPidginStreamingTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(rate, 24000)
             self.assertEqual(self.requests[-1], {
                 "model": DYNAMIC_PIDGIN_MODEL, "voice": voice, "language": "pcm",
-                "input": text, "response_format": "pcm", "stream": True, "seed": 0, "speed": 1})
+                "input": text, "response_format": "pcm", "stream": True,
+                "stream_format": "audio", "seed": 0, "speed": 1})
             client.usage.tts_accepted.assert_called_once_with(text)
 
     async def test_yields_before_eof_and_preserves_odd_network_boundaries(self):
@@ -144,7 +149,9 @@ class DynamicPidginStreamingTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_mismatched_voice_model_or_rate_rejected_before_audio(self):
         for key, value in (("X-Voice", "favour"), ("X-Model", "other-model"),
-                           ("X-Audio-Sample-Rate", "16000"), ("X-Audio-Channels", "2")):
+                           ("X-Audio-Sample-Rate", "16000"), ("X-Audio-Channels", "2"),
+                           ("X-Speaker-ID", "rukky"), ("X-Checkpoint-SHA256", "wrong-checkpoint"),
+                           ("X-Seed", "42"), ("X-Speed", "2"), ("X-Voice-Profile", "other-profile")):
             original = self.headers[key]
             self.headers[key] = value
             _, chunks = await self.client().stream("Abeg check am.")

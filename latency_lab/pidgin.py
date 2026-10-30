@@ -16,6 +16,7 @@ EJIRO_MODEL = "qwen-pidgin-f1-cleaned-epoch5"
 PIDGIN_VOICE = "favour"
 EJIRO_URL = "http://102.88.137.124:8080/tts-ejiro/v1/audio/speech"
 DYNAMIC_PIDGIN_MODEL = "dynamic-accent-pidgin-flash"
+DYNAMIC_PIDGIN_CHECKPOINT = "f59a6fc0dacc331844cf8b513ec99e4d5c75f2583115037c8d38ba9ff7e3a307"
 DYNAMIC_PIDGIN_URL = "http://102.88.137.124:8080/tts-pidgin-dynamic/v1/audio/speech"
 DYNAMIC_PIDGIN_VOICES = {"maro", "rukky"}
 SBPN_MODEL = "ogunlao/SBPN_multilingual_base"
@@ -163,14 +164,16 @@ class EjiroTTSClient:
                 continue
             payload = {"model": DYNAMIC_PIDGIN_MODEL, "voice": voice, "language": "pcm",
                        "input": part, "response_format": "pcm", "stream": True,
-                       "seed": 0, "speed": 1}
+                       "stream_format": "audio", "seed": 0, "speed": 1}
             async with self.session.post(self.config.tts_url, json=payload,
-                timeout=aiohttp.ClientTimeout(total=180, sock_read=90)) as response:
+                timeout=aiohttp.ClientTimeout(total=180)) as response:
                 response.raise_for_status()
                 if (response.content_type != "audio/pcm" or any(
                     response.headers.get(key) != value for key, value in {
                         "X-Audio-Sample-Rate": "24000", "X-Audio-Channels": "1",
                         "X-Model": DYNAMIC_PIDGIN_MODEL, "X-Voice": voice,
+                        "X-Speaker-ID": voice, "X-Checkpoint-SHA256": DYNAMIC_PIDGIN_CHECKPOINT,
+                        "X-Voice-Profile": voice + "-flash-v1", "X-Seed": "0", "X-Speed": "1",
                     }.items())):
                     raise ValueError("Dynamic Pidgin TTS returned an unexpected voice, model or PCM format")
                 received = 0

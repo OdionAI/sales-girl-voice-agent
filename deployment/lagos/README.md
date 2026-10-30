@@ -148,6 +148,12 @@ provider error. The worker checks model, named voice and audio headers before
 forwarding any audio. Closing the generator cancels the request and does not
 start the next segment.
 
+The verified backend binds both profiles to checkpoint SHA256
+`f59a6fc0dacc331844cf8b513ec99e4d5c75f2583115037c8d38ba9ff7e3a307`.
+The worker also validates that checkpoint, speaker ID, `<voice>-flash-v1`
+profile, seed and speed before releasing PCM. Maro is the tested male
+anchor_male voice; Rukky is the tested waxal_ibo_5_female voice.
+
 The tested model is a serial NPU/CPU hybrid, not a real-time latency guarantee.
 Its sentence-block HTTP streaming is not token-level streaming. Only enable
 new agents after a verified backend handoff and real public PCM, installed-worker
