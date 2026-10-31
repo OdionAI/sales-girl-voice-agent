@@ -8,7 +8,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl gnupg ca-c
     apt-get update && apt-get install -y --no-install-recommends cmake clang-21 libclang-21-dev pkg-config libssl-dev unzip && \
     rm -rf /var/lib/apt/lists/* /tmp/llvm-key.asc
 WORKDIR /src
-ENV CARGO_BUILD_JOBS=2 CC=clang-21 CXX=clang++-21 LIBCLANG_PATH=/usr/lib/llvm-21/lib
+ENV CARGO_BUILD_JOBS=2 CC=clang-21 CXX=clang++-21 LIBCLANG_PATH=/usr/lib/llvm-21/lib \
+    RNNOISE_MODEL_PATH=/opt/rnnoise/rnnoise_data-0a8755f8e2d834eff6a54714ecc7d75f9932e845df35f8b59bc52a7cfe6e8b37.tar.gz
+# Fetch the pinned RNNoise model once with curl (retries + checksum), so
+# rnnoise2-sys unpacks it via RNNOISE_MODEL_PATH instead of downloading it with
+# its build-time reqwest client, which times out in this build environment.
+RUN mkdir -p /opt/rnnoise && \
+    curl --fail --location --retry 8 --retry-delay 5 --connect-timeout 30 \
+        -o "$RNNOISE_MODEL_PATH" \
+        "https://media.xiph.org/rnnoise/models/rnnoise_data-0a8755f8e2d834eff6a54714ecc7d75f9932e845df35f8b59bc52a7cfe6e8b37.tar.gz" && \
+    echo "0a8755f8e2d834eff6a54714ecc7d75f9932e845df35f8b59bc52a7cfe6e8b37  $RNNOISE_MODEL_PATH" | sha256sum -c -
 COPY rust/Cargo.toml rust/Cargo.lock ./
 COPY rust/src ./src
 COPY rust/fixtures ./fixtures
