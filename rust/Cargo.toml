@@ -7,7 +7,7 @@ publish = false
 [features]
 default = []
 local-call = ["rvc", "dep:axum"]
-rvc = ["rtc", "dep:reqwest", "dep:regex", "dep:base64", "dep:hmac", "dep:sha2", "dep:jsonschema", "dep:uuid", "dep:chrono", "dep:nnnoiseless", "dep:unicode-normalization", "dep:rusqlite", "dep:webauthn-rs", "dep:dotenvy"]
+rvc = ["rtc", "dep:reqwest", "dep:regex", "dep:base64", "dep:hmac", "dep:sha2", "dep:jsonschema", "dep:uuid", "dep:chrono", "dep:unicode-normalization", "dep:rusqlite", "dep:webauthn-rs", "dep:dotenvy"]
 rtc = ["api", "dep:livekit"]
 api = ["worker", "livekit-api/services"]
 worker = ["dep:livekit-api", "dep:livekit-protocol", "dep:prost", "dep:tokio-tungstenite", "dep:futures-util"]
@@ -36,10 +36,13 @@ jsonschema = { version = "=0.46.10", optional = true, default-features = false }
 
 uuid = { version = "=1.29.0", optional = true, features = ["v4"] }
 chrono = { version = "=0.4.45", optional = true }
-nnnoiseless = { version = "=0.5.2", optional = true, default-features = false }
 unicode-normalization = { version = "=0.1.25", optional = true }
 rusqlite = { version = "=0.38.0", optional = true, features = ["bundled"] }
 webauthn-rs = { version = "=0.6.2", optional = true, default-features = false }
+
+[build-dependencies]
+cc = "=1.10.0"
+sha2 = "=0.10.9"
 
 [[bin]]
 name = "rtc-smoke"
