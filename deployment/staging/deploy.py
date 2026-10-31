@@ -153,7 +153,13 @@ def deploy(release, revision, enable_hausa_research=False, reply_grace_ms='0',
             or (release / 'plan.json').exists()):
         raise ValueError('Unexpected or reused release directory')
     previous, files = inspect_voice()
-    previous_env = dict(item.split('=', 1) for item in previous['Config']['Env'])
+    # Env entries are normally KEY=VALUE, but a previous rollback could have
+    # written bare KEY entries (see below); treat a missing '=' as empty so the
+    # parser never crashes on an already-degraded container.
+    previous_env = dict(
+        item.split('=', 1) if '=' in item else (item, '')
+        for item in previous['Config']['Env']
+    )
     updates = dict(STAGING_ASR_ENV)
     updates.update(reply_grace_env(reply_grace_ms, reply_grace_agent_ids))
     updates.update(inactivity_pilot_env(inactivity_pilot_agent_ids))
@@ -230,7 +236,11 @@ def deploy(release, revision, enable_hausa_research=False, reply_grace_ms='0',
     except Exception:
         if attempted:
             rollback = release / 'voice-rollback.json'
-            image_override(rollback, old_image, {key: previous_env.get(key) for key in updates},
+            # Only restore keys that existed before this release; setting a key
+            # that was previously absent to None makes Compose render a bare
+            # KEY with no value, which poisons the next deploy's env parser.
+            restore_env = {key: previous_env[key] for key in updates if key in previous_env}
+            image_override(rollback, old_image, restore_env,
                            worker_runtime(previous, native=False))
             run(*compose([*files, rollback]), 'up', '-d', '--no-deps', '--no-build',
                 '--force-recreate', 'voice', cwd=STACK)
