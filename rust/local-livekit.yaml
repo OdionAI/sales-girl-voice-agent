@@ -1,0 +1,13 @@
+port: 17880
+bind_addresses:
+  - 127.0.0.1
+rtc:
+  tcp_port: 17881
+  udp_port: 17882
+  use_external_ip: false
+  node_ip: 127.0.0.1
+  enable_loopback_candidate: true
+keys:
+  devkey: secret
+logging:
+  level: info

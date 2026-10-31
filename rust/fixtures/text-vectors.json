@@ -1,0 +1,2112 @@
+{
+  "ratios": [
+    {
+      "a": "hello there",
+      "b": "hello there",
+      "expected": 1.0
+    },
+    {
+      "a": "my number is 123",
+      "b": "my number is 124",
+      "expected": 0.9375
+    },
+    {
+      "a": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaab",
+      "b": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaac",
+      "expected": 0.995260663507109
+    },
+    {
+      "a": "",
+      "b": "",
+      "expected": 1.0
+    },
+    {
+      "a": "b ccbb11aba3  2a22a2",
+      "b": "b ccbb11abc3  2a22a2",
+      "expected": 0.95
+    },
+    {
+      "a": "c1 a3 33cb13a 112 c232a2bcb3a1 2b121 1231c b 3cbcbbca31aa2bb 2cc323c13b311c3c32b11ccbba123c212cc3312a23b1c231b3b1111ac1 23a2ccb22a1a13 3ba 2b32cb2 2a33232c3 3 c321 a c 3c2a ca 2",
+      "b": "c1 a3 33cb13a 112 c232a2bcb3a1 2b121 1231c b 3cbcbbca31aa2bb 2cc323c13b311c3c32b11ccbba1 3c212cc3312a23b1c231b3b1111ac1 23a2ccb22a1a13 3ba 2b32cb2 2a33232c3 3 c321 a c 3c2a ca 2",
+      "expected": 0.9943502824858758
+    },
+    {
+      "a": "c b13a  2a2b12a32 cccaab22c3cba112   2a1 cc22c2 123b33 bb31c 1cc33ca1 22323212bc2b12a 3 21b13  cccb1 22a1b c 112 123aa2 b2ac a  1 31bb2cc aab3bb b3cbcbb13 2bc33 3c3ac3c2baca3b12 abab 1133 2c",
+      "b": "c b13a  2a2b12a32 cccaab22c3cba112   2a1 cc22c2 123b33 bb31c 1cc33ca1 22323212bc2b12a 3 21b13  cccb1 22a1b c 112 123aa2 b2ac a  1 31bb2cc aab3bb b3cbcbb13 2bc33 3c3ac3c2baca3b12 abab 1133 2c",
+      "expected": 1.0
+    },
+    {
+      "a": "2  323b  1      a31b312a2 11bc 3cc233a 3c2bc31c a a 3a1b221333c2 2a3bccaa21113 a123323a aa3ac2a3b 3babbbacc3b2112b12a3a21c    2 2323c21 31ab22ca 1 2a  12c23 b23aa2cc2 2a bb212 b22b12b1c1 c3a3b2 2",
+      "b": "2  323b  1      a31b312a2 11bc 3cc233a 3c2bc31c a a 3a1b221333c2 2a3bccaa21113 a123323a aa3ac2a3b 3babbbacc3b2112b12a3a21c    2 2323c21 31ab22ca 1 2a  12c23 b23aa2cc2 2a bb212 b22b12b1c1 c3a3b2 2",
+      "expected": 1.0
+    },
+    {
+      "a": "cb3abc311ca31b2a aab 312223c a11ba1b 3b1  1bbca2a  ab b3b2",
+      "b": "cb3abc311ca31b2a aab 312223caa11ba1b 3b1  1bbca2a  ab b3b2",
+      "expected": 0.9827586206896551
+    },
+    {
+      "a": "a 1b11b1ab 232b1322 b a2bbbab3cc232c112332  2ca2cbab3ab3b  b2 bab1c",
+      "b": "a 1b11b1ab 232b1322 b a2bbbab3cc2b2c112332  2ca2cbab3ab3b  b2 bab1c",
+      "expected": 0.9850746268656716
+    },
+    {
+      "a": "ac112b3c1211ca31bb223  b2232a1 c3 ac3c2ac2caac3cb1ac caca13aa331c1a13c 3 3b3",
+      "b": "ac112b3c1211ca31bb223  b2232a1 c3 ac3c ac2caac3cb1ac caca13aa331c1a13c 3 3b3",
+      "expected": 0.9868421052631579
+    },
+    {
+      "a": "cab 1ba31c3cbb13c  2 1 3b23c3b b2ac3 c3bc21c31aa12 a121 baaa333b2c112c3c1bcb a1a2aa22c21b12c13 2b1 3b1a2ba b1b ba3cbc 1baa3b ca2c13 12 bccbab22b b2cabbc1a2123b b3cc1 c3a233ca3c33bc131 3c 232a2a3ba2ac3acb2111a11a  1ba b2 1cba2bbbc a1 c aab",
+      "b": "cab 1ba31c3cbb13c  2 1 3b23c3b b2ac3 c3bc21c31aa12 a121 baaa333b2c112c3c1bcb a1a2aa22c21b12c13 2b1 3b1a2ba b1b ba3cbc  baa3b ca2c13 12 bccbab22b b2cabbc1a2123b b3cc1 c3a233ca3c33bc131 3c 232a2a3ba2ac3acb2111a11a  1ba b2 1cba2bbbc a1 c aab",
+      "expected": 0.4957983193277311
+    },
+    {
+      "a": "1c31 33c2acb1 2 2ac3b2aa2 b c333c33bc2cc11b3112233 ba222 bc22ca223c2 c11",
+      "b": "1c31 33c2acb1 2 2ac3b2aa2 b c333c33bc2cc11b3112233 ba222 bc22ca223c2 c11",
+      "expected": 1.0
+    },
+    {
+      "a": "bab23 22c23332ba3ca1ac12 1   2131b3a3b11a1a3313cca1  a1313aaaba1cc1ca2b1cbb 3cb 13 c22 23ab3 31aa 2a3 11a2a bcc3a2122313ccaa 133",
+      "b": "bab23 22c23332ba3ca1ac12 1   2131b3a3b11a1a3313cca1  a1313aaaba1cc1ca2b1cbb 3cb 13 c22 23ab3 31aa 2a3 11a2a bcc3a2122313ccaa 133",
+      "expected": 1.0
+    },
+    {
+      "a": "11babcbbc 12bca3  accc3 3 a32 b1c1c1aab33a3 22b1b b3 2a1 21ab1c a13b2a1a3 2a1 1 111b 11ab1c 21bbc b2a baa332c23 311b333 11c1 2aabbb22ac 3  2c 22c 2c11c2c2c3 ba3323acc 2c22312ba11 1 1abbc1 ccbac11bbc3a",
+      "b": "11babcbbc 12bca3  accc3 3 a32 b1c1c1aab33a3 22b1b b3 2a1 21ab1c a13b2a1a3 2a1 1 111b 11ab1c 21bbc b2  baa332c23 311b333 11c1 2aabbb22ac 3  2c 22c 2c11c2c2c3 ba3323acc 2c22312ba11 1 1abbc1 ccbac11bbc3a",
+      "expected": 0.5
+    },
+    {
+      "a": "3ab1ab3",
+      "b": "3abaab3",
+      "expected": 0.8571428571428571
+    },
+    {
+      "a": "1b aa23c 3ba13a 2c2c 3 cb b2 ab123c32 213c3a a111",
+      "b": "1b aa23c 3ba13a 2c2c 3 c  b2 ab123c32 213c3a a111",
+      "expected": 0.9795918367346939
+    },
+    {
+      "a": "2baac21a1ba1ccbc121 bc2c 1b3b1a c2a313 c1ba c13ac3b33a1  313bbb2 b c2  3bcbb2b 31c 3 3 c2c2c12a1bc b331a2ab1bba   c13ba21a322ab 23c 12ca3accba21 ccc1ab21a3 cc2322a2bb a b1c2c11ba2bb3 c12b ccb1abc11a2acc31b1cc 3 2c bba1ccbaa3 22a 23abab a2aa2 3b  cab",
+      "b": "2baac21a1ba1ccbc121 bc2c 1b3b1a c2a313 c1ba c13ac3b33a1  313bbb2 b c2  3bcbb2b 31c 3 3 c2c2c12a1bc b331a2ab1bba   c13ba21a32bab 23c 12ca3accba21 ccc1ab21a3 cc2322a2bb a b1c2c11ba2bb3 c12b ccb1abc11a2acc31b1cc 3 2c bba1ccbaa3 22a 23abab a2aa2 3b  cab",
+      "expected": 0.4979919678714859
+    },
+    {
+      "a": "1bb21121bcb211b b3 ba a1b2ac31cc 21a3ccc2c111331aa c33b2bc33a1 b22b2 b3 c1 3a3 3b2 3b21a12 32a1  2 2",
+      "b": "1bb21121bcb211b b3 ba a1b2ac31cc 21a3ccc2c111331ab c33b2bc33a1 b22b2 b3 c1 3a3 3b2 3b21a12 32a1  2 2",
+      "expected": 0.99
+    },
+    {
+      "a": "1ab1bc 1 b1cac1112b3a b3b2 ba1113aac1c3b a1 222b3a2b  2cabc3 2 aa1b1  21a3c1b a2c",
+      "b": "1ab1bc 1 b1cac1112b3a b3b2 ba1113aac1c3bca1 222b3a2b  2cabc3 2 aa1b1  21a3c1b a2c",
+      "expected": 0.9876543209876543
+    },
+    {
+      "a": "2c3 3 2a33a3b 2ab bc1311c bb cabca3213a22 cbc211   c1bba2bc11ac23b1bcbaa 2aabc2 c c 23313bb 3111 31 3 23c31a12b1 1b31a3b1aabaaccabb23ca ba23aaabbbaaa1b ba cc b 232bb 2 cb2232221c  a2bcbcb2bac 12b1 aa2a1a bcbc21b23c 2 2c3c1 112a1 3a32aa23 223c3bcb2cab",
+      "b": "2c3 3 2a33a3b 2ab bc1311c bb cabca3213a22 cbc211   c1bba2bc11ac23b1bcbaa 2aabc2 c c 23313bb 3111 31 3 23c31a12b1 1b31a3b1aababccabb23ca ba23aaabbbaaa1b ba cc b 232bb 2 cb2232221c  a2bcbcb2bac 12b1 aa2a1a bcbc21b23c 2 2c3c1 112a1 3a32aa23 223c3bcb2cab",
+      "expected": 0.5
+    },
+    {
+      "a": "1bc23 1c3  12 b2b",
+      "b": "1bc23 1ca  12 b2b",
+      "expected": 0.9411764705882353
+    },
+    {
+      "a": "b21ca2b bab2b  cb333  b1bb 223 22 312",
+      "b": "b21ca2b bab2b  cb3b3  b1bb 223 22 312",
+      "expected": 0.972972972972973
+    },
+    {
+      "a": "a3b32bc 311213   ab2a 2 31aba32a3 b13323",
+      "b": "a3b32bc 311213   ab2b 2 31aba32a3 b13323",
+      "expected": 0.975
+    },
+    {
+      "a": "31 c 1aa1222",
+      "b": "31 c 1 a1222",
+      "expected": 0.9166666666666666
+    },
+    {
+      "a": "c aaba31a1 3 1bacacb3c1 13ba2c1cc3ab3c2   21b3 2c3a  bbc3 a2 bc323c3cabbc1cb21bcbc11323a3113213111a33ca2b1 231acaa211cba3",
+      "b": "c aaba31a1 3 1bacacb3c1 13ba2c1cc3ab3c2   21b3 2c3a  bbc3 a2cbc323c3cabbc1cb21bcbc11323a3113213111a33ca2b1 231acaa211cba3",
+      "expected": 0.9917355371900827
+    },
+    {
+      "a": "11ac221bb111acb1c23 1a1bac2223223c 13 bc 3b3cac31a b2ac1 222a1ba21222 12313b 3 a12a221a23ba abab1  3cb3bbc1",
+      "b": "11ac221bb111acb1c23 1a1bac2223223c 13 bc 3b3cac31a b2ac1 222a1ba21222 12313b 3 a12a221a23ba abab1  3cb3bbc1",
+      "expected": 1.0
+    },
+    {
+      "a": "1 31ac1b2a1c1b3a232b3a22cc3a2ccbb2caaaabca322ac3ba 23a3c12  2acc23 112a2",
+      "b": "1 31ac1b2a1c1b3a232b3a22cc3a2ccbb2cacaabca322ac3ba 23a3c12  2acc23 112a2",
+      "expected": 0.9861111111111112
+    },
+    {
+      "a": "babc22bbb32 1a3ac3a332bc2133 13 baa22b  c1 1ccc3  b21acacbabbab1bca2 2c321cc1    cb23a11a b2 22 23a2cb3c3 2 2c1 22 baaca2ca3 1  b3acbcc2a21a2 1ba1c 3baa3a1b1ccb  31a2a2a121b 3bca 3a231b12c2ab1cca32 c 31  1313322cacc 3a1 ba1c1a1b2abc1  b 2b1b2c33 3b",
+      "b": "babc22bbb32 1a3ac3a332bc2133 13 baa22b  c1 1ccc3  b21acacbabbab1bca2 2c321cc1    cb23a11a b2 22 23a2cb3c3 2 2c1 22 baaca2ca3a1  b3acbcc2a21a2 1ba1c 3baa3a1b1ccb  31a2a2a121b 3bca 3a231b12c2ab1cca32 c 31  1313322cacc 3a1 ba1c1a1b2abc1  b 2b1b2c33 3b",
+      "expected": 0.5
+    },
+    {
+      "a": "cab2a212c cba132c 3 1a33a  a333aa12 11b2cca2122bbacc222 c2 caab b33",
+      "b": "cab2a212c cba132c 3 1a33a  a333aa 2 11b2cca2122bbacc222 c2 caab b33",
+      "expected": 0.9850746268656716
+    },
+    {
+      "a": "b ca1331121 b3c3 ca13 23aa1aa21 ca 31 cab1c3a2cc22cb12ccc11cca31acc13212cccbc1 1  23331c3c12 cab22acb131212112cac1c1cc2b2c 2c3a",
+      "b": "b ca1331121 b3c3 ca13 23aa1aa21 ca 31 cab1c3a2cc22cb12ccc11cca3aacc13212cccbc1 1  23331c3c12 cab22acb131212112cac1c1cc2b2c 2c3a",
+      "expected": 0.9921259842519685
+    },
+    {
+      "a": "cca1123 a131b1ba1bb1cb3c1  a2  c3 3c 1a23cacba3c2a3b12aaa2c2b1bcc 2111bcca 11",
+      "b": "cca1123 a131b1ba1bb1cb3c1  a2  c3 3c 1b23cacba3c2a3b12aaa2c2b1bcc 2111bcca 11",
+      "expected": 0.987012987012987
+    },
+    {
+      "a": "1 12 13cc1a1  c aabb1b3baca1c3b b1c 2ba1 3caba2cbba3cb112a232b33b2b221ccb33  1 21b1aabb1accc23c32b2b 2ca13c23ac22a3233cb1acc2b2 c2ab111bbbc21a2ab31 a1 33 3a 1aab2ba 11322c a3abc 2 3 2  331c 131 b11ca31a2cc3bc3b3aa111 3b1b3bc1b11b 3ac31b aa",
+      "b": "1 12 13cc1a1  c aabb1b3baca1c3b b1c 2ba1 3caba2cbba3cb112a232b33b2b221ccb33  1 21b1aabb1accc23c32b2b 2ca13c23ac22a3233ca1acc2b2 c2ab111bbbc21a2ab31 a1 33 3a 1aab2ba 11322c a3abc 2 3 2  331c 131 b11ca31a2cc3bc3b3aa111 3b1b3bc1b11b 3ac31b aa",
+      "expected": 0.497907949790795
+    },
+    {
+      "a": "aaac2  bcba 22a11a2ab1cc",
+      "b": "aaac2  bcba c2a11a2ab1cc",
+      "expected": 0.9583333333333334
+    },
+    {
+      "a": "b bba 1aa 3c3 c ac 1ac32aa 3ba3ac1 1bcbc3cb22 2ca 223acca2c2 233a12ccc23c b2 1",
+      "b": "b bba 1aa 3c3 c ac 1ac32aa 3ba3ac1 1bcba3cb22 2ca 223acca2c2 233a12ccc23c b2 1",
+      "expected": 0.9871794871794872
+    },
+    {
+      "a": "cbc1a1ba  c bac3b31a1 a2cac3bb2c ccbc22aa2ca3  abc c2112aaa 223c2ab23213bc33a11ccaa211b  abbba1c3aa13 ac121  3bbb 3b3ab31ac323ac12 3b b33a3c 1 bb 1  c2a313cca 3c33c122  cc3a33bcb  1c12c",
+      "b": "cbc1a1ba  c bac3b31a1 a2cac3bb2c ccbc22aa2ca3  abc c2112aaa 223c2ab23213bc33a11ccaa211b  abbbb1c3aa13 ac121  3bbb 3b3ab31ac323ac12 3b b33a3c 1 bb 1  c2a313cca 3c33c122  cc3a33bcb  1c12c",
+      "expected": 0.9945945945945946
+    },
+    {
+      "a": "b1bb bc1a2ab1c322ba2211aab13cb 3223a212 c13 b a3aabbbc1ac11ba1c b212b2332a1a3aa23b3ab  ac22 b2 c1b a c311c21  a2 c21a c21 3321 3 aa3 2c bc332c3c133b3 bcb3b11a2 bca ab2b12ba21aa121c2cc1  c133b2bccb1a 2bb322a3  212",
+      "b": "b1bb bc1a2ab1c322ba2211aab13cb 3223a212 c13 b a3aabbbc1ac11ba1c b212b2332a1a3aa23b3ab  ac22 b2 c1b a c311ca1  a2 c21a c21 3321 3 aa3 2c bc332c3c133b3 bcb3b11a2 bca ab2b12ba21aa121c2cc1  c133b2bccb1a 2bb322a3  212",
+      "expected": 0.5
+    },
+    {
+      "a": "2cc  c2 3aacaacc 2bb 23cbcb 332 aaa1cb21b abcb c111 2ba2aa 3cb2bbac11b113cb  cb11c331212 2ba 1b a12b1bc a13b2 2a31cb 321c321 12a a32 112 bb11c1 bb 2 1 c1 ac2a a23 aa32b23ab32c32112 211a1b2 13ba 3 13ab311ccbc3bbc b3b231bcc3a3",
+      "b": "2cc  c2 3aacaacc 2bb 23cbcb 332 aaa1cb21b abcb c111 2ba2aa 3cb2bbac11b113cb  cb11c331212 2ba 1b a12b1bc a13b2 2ab1cb 321c321 12a a32 112 bb11c1 bb 2 1 c1 ac2a a23 aa32b23ab32c32112 211a1b2 13ba 3 13ab311ccbc3bbc b3b231bcc3a3",
+      "expected": 0.5
+    },
+    {
+      "a": "b1a22c2c1a c3a1acaa1b 2ac11ca3 b bb2aa b c 22312c3322b232b2aa23 2c21a1c2   a22333322ac223a13 bb3 c21a3ab32321b 2ab32ab1b 331a c32ac",
+      "b": "b1a22c2c1a c3a1acaa1b 2ac11ca3 b bb2aa b c 22312c3322b232b2aa23 2 21a1c2   a22333322ac223a13 bb3 c21a3ab32321b 2ab32ab1b 331a c32ac",
+      "expected": 0.9923664122137404
+    },
+    {
+      "a": "2 b11ccb ca2b2 23 2 bc2 1a 3 bb 2b211a3 a3 aa1c1 a3ab113131 2 a1a bbc12 b2c2aba1 bbbb c2ab1 211 a21bc1b2 2231 1c 13ca2bcc1311cc11c b 3133b2",
+      "b": "2 b11ccb ca2b2 23 2 bc2 1a 3 bb 2b211a3 a3 aa1c1 a3ab113131 2 a1a bbcb2 b2c2aba1 bbbb c2ab1 211 a21bc1b2 2231 1c 13ca2bcc1311cc11c b 3133b2",
+      "expected": 0.9928057553956835
+    },
+    {
+      "a": "13c12ab1c2ac11a2a11b22  b13bcb  a 223acaccccaa23211 a2c2cbaa2c2cac11322aaaa12b2bb23ab aa2a32c3",
+      "b": "13c12ab1c2ac11a2a11b22  b13bcb  a 223acaccccaa23 11 a2c2cbaa2c2cac11322aaaa12b2bb23ab aa2a32c3",
+      "expected": 0.9893617021276596
+    },
+    {
+      "a": "ab12 3 bb2ac32a1aa13a3a1ca 3231 c1b32a1cc 2bcb1ba2c  3 3c3b2bb1123233c1accbb1bb3 a 13 a b3 b",
+      "b": "ab12 3 bb2ac32a1aa13a3a1ca 3231 c1b32a1cc 2bcbbba2c  3 3c3b2bb1123233c1accbb1bb3 a 13 a b3 b",
+      "expected": 0.9891304347826086
+    },
+    {
+      "a": "3b1a2232b3 23b222b2bb22c 3bca22ab2b1bb1c 323 a2a 1313ab3c3c131ac1 bb1ab13c313 22a322ccb311bb12a2 b2b 3 1c1ac b1b  12aca1b",
+      "b": "3b1a2232b3 23b222b2bb22c 3bca22ab2b1bb1c 323 a2a 1313ab3c3c13cac1 bb1ab13c313 22a322ccb311bb12a2 b2b 3 1c1ac b1b  12aca1b",
+      "expected": 0.9917355371900827
+    },
+    {
+      "a": "b2bc1  cb  b 3c2 b223ac  12c2333c123cc3bb3231 1ba1a31 a1a33c1 3a 312ac3b3bc 3c 33bccc2a   2aacb23 a1b c 2c2c12b3ac3a312 a",
+      "b": "b2bc1  cb  b 3c2 b223ac  12c2333c123cc3bb3231 1ba1a31 a1a33c1a3a 312ac3b3bc 3c 33bccc2a   2aacb23 a1b c 2c2c12b3ac3a312 a",
+      "expected": 0.9917355371900827
+    },
+    {
+      "a": "bc3 c2a1 1 a 131bc c3 cac13cc1cb3c bbc1b 1 cac33a1b33a13c1122baa1132c3baab3 c  3 322 bc23cbc1aa33b22cc12abac3 bba  3c33babbb22acb  a",
+      "b": "bc3 c2a1 1 a 131bc c3 cac13cc1cb3c bbc1b 1 cac33a1b33a13c1122baa11a2c3baab3 c  3 322 bc23cbc1aa33b22cc12abac3 bba  3c33babbb22acb  a",
+      "expected": 0.9924242424242424
+    },
+    {
+      "a": "32 132b311c2 aac22c2ac1b 3a ba32321abca3c1b3bc  12bcaa21 3 1bba   33123133 b  3a32b21aa 13ca122 b 313  b 3bcb1  a12cb2ac 132b1222  3b2bc2123  2313 bba3 bc2 c1bb13222a1 1cc 3b 1ca 1c3b 3b132 b1233c3 31a13 3aa2 2a3c1b32a",
+      "b": "32 132b311c2 aac22c2ac1b 3a ba32321abca3c1b3bc  12bcaa21 3 1bba   33123133 b  3a32b21aa 13ca122 b 313  b 3bcb   a12cb2ac 132b1222  3b2bc2123  2313 bba3 bc2 c1bb13222a1 1cc 3b 1ca 1c3b 3b132 b1233c3 31a13 3aa2 2a3c1b32a",
+      "expected": 0.5
+    },
+    {
+      "a": "ca2a3221213b1c231ba3cb 3a   ab11331b312a1c311 3 a1b21c c2 aab22b23aa1 a231ac3b2ca c2bc b2ac3 11cba3a 3ba2b 3ba c1babca 2 3aa b3 2 cb 3 3 ca3ca122b112c3b a a13ca22 c",
+      "b": "ca2a3221213b1c231ba3cb 3a   ab11331b312a1c311 3 a1b21c c2 aab22b23aa1 a231ac3b2ca  2bc b2ac3 11cba3a 3ba2b 3ba c1babca 2 3aa b3 2 cb 3 3 ca3ca122b112c3b a a13ca22 c",
+      "expected": 0.9939024390243902
+    },
+    {
+      "a": "32ab3a1ab 2  b31babbc b133aaab1c33aa131 c23abaccc3 3 b babc cb1b3c232bcb2 bbc21a2bb2 b21b a3bc121a aa1ab32ba1 2ba13 a3a3a11  2 22a2a",
+      "b": "32ab3a1ab 2  b31babbc b133aaab1c33aa131 c23abaccc3 3 b babc cb1b3cc32bcb2 bbc21a2bb2 b21b a3bc121a aa1ab32ba1 2ba13 a3a3a11  2 22a2a",
+      "expected": 0.9924242424242424
+    },
+    {
+      "a": "3ba2bcc33a12b2 31a a a c33bba13ba1ac123a1c2c  23b b b2c121132233bb cc2c3a 332321123 3 3ac3b331b3 13bac aa231  31cc  2 c1cbc1c     2222b2c2c31acbc22aab1cbba1123a2 33",
+      "b": "3ba2bcc33a12b2 31a a a c33bba13ba1ac123a1c2c  23b b b2c121132233bb cc2c3a 33232112b 3 3ac3b331b3 13bac aa231  31cc  2 c1cbc1c     2222b2c2c31acbc22aab1cbba1123a2 33",
+      "expected": 0.9939024390243902
+    },
+    {
+      "a": "3 133 2c3b1bc3223233c332caca222 a3 b bc2 c1332a bca",
+      "b": "3 133 2c3b1bc3223233c332ccca222 a3 b bc2 c1332a bca",
+      "expected": 0.9803921568627451
+    },
+    {
+      "a": "21c3ca 3  c23b13ca3bb11aa1 bb c3a cb1ab 1a1caa332   bc21b31 b32bcab3a 2a2a  3232c 2b2a2131bca acbbb2c b1b  1 2ba caa3b b  b b23c3b3 b 22b2c1321b 2a33a 2  1bac11bba3c  2cbb1aa333bac1 b3abb2b3c1b3b2b2 c133ac2a2baab3a3bb2abc bacba3322abb3bba22b33a 2cb1c",
+      "b": "21c3ca 3  c23b13ca3bb11aa1 bb c3a cb1ab 1a1caa332   bc21b31 b32bcab3a 2a2a  3232c 2b2a2131bca acbbb2c b1b  1 2ba caa3b b  b bb3c3b3 b 22b2c1321b 2a33a 2  1bac11bba3c  2cbb1aa333bac1 b3abb2b3c1b3b2b2 c133ac2a2baab3a3bb2abc bacba3322abb3bba22b33a 2cb1c",
+      "expected": 0.5
+    },
+    {
+      "a": "a3ab31c 3b2 2b22bc3cb31131acc331c33a31ba3ccacbb3c22aaaccaa b1b32 12223cb13 b3a21ac1 313aababccc2ba3 2aa 3 2a2a1cb2b  22ab 3cbbaaaa2ab3 b333 1c1c1a2 1ac 3cc31",
+      "b": "a3ab31c 3b2 2b22bc3cb31131acc331c33a31ba3ccacbb3c22aaaccaa b1b32 12223cb13 b3ab1ac1 313aababccc2ba3 2aa 3 2a2a1cb2b  22ab 3cbbaaaa2ab3 b333 1c1c1a2 1ac 3cc31",
+      "expected": 0.9936305732484076
+    },
+    {
+      "a": "cb33b3b1ba 3bb2b 3 23aa bcc1b3caa3cba3c121aba aaa1cabab aac2accbbb 1b 312a2ccac33",
+      "b": "cb33b3b1ba 3bb2b 3 23aa bcc1b3caa3cba3c1b1aba aaa1cabab aac2accbbb 1b 312a2ccac33",
+      "expected": 0.9876543209876543
+    },
+    {
+      "a": "2b1 c2bc113c2b13c232bcccac23b23cbc1b223ba31aa223 123a3 2211311cc1bc3 c 33caca3c3c 1 2c2accc3b2bca1 3a  2 3bbb3c1b1c 131  1c3aac1 bbca  12ac1bcc1b3ac 3a1c3c31ab bb1cc 1b  a 1aa22b321a132 3 ab3a",
+      "b": "2b1 c2bc113c2b13c232bcccac23b23cbc1b223ba31aa223 123a3 2211311cc1bc3 c 33caca3c3c 1 2c2accc3b2bcb1 3a  2 3bbb3c1b1c 131  1c3aac1 bbca  12ac1bcc1b3ac 3a1c3c31ab bb1cc 1b  a 1aa22b321a132 3 ab3a",
+      "expected": 0.9947916666666666
+    },
+    {
+      "a": "a3aabac b2c313aacc1 b1bc1b1baa2b1a2b3cc11b1321 11b2a2  1 3",
+      "b": "a3aabac b2c313aacc1 b1bc1b1baa2b1a2b3cc11b1321 11b2a2  1 3",
+      "expected": 1.0
+    },
+    {
+      "a": "b 11321cac132cb a3a2c2 a2ccbba3 1 231  aaa 31b c2132 3a2cb aa bb2cc23cac1a13c1c3b12a 2 23cc23b3 c1ac23b1ccb  caa112b2c2bc21b23bab1b3ca1",
+      "b": "b 11321cac132cb a3a2c2 a2ccbba3 1 231  aaa 31b c2132 3a2cb aa bb2ccb3cac1a13c1c3b12a 2 23cc23b3 c1ac23b1ccb  caa112b2c2bc21b23bab1b3ca1",
+      "expected": 0.9925925925925926
+    },
+    {
+      "a": "c a a223b1ca  2c23a2 2bac13a2323b13 111cc1cabcc3cb3 abc b ba322caa1cbc3 c2 2c3aa1cac1b22a3cb323 a31a23bc1ac2a3cc2b  22c1b1c1b1c1bcaaa22",
+      "b": "c a a223b1ca  2c23a2 2bac13a2323b13 111cc1cabcc3cb3 abc b ba322caa1cbc3 c2 2c3aa1cac1b22a3cb323 a31a23bc1ac2a3cc2b  22c1b1c1b1c1bcaaa22",
+      "expected": 1.0
+    },
+    {
+      "a": "32abb bc a2a cc22cba 3b 2a3a2 c33c3acccb21aca3c21 2 aa1a212a1 c1 31ac3a 2a a1c3c313cc  a32cc111a13a3ab1ac133ca113c1  a2a13ab  ba31b1a",
+      "b": "32abb bc a2a cc22cba 3b 2a3a2 c33c3acccb21aca3c21 2 aa1a212a1 c1 3 ac3a 2a a1c3c313cc  a32cc111a13a3ab1ac133ca113c1  a2a13ab  ba31b1a",
+      "expected": 0.9924812030075187
+    },
+    {
+      "a": "ab231aa22aa1c133 aacbcb a ca3 2 3ca2aa3b3acb 33c 13211ab  ab212131aac23b32bccbbbb33bb1133ab1 2  abc3 23aba32a1b21aa c cc3b1ca1   cca 1c23 3b 13b b3b1a2bb2 3 2 c2b1323aa2 3332aac 23 1bc1a c",
+      "b": "ab231aa22aa1c133 aacbcb a ca3 2 3ca2aa3b3acb 33c 13211ab  ab212131aac23b32bccbbbb33bb1133ab1 2  abc3 23aba32a1b21aa c cc3b1ca1   cca 1c23 3b 13b b3b1a2bb2 3 2 c2b1323aa2 3332aac 23 1bc1a c",
+      "expected": 1.0
+    },
+    {
+      "a": "caa1bc  aa 2a 33 bb3ca1 c 211313cbc1cc211 a2bac31 a 33b3 cbcb3c33c21cca121c c 1b 23 2ba ab2bab3 1 c2 b c3c113 31ac3ca  acb2333a3aaa ac2b2a",
+      "b": "caa1bc  aa 2a 33 bb3ca1 c 211313cbc1cc211 a2bac31 a 33b3 cbcb3c33c21c a121c c 1b 23 2ba ab2bab3 1 c2 b c3c113 31ac3ca  acb2333a3aaa ac2b2a",
+      "expected": 0.9927536231884058
+    },
+    {
+      "a": "112b bca",
+      "b": "112b bca",
+      "expected": 1.0
+    },
+    {
+      "a": "cc2ba1c113 31 a11b1 a2aa23b1c 3b21 aac2 3b 2 c1c21ba 3313aab  22acabccc12b3a1b22 a1bc 21  c ba32cb 1c1 a1  bc121aa2b1b2a  2c c3b1ca222 aa2a  21331b",
+      "b": "cc2ba1c113 31 a11b1 a2aa23b1c 3b21 aac2 3b 2 c1c21ba 3313aab  22acabccc12c3a1b22 a1bc 21  c ba32cb 1c1 a1  bc121aa2b1b2a  2c c3b1ca222 aa2a  21331b",
+      "expected": 0.9931972789115646
+    },
+    {
+      "a": "c2c3b1b2ccb231133c33c ca 23b12cb cbb1c12c23ba1 bca1 11aa2bc3311cc 2a1  2b3a c31 bb3a1b11 332b13ab  a33112baa c ac 3cb2 332 12 2",
+      "b": "c2c3b1b2ccb231133c33c ca 23b12cb cbb1c12c23ba1 bca1 11aa2bc3311 c 2a1  2b3a c31 bb3a1b11 332b13ab  a33112baa c ac 3cb2 332 12 2",
+      "expected": 0.9921259842519685
+    },
+    {
+      "a": "bcc221 1 ca3bc33a 33a3ba1ba1ac3ac311b222 3aca1 a3a 33c ac3b 2b 2 c b3bb23a2 b13ba3c2bb12a3a c2cb3b112a a131b1b22c312cb3a 212 c 1bb aa  1323113",
+      "b": "bcc221 1 ca3bc33a 33a3ba1ba1ac3ac311b222 3aca1 a3a 33c ac3b 2b 2 c b3bbb3a2 b13ba3c2bb12a3a c2cb3b112a a131b1b22c312cb3a 212 c 1bb aa  1323113",
+      "expected": 0.9929577464788732
+    },
+    {
+      "a": "a2b",
+      "b": "aab",
+      "expected": 0.6666666666666666
+    },
+    {
+      "a": "12 bc2aa33b b2312cac1aba1cc22 abb2a13bb321 21cb2a2c2a1bc2 a3aa222211c  321121 2b3b23c121b1b3 3c12231",
+      "b": "12 bc2aa33b b2312cac1aba1cc22 abb2a13bb321 21cb2a2 2a1bc2 a3aa222211c  321121 2b3b23c121b1b3 3c12231",
+      "expected": 0.99
+    },
+    {
+      "a": "b2bc232b3c3aaa 13c32ba2b  a a 131 b1bacc1baa1a1 a23aaaab3112  cc3cc312a2c3bc23 a22bca 1cc2cab c3131b33cc2323a",
+      "b": "b2bc232b3c3aaa 13c32ba2b  a a 131 b1bacc1baa1a1 a23aaacb3112  cc3cc312a2c3bc23 a22bca 1cc2cab c3131b33cc2323a",
+      "expected": 0.9908256880733946
+    },
+    {
+      "a": "312 212a121c 3bac1acb  3c b 3c32b1ba2123ac1cbaca a13",
+      "b": "312 212a121c 3bac1acb  3cab 3c32b1ba2123ac1cbaca a13",
+      "expected": 0.9807692307692307
+    },
+    {
+      "a": "c c231c3 2 bb113a2 3aba a2ba1cc3c 31c b1c32 11aa  3aac2c31 ccaa3bc1b3b2b2ac313a2c2aa3c13ba2331ca3a 2b 13 21b321233b a3a31ab3 22b332caabc1c2a 1 12312 b12acc2c1b  c13cbb1bb1b3 2cca1 33abca abbcb 3a2b 2    2 2b3a",
+      "b": "c c231c3 2 bb113a2 3aba a2ba1cc3c 31c b1c32 11aa  3aac2c31 ccaa3bc1b3b2b2ac313a2c2aa3c13ba2331ca3a 2b 13 21b321233b a3a31ab3 22b332caabc1c2a 1 12312 b12acc2c1b  c13cbb1bb1b3 2cca1 33abca abbcb 3a2b 2    2 2b3a",
+      "expected": 1.0
+    },
+    {
+      "a": "b232223a ba cbbbbaba 113a bab3cc a32c312 a3a2a3ba33b  13 3b2b1aa ca1232 c 3212 321a131bccc11b1cb3223 1a2b3ab3b2 1 abb  311 1  bc2ccc1aacb2ca1ccb3a aa1b2 c3c3 accbb  1aa aa3b23abba332bb c3caba232caca111ba2acb331221acc a 1ba3ca11132cc31ca2",
+      "b": "b232223a ba cbbbbaba 113a bab3cc a32c312 a3a2a3ba33b  13 3b2b1aa ca1232 c 3212 321a131bccc11b1cb3223 1a2b3ab3b2 1 abb a311 1  bc2ccc1aacb2ca1ccb3a aa1b2 c3c3 accbb  1aa aa3b23abba332bb c3caba232caca111ba2acb331221acc a 1ba3ca11132cc31ca2",
+      "expected": 0.4978902953586498
+    },
+    {
+      "a": "333baaca1b2 23bc ccb1123ab221ac b3 b3121221a3a3bc32b1a13b221 cba bbaca2c 3 c b2211b ac1a 1bc323 12ccc1b3 ba123 1b3bcb3a3bbab2131b1 3c1b13a2",
+      "b": "333baaca1b2 23bc ccb1123ab221ac b3 b3121221a3a3bc32b1a13b221 cba bbac 2c 3 c b2211b ac1a 1bc323 12ccc1b3 ba123 1b3bcb3a3bbab2131b1 3c1b13a2",
+      "expected": 0.9928057553956835
+    },
+    {
+      "a": "ba33 c11cb b3ca12  11a231 b3 333  b1  c2a 3a2cb2abb22 bbcab3b 23b22c2 b2bc22a22bc1a112ba21131c",
+      "b": "ba33 c11cb b3ca12  11a231 b3 333  b1  c2a 3a2cbcabb22 bbcab3b 23b22c2 b2bc22a22bc1a112ba21131c",
+      "expected": 0.9893617021276596
+    },
+    {
+      "a": "bbb22 cb11b2acca23ba23b 1a b3a13b  aab32a211b3accb3a233b3baa33bb122b c3caab1 ba2a1ac13c1b2c2cc2c13bc a3 2bc3122cabca2a311122 1 321 b cb12 c 2b a2a21 a1313  13a23b3cabcbcbcc a 223c1a",
+      "b": "bbb22 cb11b2acca23ba23b 1a b3a13b  aab32a211b3accb3a233b3baa33bb122b c3caab1 ba2a1ac13c1b2 2cc2c13bc a3 2bc3122cabca2a311122 1 321 b cb12 c 2b a2a21 a1313  13a23b3cabcbcbcc a 223c1a",
+      "expected": 0.994475138121547
+    },
+    {
+      "a": "311 11ac13 2b3b123b31212a 32c12a3 c21  1 b32baca212c211c 1  22bb231b1 1  2bc332233a 1cb  1c133cac a1b12c22b23c2bb aa",
+      "b": "311 11ac13 2b3b123b31212a 32c12a3 c21  1 b32baca212c211c 1c 22bb231b1 1  2bc332233a 1cb  1c133cac a1b12c22b23c2bb aa",
+      "expected": 0.9913793103448276
+    },
+    {
+      "a": "11313cab32 a32aab 21a3 2b 1c232  1b cca c22babc 12ab3aaa2bcc3a32c3b33bcca3a12c3bb2ca31cbc 21c 3b1 1 33bb ca2 1  bb2a bb33c1332b3ba11 2ba13caa2ccaac33bcc11c1332  b 1c",
+      "b": "11313cab32 a32aab 21a3 2b 1c232  1b cca c22babc 12ab3aaa2bcc3a32c3b33bcca3a12c3bb2ba31cbc 21c 3b1 1 33bb ca2 1  bb2a bb33c1332b3ba11 2ba13caa2ccaac33bcc11c1332  b 1c",
+      "expected": 0.9939393939393939
+    },
+    {
+      "a": "a  1",
+      "b": "a  1",
+      "expected": 1.0
+    },
+    {
+      "a": "3bbc3babca1c3ca31c abcc11aabc11 22 2b13ab1 3232bb1bb2cb a22a3 12313aabc223b1 c 2c3bc b1   ba1  cb",
+      "b": "3bbc3babca1c3ca31c abcc11aabc11 22 2b13ab1 3232bb1bb2cb a22a3 12313aabc223b1 c 2c3bc b1   ba1  cb",
+      "expected": 1.0
+    },
+    {
+      "a": "332ca23121c  a2ab baccc1 b2 1b13bb aaacb3ba32332   1 11 2a322 b221 a 13c2b2bc b3  21bcbb2  c1",
+      "b": "332ca23121c  a2ab baccc1 b2 1b13bb aaacb3ba323c2   1 11 2a322 b221 a 13c2b2bc b3  21bcbb2  c1",
+      "expected": 0.989247311827957
+    },
+    {
+      "a": "accc 12   a2b2acab2a32ab13b1b3baa3c2a 1b13c1ac  222 c32bac2231a 133   33ac3a13b21b231c1 ba 1c3 1c 2 233  b3c 1ab 3ca31  c1  21a 2c 1ba332ca21cb3 1a1a32a13c1133a1c1c3c3cb12ca21 c 3 aa1ac3b1a3bb3 1a3cb33 1a2 22c a33c1 331",
+      "b": "accc 12   a2b2acab2a32ab13b1b3baa3c2a 1b13c1ac  222 c32bac2231a 133   33ac3a13b21b231c1 ba 1c3 1c 2 233  b3c  ab 3ca31  c1  21a 2c 1ba332ca21cb3 1a1a32a13c1133a1c1c3c3cb12ca21 c 3 aa1ac3b1a3bb3 1a3cb33 1a2 22c a33c1 331",
+      "expected": 0.4977168949771689
+    },
+    {
+      "a": "cc3b22a3 bcacac b2bcba1aba22 3 b 2 c211c1abaaacba31 ca2cbcac31cbcaba13 a 1c  cb12bbbca 3b cb1  b13cac31 ca1b cc ccc1cb213c1c3333ba  2 aa 3b32 accb 2 ac3a312bc3cbbbc1aacaac1a13c 3cb1c11ac2131aaa132aca1aabcac1aa13bab ba3baccc 31cc 1 cb33cb32bc1",
+      "b": "cc3b22a3 bcacac b2bcba1aba22 3 b 2 c211c1abaaacba31 ca2cbcac31cbcaba13 a 1c  cb12bbbca 3b cb1  b13cac31 ca1b cc ccc1cb213a1c3333ba  2 aa 3b32 accb 2 ac3a312bc3cbbbc1aacaac1a13c 3cb1c11ac2131aaa132aca1aabcac1aa13bab ba3baccc 31cc 1 cb33cb32bc1",
+      "expected": 0.5
+    },
+    {
+      "a": "b3b1a c2c  23cbaa233c121cab3b 21b12",
+      "b": "b3b1a c2c  23cbaac33c121cab3b 21b12",
+      "expected": 0.9714285714285714
+    },
+    {
+      "a": "3cb cc3a1ba c22 2 3   a 2 31 bbcb3a2baa 21a2 2 a c 3c bbbc32b2b31a112a23c223  3 1 3  c 3ac1c1c3baba12 2 3132c2aa c3 aca1 cb ac1  bc 13a1c33cb231 b a3c  cca   a12b11c11c1 3b1 b2 a111ac1b2 a2 b aa  11 c3a ca 1 c21aaaa3ca 3cc2a212",
+      "b": "3cb cc3a1ba c22 2 3   a 2 31 bbcb3a2baa 21a2 2 a c 3c bbbc32b2b31a112a23c223  3 1 3  c 3ac1c1c3baba12 2 3132c2aa a3 aca1 cb ac1  bc 13a1c33cb231 b a3c  cca   a12b11c11c1 3b1 b2 a111ac1b2 a2 b aa  11 c3a ca 1 c21aaaa3ca 3cc2a212",
+      "expected": 0.4977973568281938
+    },
+    {
+      "a": "c3ccc33 b a bc2 3233ab3a3b b 1a  a32111 abc a3ccc22311a2 3b3cb 1b3c 2cab1 3 b1ac321ac3 33ca3b1 1a 22 12a3a11b1acb33b2b3ca1 1 cc12321aab2b 1 3abab1 222abaa1bba3b3a 32b33cb2cabbaa31a1c1c2a  cb2a2c 1213 a23 1 a22 3cb3a1 b112cb 121b1 1aa2a2c",
+      "b": "c3ccc33 b a bc2 3233ab3a3b b 1a  a32111 abc a3ccc22311a2 3b3cb 1b3c 2cab1 3 b1ac321ac3 33ca3b1 1a 22 12a3a11b1acb33b2baca1 1 cc12321aab2b 1 3abab1 222abaa1bba3b3a 32b33cb2cabbaa31a1c1c2a  cb2a2c 1213 a23 1 a22 3cb3a1 b112cb 121b1 1aa2a2c",
+      "expected": 0.4978902953586498
+    },
+    {
+      "a": "23b1baa 31  c3cac1b1c1b1cbbaa1b cc2b3c1 3 ca3bb2c b bb3a1c11b1 cbc1 1acabc3ba2 a2ab3a1313 ab23cac11ccc3c1331b121 12c11a23221cb2  a3b2bb32c3 2bbb3 a c1c 1b132aa1abaabaa2ca12aacba3a3c  131c 31aacb32c31cc123a  ccac12 c c3223b1a3a3aa2c3 1 cc33b",
+      "b": "23b1baa 31  c3cac1b1c1b1cbbaa1b cc2b3c1 3 ca3bb2c b bb3a1c11b1 cbc1 1acabc3ba2 a2ab3a1313 ab23cac11ccc3c1331b121 12c11a2a221cb2  a3b2bb32c3 2bbb3 a c1c 1b132aa1abaabaa2ca12aacba3a3c  131c 31aacb32c31cc123a  ccac12 c c3223b1a3a3aa2c3 1 cc33b",
+      "expected": 0.5
+    },
+    {
+      "a": "aaca32cc bcaa1b1abbaac33b3a2b bcb b23213113cb221b2ac311b 3bbb1 a131 3bbca 2b 3bbac2b 123b aa1c3c b1a3ca11a22b12 b2 a 1b3b1 c112a22bb22c13acb11b3a3331a12aaac3a311b2 13b 1b1 32c11122aa3 cbc ab1bcbc21121aca c2233b1a2cc23cac1323a32a3b3aa3 2a a1bb2323b",
+      "b": "aaca32cc bcaa1b1abbaac33b3a2b bcb b23213113cb221b2ac311b 3bbb1 a131 3bbca 2b 3bbac2b 123b aa1c3c b1a3ca11a22b12 b2 a 1b3b1 b112a22bb22c13acb11b3a3331a12aaac3a311b2 13b 1b1 32c11122aa3 cbc ab1bcbc21121aca c2233b1a2cc23cac1323a32a3b3aa3 2a a1bb2323b",
+      "expected": 0.4979757085020243
+    },
+    {
+      "a": "ac1a 22ab1a1a b3 aaa1132332c bbb1c213a1ca bbbbba3c 33 a3bcb21 a2b1 bb  1b3ccac3cc 2b2b",
+      "b": "ac1a 22ab1a1a b3 aaa1132332c bbb1c213a1ca bbbbba3c 33 a3bcb21 a2b1 bb  1b3ccac3cc 2b2b",
+      "expected": 1.0
+    },
+    {
+      "a": "bb1 b11c a22 1 1 3a13ccaaccabac  ba  1aa3c2ba112a1a2a1aa1a3bb3aba1c31b3a3 3c   aa1231b23 a2ca 3   13a 1b1 b233 12b  ba31 31c31a b  231aac c3a3212a1132cb1c3b   1cba2c 3  11a122aba2cabba2 3a2b1 b1c11c12c2322acbabc1cb1a1ac31 b13 2133b11a",
+      "b": "bb1 b11c a22 1 1 3a13ccaaccabac  ba  1aa3c2ba112a1a2a1aa1a3bb3aba1c31b3a3 3c   aa1231b23 a2ca 3   13a 1b1 b233 12b  bc31 31c31a b  231aac c3a3212a1132cb1c3b   1cba2c 3  11a122aba2cabba2 3a2b1 b1c11c12c2322acbabc1cb1a1ac31 b13 2133b11a",
+      "expected": 0.5
+    },
+    {
+      "a": "aa3bc 1 311b1b1a1c332 b232  3cca2 31cac2 b32a3baa1",
+      "b": "aa3bc 1 311b1b1a1c332 b23c  3cca2 31cac2 b32a3baa1",
+      "expected": 0.98
+    },
+    {
+      "a": "b",
+      "b": "c",
+      "expected": 0.0
+    },
+    {
+      "a": "c3b1cc1 31 c1c2a2 a b 3ab32c132bcbabcccab b 1 3b2111 b1bcc12b1c31 b1 2b2 1 ccc13c2b 3a2c  a cc 3a    ca c13c3c33212bb 3112b1c3cb2a b 3113 13c12b2 1c3231  b3acc1bc1a3c3bccc    c1 2113cb32 baca3ab a cc2",
+      "b": "c3b1cc1 31 c1c2a2 a b 3ab32c132bcbabcccab b 1 3b2111 b1bcc12b1c31 b1 2b2 1 ccc13c2b 3a2c  a cc 3a   bca c13c3c33212bb 3112b1c3cb2a b 3113 13c12b2 1c3231  b3acc1bc1a3c3bccc    c1 2113cb32 baca3ab a cc2",
+      "expected": 0.5
+    },
+    {
+      "a": "a131b1ccb3 2ac3",
+      "b": "a131b1cab3 2ac3",
+      "expected": 0.9333333333333333
+    },
+    {
+      "a": "bb23b1a 23211cbca3b31aab22b3c331c b321   bba1ba1 b",
+      "b": "bb23b1a 23211cbca3b31aab2bb3c331c b321   bba1ba1 b",
+      "expected": 0.98
+    },
+    {
+      "a": "c2 2a3b 3c2a2a3a2abb2a3a33ac332baaa  bbb c c3cc322cb2c2cc2bbb22112b3bc 12 cb22bcc 3a c a313ca3bcab1aa  b32ac1aa2b3c2c1cacba 2ba3  cbcac2c",
+      "b": "c2 2a3b 3c2a2a3a2abb2a3a33ac332baaa  bbb c c3cc322cb2c2cc2bbb22112b3bc 12 cb22bcc 3a c a313ca3bcab1aa  b32ac1aa2b3c2c1cacba 2ba3  cbcac2c",
+      "expected": 1.0
+    },
+    {
+      "a": "c 3a2ab ab3ba3abb31 aaccb12ac3c c2acc 1b 222bb c3 ca 33b2c1c3 2c3cc33c1 3 b21bc31cc2b c112babc 11cb ba1ccc2 c",
+      "b": "c 3a2ab ab3ba3abb31 aaccb12ac3c c2acc 1b 222bb c3 ca 3ab2c1c3 2c3cc33c1 3 b21bc31cc2b c112babc 11cb ba1ccc2 c",
+      "expected": 0.9908256880733946
+    },
+    {
+      "a": "b c133ca11b21c1b233bb221a bba2132cc 1b1cc33ac",
+      "b": "b c133ca11b21c1b233bb22aa bba2132cc 1b1cc33ac",
+      "expected": 0.9777777777777777
+    },
+    {
+      "a": "3caac32  a1 b11 b2",
+      "b": "3caac32  c1 b11 b2",
+      "expected": 0.9444444444444444
+    },
+    {
+      "a": "c cab1 cc2 3abb2211b1b2aaabac1 22a3b1c  21b2 c c 3b  32 c31a 22abacaac 231 33b22 cb31 3 c  ab cbacc2a12cba123 121a2c3212 12aa cc3ba111a3 2c3  1 c231211 2",
+      "b": "c cab1 cc2 3abb2211b1b2aaabac1 22a3b1c  21b2 c c 3b  32 c31a 22abacaac 231 3 b22 cb31 3 c  ab cbacc2a12cba123 121a2c3212 12aa cc3ba111a3 2c3  1 c231211 2",
+      "expected": 0.9934640522875817
+    },
+    {
+      "a": "baac2c1c3cb 2cc2c31cb a ba1b22baacc223bb b22ab ab1 ac ab b2 cbbaab1babb 11ab  2a 223bc  2a2c12ac2a1cc233c333bb3",
+      "b": "baac2c1c3cb 2cc2c31cb a ba1b22baacc223bb b22ab ab1 ac aa b2 cbbaab1babb 11ab  2a 223bc  2a2c12ac2a1cc233c333bb3",
+      "expected": 0.990990990990991
+    },
+    {
+      "a": "b231babb  2ab2c32b321b bbca  2c3a1bca22131a 32a1b2 2313 3bb 2a13aab22 c2cbb3ac3b3 1311ba2a abc3c 23cc  33",
+      "b": "b231babb  2ab2c32b321b bbca  2c3a1bca22131a 32a1b2 2c13 3bb 2a13aab22 c2cbb3ac3b3 1311ba2a abc3c 23cc  33",
+      "expected": 0.9904761904761905
+    },
+    {
+      "a": "c1 222131b3a32bb2 221  2aaa3ab 2cbb ba13a2 c c  b3132 cb baa223 2b 32a23ca 1a32a32133 cc11 ba3b2233bbba3 aa b c2  ca",
+      "b": "c1 222131b3a32bb2 221  2aaa3ab 2cbb ba13a2 c c  b3132 cb bba223 2b 32a23ca 1a32a32133 cc11 ba3b2233bbba3 aa b c2  ca",
+      "expected": 0.9913793103448276
+    },
+    {
+      "a": "a33ac223c31 c2aa332  1b31ccbb3 2 13 13cb32ac233 bc bc1  1a12aa3bca133b 3ab",
+      "b": "a33ac223c31 c2aa332  1b31ccbb3 2 13 c3cb32ac233 bc bc1  1a12aa3bca133b 3ab",
+      "expected": 0.9864864864864865
+    },
+    {
+      "a": "233  baa3bc 3a11 222c12bbbc1211c3ac1 2b2ab c a113aa2 1221c1a3c2 23c1bba bccaac2acc 2b2c2c3 c12aac3ba1a 1a221c3322 aba bc3bcbb1 1bcb2b113b b23c b221b13c ccccb2113bb22aaa1b111 b1a3 1ac3b3a1c2c332b122a1a  ac  b c22c2cc1a1a ccacab23caabc2c  bc b2a",
+      "b": "233  baa3bc 3a11 222c12bbbc1211c3ac1 2b2ab c a113aa2 1221c1a3c2 23c1bba bccaac2acc 2b2c2c3 c12aac3ba1a 1a221c3322 aba bc3ccbb1 1bcb2b113b b23c b221b13c ccccb2113bb22aaa1b111 b1a3 1ac3b3a1c2c332b122a1a  ac  b c22c2cc1a1a ccacab23caabc2c  bc b2a",
+      "expected": 0.49794238683127573
+    },
+    {
+      "a": "1ba 311bc31c1abb1bcb2bc2b1b3cc12abc 13b3ccb313",
+      "b": "1ba 311bc31c1abb1bcb2bc b1b3cc12abc 13b3ccb313",
+      "expected": 0.9782608695652174
+    },
+    {
+      "a": "bc2c 31aa223cac b3c111   b311b  3b1bc2b3 1baccaa3 cb1c 3b   c 1caa b 2 3ba 31c1 1ac 3 a121b33 2ab3  313 12 32bca1c3b311a 1  12 3b 133c2 1a 3b331a12 322b 223a3c23 a33bb1b32b aa32cccaba b3a22a12ccca3",
+      "b": "bc2c 31aa223cac b3c111   b311b  3b1bc2b3 1baccaa3 cb1c 3b   c 1caa b 2 3ba 31c1 1ac 3 a121b33 2ab3b 313 12 32bca1c3b311a 1  12 3b 133c2 1a 3b331a12 322b 223a3c23 a33bb1b32b aa32cccaba b3a22a12ccca3",
+      "expected": 0.9949238578680203
+    }
+  ],
+  "filters": [
+    {
+      "pieces": [
+        "H",
+        "e",
+        "l",
+        "l",
+        "o",
+        " ",
+        "t",
+        "h",
+        "e",
+        "r",
+        "e",
+        ".",
+        " ",
+        "N",
+        "e",
+        "x",
+        "t",
+        " ",
+        "q",
+        "u",
+        "e",
+        "s",
+        "t",
+        "i",
+        "o",
+        "n",
+        "?",
+        " ",
+        "Y",
+        "e",
+        "s",
+        "!"
+      ],
+      "expected": "Hello there. Next question? Yes!"
+    },
+    {
+      "pieces": [
+        "Hel",
+        "lo ",
+        "the",
+        "re.",
+        " Ne",
+        "xt ",
+        "que",
+        "sti",
+        "on?",
+        " Ye",
+        "s!"
+      ],
+      "expected": "Hello there. Next question? Yes!"
+    },
+    {
+      "pieces": [
+        "Hello the",
+        "re. Next ",
+        "question?",
+        " Yes!"
+      ],
+      "expected": "Hello there. Next question? Yes!"
+    },
+    {
+      "pieces": [
+        "Hello there. Next question? Yes!"
+      ],
+      "expected": "Hello there. Next question? Yes!"
+    },
+    {
+      "pieces": [
+        "P",
+        "l",
+        "e",
+        "a",
+        "s",
+        "e",
+        " ",
+        "d",
+        "i",
+        "a",
+        "l",
+        " ",
+        "*",
+        "9",
+        "6",
+        "6",
+        "*",
+        "9",
+        "1",
+        "1",
+        "#",
+        " ",
+        "n",
+        "o",
+        "w",
+        "."
+      ],
+      "expected": "Please dial *966*911# now."
+    },
+    {
+      "pieces": [
+        "Ple",
+        "ase",
+        " di",
+        "al ",
+        "*96",
+        "6*9",
+        "11#",
+        " no",
+        "w."
+      ],
+      "expected": "Please dial *966*911# now."
+    },
+    {
+      "pieces": [
+        "Please di",
+        "al *966*9",
+        "11# now."
+      ],
+      "expected": "Please dial *966*911# now."
+    },
+    {
+      "pieces": [
+        "Please dial *966*911# now."
+      ],
+      "expected": "Please dial *966*911# now."
+    },
+    {
+      "pieces": [
+        "o",
+        "n",
+        "e",
+        " ",
+        " ",
+        "t",
+        "w",
+        "o",
+        " ",
+        "t",
+        "h",
+        "r",
+        "e",
+        "e",
+        " ",
+        "o",
+        "n",
+        "e",
+        " ",
+        " ",
+        "t",
+        "w",
+        "o",
+        " ",
+        "t",
+        "h",
+        "r",
+        "e",
+        "e",
+        " ",
+        "o",
+        "n",
+        "e",
+        " ",
+        " ",
+        "t",
+        "w",
+        "o",
+        " ",
+        "t",
+        "h",
+        "r",
+        "e",
+        "e",
+        " ",
+        "o",
+        "n",
+        "e",
+        " ",
+        " ",
+        "t",
+        "w",
+        "o",
+        " ",
+        "t",
+        "h",
+        "r",
+        "e",
+        "e",
+        " ",
+        "o",
+        "n",
+        "e",
+        " ",
+        " ",
+        "t",
+        "w",
+        "o",
+        " ",
+        "t",
+        "h",
+        "r",
+        "e",
+        "e",
+        " ",
+        "o",
+        "n",
+        "e",
+        " ",
+        " ",
+        "t",
+        "w",
+        "o",
+        " ",
+        "t",
+        "h",
+        "r",
+        "e",
+        "e",
+        " ",
+        "o",
+        "n",
+        "e",
+        " ",
+        " ",
+        "t",
+        "w",
+        "o",
+        " ",
+        "t",
+        "h",
+        "r",
+        "e",
+        "e",
+        " ",
+        "o",
+        "n",
+        "e",
+        " ",
+        " ",
+        "t",
+        "w",
+        "o",
+        " ",
+        "t",
+        "h",
+        "r",
+        "e",
+        "e",
+        " ",
+        "o",
+        "n",
+        "e",
+        " ",
+        " ",
+        "t",
+        "w",
+        "o",
+        " ",
+        "t",
+        "h",
+        "r",
+        "e",
+        "e",
+        " ",
+        "o",
+        "n",
+        "e",
+        " ",
+        " ",
+        "t",
+        "w",
+        "o",
+        " ",
+        "t",
+        "h",
+        "r",
+        "e",
+        "e",
+        " ",
+        "o",
+        "n",
+        "e",
+        " ",
+        " ",
+        "t",
+        "w",
+        "o",
+        " ",
+        "t",
+        "h",
+        "r",
+        "e",
+        "e",
+        " ",
+        "o",
+        "n",
+        "e",
+        " ",
+        " ",
+        "t",
+        "w",
+        "o",
+        " ",
+        "t",
+        "h",
+        "r",
+        "e",
+        "e",
+        " ",
+        "o",
+        "n",
+        "e",
+        " ",
+        " ",
+        "t",
+        "w",
+        "o",
+        " ",
+        "t",
+        "h",
+        "r",
+        "e",
+        "e",
+        " ",
+        "o",
+        "n",
+        "e",
+        " ",
+        " ",
+        "t",
+        "w",
+        "o",
+        " ",
+        "t",
+        "h",
+        "r",
+        "e",
+        "e",
+        " ",
+        "o",
+        "n",
+        "e",
+        " ",
+        " ",
+        "t",
+        "w",
+        "o",
+        " ",
+        "t",
+        "h",
+        "r",
+        "e",
+        "e",
+        " ",
+        "o",
+        "n",
+        "e",
+        " ",
+        " ",
+        "t",
+        "w",
+        "o",
+        " ",
+        "t",
+        "h",
+        "r",
+        "e",
+        "e",
+        " ",
+        "o",
+        "n",
+        "e",
+        " ",
+        " ",
+        "t",
+        "w",
+        "o",
+        " ",
+        "t",
+        "h",
+        "r",
+        "e",
+        "e",
+        " ",
+        "o",
+        "n",
+        "e",
+        " ",
+        " ",
+        "t",
+        "w",
+        "o",
+        " ",
+        "t",
+        "h",
+        "r",
+        "e",
+        "e",
+        " ",
+        "o",
+        "n",
+        "e",
+        " ",
+        " ",
+        "t",
+        "w",
+        "o",
+        " ",
+        "t",
+        "h",
+        "r",
+        "e",
+        "e",
+        " ",
+        "o",
+        "n",
+        "e",
+        " ",
+        " ",
+        "t",
+        "w",
+        "o",
+        " ",
+        "t",
+        "h",
+        "r",
+        "e",
+        "e",
+        " ",
+        "o",
+        "n",
+        "e",
+        " ",
+        " ",
+        "t",
+        "w",
+        "o",
+        " ",
+        "t",
+        "h",
+        "r",
+        "e",
+        "e",
+        " ",
+        "o",
+        "n",
+        "e",
+        " ",
+        " ",
+        "t",
+        "w",
+        "o",
+        " ",
+        "t",
+        "h",
+        "r",
+        "e",
+        "e",
+        " ",
+        "o",
+        "n",
+        "e",
+        " ",
+        " ",
+        "t",
+        "w",
+        "o",
+        " ",
+        "t",
+        "h",
+        "r",
+        "e",
+        "e",
+        " ",
+        "o",
+        "n",
+        "e",
+        " ",
+        " ",
+        "t",
+        "w",
+        "o",
+        " ",
+        "t",
+        "h",
+        "r",
+        "e",
+        "e",
+        " ",
+        "o",
+        "n",
+        "e",
+        " ",
+        " ",
+        "t",
+        "w",
+        "o",
+        " ",
+        "t",
+        "h",
+        "r",
+        "e",
+        "e",
+        " ",
+        "o",
+        "n",
+        "e",
+        " ",
+        " ",
+        "t",
+        "w",
+        "o",
+        " ",
+        "t",
+        "h",
+        "r",
+        "e",
+        "e",
+        " ",
+        "o",
+        "n",
+        "e",
+        " ",
+        " ",
+        "t",
+        "w",
+        "o",
+        " ",
+        "t",
+        "h",
+        "r",
+        "e",
+        "e",
+        " ",
+        "o",
+        "n",
+        "e",
+        " ",
+        " ",
+        "t",
+        "w",
+        "o",
+        " ",
+        "t",
+        "h",
+        "r",
+        "e",
+        "e",
+        " ",
+        "o",
+        "n",
+        "e",
+        " ",
+        " ",
+        "t",
+        "w",
+        "o",
+        " ",
+        "t",
+        "h",
+        "r",
+        "e",
+        "e",
+        " ",
+        "o",
+        "n",
+        "e",
+        " ",
+        " ",
+        "t",
+        "w",
+        "o",
+        " ",
+        "t",
+        "h",
+        "r",
+        "e",
+        "e",
+        " "
+      ],
+      "expected": "one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three "
+    },
+    {
+      "pieces": [
+        "one",
+        "  t",
+        "wo ",
+        "thr",
+        "ee ",
+        "one",
+        "  t",
+        "wo ",
+        "thr",
+        "ee ",
+        "one",
+        "  t",
+        "wo ",
+        "thr",
+        "ee ",
+        "one",
+        "  t",
+        "wo ",
+        "thr",
+        "ee ",
+        "one",
+        "  t",
+        "wo ",
+        "thr",
+        "ee ",
+        "one",
+        "  t",
+        "wo ",
+        "thr",
+        "ee ",
+        "one",
+        "  t",
+        "wo ",
+        "thr",
+        "ee ",
+        "one",
+        "  t",
+        "wo ",
+        "thr",
+        "ee ",
+        "one",
+        "  t",
+        "wo ",
+        "thr",
+        "ee ",
+        "one",
+        "  t",
+        "wo ",
+        "thr",
+        "ee ",
+        "one",
+        "  t",
+        "wo ",
+        "thr",
+        "ee ",
+        "one",
+        "  t",
+        "wo ",
+        "thr",
+        "ee ",
+        "one",
+        "  t",
+        "wo ",
+        "thr",
+        "ee ",
+        "one",
+        "  t",
+        "wo ",
+        "thr",
+        "ee ",
+        "one",
+        "  t",
+        "wo ",
+        "thr",
+        "ee ",
+        "one",
+        "  t",
+        "wo ",
+        "thr",
+        "ee ",
+        "one",
+        "  t",
+        "wo ",
+        "thr",
+        "ee ",
+        "one",
+        "  t",
+        "wo ",
+        "thr",
+        "ee ",
+        "one",
+        "  t",
+        "wo ",
+        "thr",
+        "ee ",
+        "one",
+        "  t",
+        "wo ",
+        "thr",
+        "ee ",
+        "one",
+        "  t",
+        "wo ",
+        "thr",
+        "ee ",
+        "one",
+        "  t",
+        "wo ",
+        "thr",
+        "ee ",
+        "one",
+        "  t",
+        "wo ",
+        "thr",
+        "ee ",
+        "one",
+        "  t",
+        "wo ",
+        "thr",
+        "ee ",
+        "one",
+        "  t",
+        "wo ",
+        "thr",
+        "ee ",
+        "one",
+        "  t",
+        "wo ",
+        "thr",
+        "ee ",
+        "one",
+        "  t",
+        "wo ",
+        "thr",
+        "ee ",
+        "one",
+        "  t",
+        "wo ",
+        "thr",
+        "ee ",
+        "one",
+        "  t",
+        "wo ",
+        "thr",
+        "ee ",
+        "one",
+        "  t",
+        "wo ",
+        "thr",
+        "ee "
+      ],
+      "expected": "one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three "
+    },
+    {
+      "pieces": [
+        "one  two ",
+        "three one",
+        "  two thr",
+        "ee one  t",
+        "wo three ",
+        "one  two ",
+        "three one",
+        "  two thr",
+        "ee one  t",
+        "wo three ",
+        "one  two ",
+        "three one",
+        "  two thr",
+        "ee one  t",
+        "wo three ",
+        "one  two ",
+        "three one",
+        "  two thr",
+        "ee one  t",
+        "wo three ",
+        "one  two ",
+        "three one",
+        "  two thr",
+        "ee one  t",
+        "wo three ",
+        "one  two ",
+        "three one",
+        "  two thr",
+        "ee one  t",
+        "wo three ",
+        "one  two ",
+        "three one",
+        "  two thr",
+        "ee one  t",
+        "wo three ",
+        "one  two ",
+        "three one",
+        "  two thr",
+        "ee one  t",
+        "wo three ",
+        "one  two ",
+        "three one",
+        "  two thr",
+        "ee one  t",
+        "wo three ",
+        "one  two ",
+        "three one",
+        "  two thr",
+        "ee one  t",
+        "wo three "
+      ],
+      "expected": "one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three "
+    },
+    {
+      "pieces": [
+        "one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three "
+      ],
+      "expected": "one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three "
+    },
+    {
+      "pieces": [
+        "H",
+        "e",
+        "l",
+        "l",
+        "o",
+        " ",
+        "<",
+        "t",
+        "h",
+        "i",
+        "n",
+        "k",
+        ">",
+        "p",
+        "r",
+        "i",
+        "v",
+        "a",
+        "t",
+        "e",
+        "<",
+        "/",
+        "t",
+        "h",
+        "i",
+        "n",
+        "k",
+        ">",
+        "t",
+        "h",
+        "e",
+        "r",
+        "e",
+        "."
+      ],
+      "expected": "Hello there."
+    },
+    {
+      "pieces": [
+        "Hel",
+        "lo ",
+        "<th",
+        "ink",
+        ">pr",
+        "iva",
+        "te<",
+        "/th",
+        "ink",
+        ">th",
+        "ere",
+        "."
+      ],
+      "expected": "Hello there."
+    },
+    {
+      "pieces": [
+        "Hello <th",
+        "ink>priva",
+        "te</think",
+        ">there."
+      ],
+      "expected": "Hello there."
+    },
+    {
+      "pieces": [
+        "Hello <think>private</think>there."
+      ],
+      "expected": "Hello there."
+    },
+    {
+      "pieces": [
+        "A",
+        " ",
+        "<",
+        "f",
+        "u",
+        "n",
+        "c",
+        "t",
+        "i",
+        "o",
+        "n",
+        "=",
+        "f",
+        "o",
+        "o",
+        ">",
+        "h",
+        "i",
+        "d",
+        "d",
+        "e",
+        "n",
+        "<",
+        "/",
+        "f",
+        "u",
+        "n",
+        "c",
+        "t",
+        "i",
+        "o",
+        "n",
+        ">",
+        " ",
+        "s",
+        "e",
+        "n",
+        "t",
+        "e",
+        "n",
+        "c",
+        "e",
+        "."
+      ],
+      "expected": "A  sentence."
+    },
+    {
+      "pieces": [
+        "A <",
+        "fun",
+        "cti",
+        "on=",
+        "foo",
+        ">hi",
+        "dde",
+        "n</",
+        "fun",
+        "cti",
+        "on>",
+        " se",
+        "nte",
+        "nce",
+        "."
+      ],
+      "expected": "A  sentence."
+    },
+    {
+      "pieces": [
+        "A <functi",
+        "on=foo>hi",
+        "dden</fun",
+        "ction> se",
+        "ntence."
+      ],
+      "expected": "A  sentence."
+    },
+    {
+      "pieces": [
+        "A <function=foo>hidden</function> sentence."
+      ],
+      "expected": "A  sentence."
+    },
+    {
+      "pieces": [
+        "P",
+        "i",
+        " ",
+        "i",
+        "s",
+        " ",
+        "3",
+        ".",
+        "1",
+        "4",
+        ".",
+        " ",
+        "D",
+        "o",
+        "n",
+        "e",
+        "."
+      ],
+      "expected": "Pi is 3.14. Done."
+    },
+    {
+      "pieces": [
+        "Pi ",
+        "is ",
+        "3.1",
+        "4. ",
+        "Don",
+        "e."
+      ],
+      "expected": "Pi is 3.14. Done."
+    },
+    {
+      "pieces": [
+        "Pi is 3.1",
+        "4. Done."
+      ],
+      "expected": "Pi is 3.14. Done."
+    },
+    {
+      "pieces": [
+        "Pi is 3.14. Done."
+      ],
+      "expected": "Pi is 3.14. Done."
+    },
+    {
+      "pieces": [
+        "\u6771",
+        "\u4eac"
+      ],
+      "expected": "\u6771\u4eac"
+    },
+    {
+      "pieces": [
+        "\u6771\u4eac"
+      ],
+      "expected": "\u6771\u4eac"
+    },
+    {
+      "pieces": [
+        "\u6771\u4eac"
+      ],
+      "expected": "\u6771\u4eac"
+    },
+    {
+      "pieces": [
+        "\u6771\u4eac"
+      ],
+      "expected": "\u6771\u4eac"
+    },
+    {
+      "pieces": [
+        "\u3053",
+        "\u3093",
+        "\u306b",
+        "\u3061",
+        "\u306f"
+      ],
+      "expected": "\u3053\u3093\u306b\u3061\u306f"
+    },
+    {
+      "pieces": [
+        "\u3053\u3093\u306b",
+        "\u3061\u306f"
+      ],
+      "expected": "\u3053\u3093\u306b\u3061\u306f"
+    },
+    {
+      "pieces": [
+        "\u3053\u3093\u306b\u3061\u306f"
+      ],
+      "expected": "\u3053\u3093\u306b\u3061\u306f"
+    },
+    {
+      "pieces": [
+        "\u3053\u3093\u306b\u3061\u306f"
+      ],
+      "expected": "\u3053\u3093\u306b\u3061\u306f"
+    },
+    {
+      "pieces": [
+        "\ufa11"
+      ],
+      "expected": "\ufa11"
+    },
+    {
+      "pieces": [
+        "\ufa11"
+      ],
+      "expected": "\ufa11"
+    },
+    {
+      "pieces": [
+        "\ufa11"
+      ],
+      "expected": "\ufa11"
+    },
+    {
+      "pieces": [
+        "\ufa11"
+      ],
+      "expected": "\ufa11"
+    },
+    {
+      "pieces": [
+        "l",
+        "a",
+        "n",
+        "g",
+        "u",
+        "a",
+        "g",
+        "e",
+        " ",
+        "E",
+        "n",
+        "g",
+        "l",
+        "i",
+        "s",
+        "h",
+        "<",
+        "a",
+        "s",
+        "r",
+        "_",
+        "t",
+        "e",
+        "x",
+        "t",
+        ">",
+        "h",
+        "e",
+        "l",
+        "l",
+        "o",
+        " ",
+        "\u65e5",
+        "\u672c"
+      ],
+      "expected": "language English<asr_text>hello \u65e5\u672c"
+    },
+    {
+      "pieces": [
+        "lan",
+        "gua",
+        "ge ",
+        "Eng",
+        "lis",
+        "h<a",
+        "sr_",
+        "tex",
+        "t>h",
+        "ell",
+        "o \u65e5",
+        "\u672c"
+      ],
+      "expected": "language English<asr_text>hello \u65e5\u672c"
+    },
+    {
+      "pieces": [
+        "language ",
+        "English<a",
+        "sr_text>h",
+        "ello \u65e5\u672c"
+      ],
+      "expected": "language English<asr_text>hello \u65e5\u672c"
+    },
+    {
+      "pieces": [
+        "language English<asr_text>hello \u65e5\u672c"
+      ],
+      "expected": "language English<asr_text>hello \u65e5\u672c"
+    },
+    {
+      "pieces": [
+        "l",
+        "a",
+        "n",
+        "g",
+        "u",
+        "a",
+        "g",
+        "e",
+        " ",
+        "E",
+        "n",
+        "g",
+        "l",
+        "i",
+        "s",
+        "h",
+        "<",
+        "a",
+        "s",
+        "r",
+        "_",
+        "t",
+        "e",
+        "x",
+        "t",
+        ">",
+        "H",
+        "e",
+        "l",
+        "l",
+        "o",
+        "\n",
+        "l",
+        "a",
+        "n",
+        "g",
+        "u",
+        "a",
+        "g",
+        "e",
+        " ",
+        "E",
+        "n",
+        "g",
+        "l",
+        "i",
+        "s",
+        "h",
+        "<",
+        "a",
+        "s",
+        "r",
+        "_",
+        "t",
+        "e",
+        "x",
+        "t",
+        ">",
+        "t",
+        "h",
+        "e",
+        "r",
+        "e"
+      ],
+      "expected": "language English<asr_text>Hello\nlanguage English<asr_text>there"
+    },
+    {
+      "pieces": [
+        "lan",
+        "gua",
+        "ge ",
+        "Eng",
+        "lis",
+        "h<a",
+        "sr_",
+        "tex",
+        "t>H",
+        "ell",
+        "o\nl",
+        "ang",
+        "uag",
+        "e E",
+        "ngl",
+        "ish",
+        "<as",
+        "r_t",
+        "ext",
+        ">th",
+        "ere"
+      ],
+      "expected": "language English<asr_text>Hello\nlanguage English<asr_text>there"
+    },
+    {
+      "pieces": [
+        "language ",
+        "English<a",
+        "sr_text>H",
+        "ello\nlang",
+        "uage Engl",
+        "ish<asr_t",
+        "ext>there"
+      ],
+      "expected": "language English<asr_text>Hello\nlanguage English<asr_text>there"
+    },
+    {
+      "pieces": [
+        "language English<asr_text>Hello\nlanguage English<asr_text>there"
+      ],
+      "expected": "language English<asr_text>Hello\nlanguage English<asr_text>there"
+    },
+    {
+      "pieces": [
+        "l",
+        "a",
+        "n",
+        "g",
+        "u",
+        "a",
+        "g",
+        "e",
+        " ",
+        "F",
+        "r",
+        "e",
+        "n",
+        "c",
+        "h",
+        "<",
+        "a",
+        "s",
+        "r",
+        "_",
+        "t",
+        "e",
+        "x",
+        "t",
+        ">",
+        "b",
+        "o",
+        "n",
+        "j",
+        "o",
+        "u",
+        "r"
+      ],
+      "expected": "language French<asr_text>bonjour"
+    },
+    {
+      "pieces": [
+        "lan",
+        "gua",
+        "ge ",
+        "Fre",
+        "nch",
+        "<as",
+        "r_t",
+        "ext",
+        ">bo",
+        "njo",
+        "ur"
+      ],
+      "expected": "language French<asr_text>bonjour"
+    },
+    {
+      "pieces": [
+        "language ",
+        "French<as",
+        "r_text>bo",
+        "njour"
+      ],
+      "expected": "language French<asr_text>bonjour"
+    },
+    {
+      "pieces": [
+        "language French<asr_text>bonjour"
+      ],
+      "expected": "language French<asr_text>bonjour"
+    }
+  ],
+  "phrases": [
+    {
+      "text": "Hello there. Next question? Yes!",
+      "expected": [
+        "Hello there.",
+        "Next question?",
+        "Yes!"
+      ]
+    },
+    {
+      "text": "Please dial *966*911# now.",
+      "expected": [
+        "Please dial *966*911# now."
+      ]
+    },
+    {
+      "text": "one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three ",
+      "expected": [
+        "one two three one two three one two three one two three one two three one two three one two three one two t",
+        "e two three one two three one two three one two three one two three one two three one two three one two t",
+        "e two three one two three one two three one two three one two three one two three one two three one two t",
+        "e two three one two three one two three one two three one two three one two three one two three one two t",
+        "e  two three one  two three"
+      ]
+    },
+    {
+      "text": "Hello <think>private</think>there.",
+      "expected": [
+        "Hello <think>private</think>there."
+      ]
+    },
+    {
+      "text": "A <function=foo>hidden</function> sentence.",
+      "expected": [
+        "A <function=foo>hidden</function> sentence."
+      ]
+    },
+    {
+      "text": "Pi is 3.14. Done.",
+      "expected": [
+        "Pi is 3.",
+        "14.",
+        "Done."
+      ]
+    },
+    {
+      "text": "\u6771\u4eac",
+      "expected": [
+        "\u6771\u4eac"
+      ]
+    },
+    {
+      "text": "\u3053\u3093\u306b\u3061\u306f",
+      "expected": [
+        "\u3053\u3093\u306b\u3061\u306f"
+      ]
+    },
+    {
+      "text": "\ufa11",
+      "expected": [
+        "\ufa11"
+      ]
+    },
+    {
+      "text": "language English<asr_text>hello \u65e5\u672c",
+      "expected": [
+        "language English<asr_text>hello \u65e5\u672c"
+      ]
+    },
+    {
+      "text": "language English<asr_text>Hello\nlanguage English<asr_text>there",
+      "expected": [
+        "language English<asr_text>Hello\nlanguage English<asr_text>there"
+      ]
+    },
+    {
+      "text": "language French<asr_text>bonjour",
+      "expected": [
+        "language French<asr_text>bonjour"
+      ]
+    }
+  ],
+  "tts": [
+    {
+      "text": "Hello there. Next question? Yes!",
+      "budget": 39
+    },
+    {
+      "text": "Please dial *966*911# now.",
+      "budget": 54
+    },
+    {
+      "text": "one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three ",
+      "budget": 360
+    },
+    {
+      "text": "Hello <think>private</think>there.",
+      "budget": 24
+    },
+    {
+      "text": "A <function=foo>hidden</function> sentence.",
+      "budget": 29
+    },
+    {
+      "text": "Pi is 3.14. Done.",
+      "budget": 39
+    },
+    {
+      "text": "\u6771\u4eac",
+      "budget": 24
+    },
+    {
+      "text": "\u3053\u3093\u306b\u3061\u306f",
+      "budget": 24
+    },
+    {
+      "text": "\ufa11",
+      "budget": 24
+    },
+    {
+      "text": "language English<asr_text>hello \u65e5\u672c",
+      "budget": 29
+    },
+    {
+      "text": "language English<asr_text>Hello\nlanguage English<asr_text>there",
+      "budget": 34
+    },
+    {
+      "text": "language French<asr_text>bonjour",
+      "budget": 24
+    }
+  ],
+  "cleanup": [
+    {
+      "text": "Hello there. Next question? Yes!",
+      "expected": "Hello there. Next question? Yes!"
+    },
+    {
+      "text": "Please dial *966*911# now.",
+      "expected": "Please dial *966*911# now."
+    },
+    {
+      "text": "one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three ",
+      "expected": "one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three one  two three"
+    },
+    {
+      "text": "Hello <think>private</think>there.",
+      "expected": "Hello <think>private</think>there."
+    },
+    {
+      "text": "A <function=foo>hidden</function> sentence.",
+      "expected": "A <function=foo>hidden</function> sentence."
+    },
+    {
+      "text": "Pi is 3.14. Done.",
+      "expected": "Pi is 3.14. Done."
+    },
+    {
+      "text": "\u6771\u4eac",
+      "expected": ""
+    },
+    {
+      "text": "\u3053\u3093\u306b\u3061\u306f",
+      "expected": ""
+    },
+    {
+      "text": "\ufa11",
+      "expected": ""
+    },
+    {
+      "text": "language English<asr_text>hello \u65e5\u672c",
+      "expected": ""
+    },
+    {
+      "text": "language English<asr_text>Hello\nlanguage English<asr_text>there",
+      "expected": "Hello there"
+    },
+    {
+      "text": "language French<asr_text>bonjour",
+      "expected": ""
+    }
+  ],
+  "deltas": [
+    {
+      "parts": [
+        "language",
+        "English",
+        "<asr_text>",
+        "Hello",
+        ",",
+        "world",
+        ".",
+        "Next"
+      ],
+      "expected": [
+        "Hello",
+        "Hello,",
+        "Hello, world",
+        "Hello, world.",
+        "Hello, world.Next"
+      ]
+    },
+    {
+      "parts": [
+        "language",
+        "French",
+        "bonjour",
+        "language",
+        "English",
+        "Hello"
+      ],
+      "expected": [
+        "Hello"
+      ]
+    },
+    {
+      "parts": [
+        "language English<asr_text>Call",
+        " 123",
+        "456",
+        "!"
+      ],
+      "expected": [
+        "Call",
+        "Call 123",
+        "Call 123 456",
+        "Call 123 456!"
+      ]
+    },
+    {
+      "parts": [
+        "(",
+        "Hello",
+        ")",
+        "there"
+      ],
+      "expected": [
+        "(",
+        "(Hello",
+        "(Hello)",
+        "(Hello)there"
+      ]
+    },
+    {
+      "parts": [
+        "hello",
+        " language",
+        "English",
+        "<asr_text>new",
+        "phrase"
+      ],
+      "expected": [
+        "hello",
+        "new",
+        "new phrase"
+      ]
+    }
+  ]
+}

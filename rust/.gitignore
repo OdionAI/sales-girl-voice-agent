@@ -1,0 +1,7 @@
+/target/
+
+# Interactive microphone calls and local process IDs stay on this Mac.
+/artifacts/mac-live-call/
+
+# Local parity audio, traces, process measurements and review supervisor files.
+/artifacts/python-parity-*/

@@ -153,7 +153,13 @@ def participant_identity(route, participant, room_name, sip_kind, *, called_over
         "caller_phone": attrs.get("sip.phoneNumber", ""),
         "caller_number": caller,
         "called_phone": called,
-        "outbound_required": chosen.get("outbound_required") is True,
+        # An outbound DID (e.g. 0301051) must keep claiming its prepared call
+        # even when the dashboard overrides its agent, so preserve the flag from
+        # the static route when the dynamic route does not carry one.
+        "outbound_required": (
+            chosen.get("outbound_required") is True
+            or (did_route or {}).get("outbound_required") is True
+        ),
         "sip_attribute_keys": sorted(str(key) for key in attrs.keys()),
         "sip_trunk_id": attrs["sip.trunkID"],
         "sip_caller_verified": True,

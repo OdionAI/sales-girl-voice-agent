@@ -174,3 +174,42 @@ after fully generating each sentence; it is not token-streaming or real-time rea
 Only this route uses the endpoint's bounded 1800-second request timeout so the
 old 60-second cap does not truncate generation. Caller cancellation still closes
 the client stream; no retries or fallback to another speaker are performed.
+
+### Native worker and existing capacity admission
+
+The Rust worker replaces the deployed `latency_lab.livekit_worker` process. It
+uses the existing LiveKit registration name, service credentials, signed call
+scope, storage mounts, model providers and configured accounts. There is no
+Python worker/coordinator in the native image. `--check-env` validates existing
+settings without network access; the native health endpoint is ready only while
+registered with LiveKit. Trusted, allowlisted settings from the existing
+`RVC_LAB_LIVEKIT_ENV_FILE` / `RVC_LAB_DASHBOARD_ENV_FILE` are supported in Rust.
+
+Capacity admission stays in the existing Conversation service:
+
+- AICC calls `POST /v1/aicc/capacity/reservations` before sending the caller to AI.
+  Pending reservations and active calls count against the configured business
+  quota. `reserve:false` is a check only; reservation creation is atomic.
+- When unavailable (including `at_capacity`), AICC follows its existing human/IVR
+  route. A failed capacity request must also follow that fallback. The worker
+  does not replace the AICC routing decision or raise the quota.
+- For an admitted call, Rust uses verified SIP/trunk/caller scope to call
+  `POST /v1/internal/aicc/capacity/reservations/claim-by-caller`. A legacy
+  `x-odion-capacity-reservation` header is also supported. These requests use
+  the existing `sales-girl-voice-agent` service role.
+- Rust heartbeats the acquired lease, releases it on hangup/startup failure, and
+  finishes cleanup if cancellation races with a successful claim. A missing or
+  denied reservation prevents admission.
+
+Release preflight checks the deployed claim-by-caller API, verifies that the
+worker and capacity service use the same business scope, and prevents worker
+slots from being lower than the existing quota. It does not change that quota
+or create a reservation. Global worker slots are resource limits; they are not
+a replacement for the business admission policy.
+
+Local regression checks: `python -m unittest tests.test_lagos_deploy`, native
+`cargo test --locked --release --all-features --lib`, and
+`bash deployment/lagos/test-native-runtime.sh IMAGE`. The last check creates an
+isolated LiveKit/container network and verifies registration plus readiness
+across disconnection/reconnection, without production accounts or providers.
+Rollback restores the previous image, entrypoint, command, user and healthcheck.

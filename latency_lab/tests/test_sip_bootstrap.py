@@ -84,6 +84,8 @@ class AiccNumberRoutingTest(unittest.TestCase):
         )
         self.assertEqual(ident["config_agent_id"], "agent-hausa")
         self.assertEqual(ident["configured_agent_name"], "Abdul")
+        # The DID is still an outbound route, so it keeps claiming its prepared call.
+        self.assertTrue(ident["outbound_required"])
 
     def test_explicit_caller_override_still_precedes_dashboard_did_route(self) -> None:
         p = _participant(caller="08112812216", called="0301051")
