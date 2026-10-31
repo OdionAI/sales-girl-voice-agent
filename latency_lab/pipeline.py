@@ -41,7 +41,7 @@ from .action_tools import (
 )
 from .providers import (
     RLLMClient, RSTTClient, RTTSClient, tts_token_budget, scoped_llm_stream,
-    is_asr_context_echo,
+    is_asr_context_echo, pcm16_signal_diagnostics,
 )
 from .pidgin import EjiroTTSClient, SBPNClient, is_pidgin
 from .speech_languages import CoquiTTSClient, LANGUAGES, apply_language_stack, language_code, language_rules, uses_sbpn
@@ -174,7 +174,10 @@ class ConversationPipeline:
             self.stt = SBPNClient(stt_config, self.on_partial, self.on_final, self._provider_event,
                                   on_final_unavailable=self.on_stt_final_unavailable)
         else:
-            self.stt = RSTTClient(stt_config, self.on_partial, self.on_final, self._provider_event)
+            self.stt = RSTTClient(
+                stt_config, self.on_partial, self.on_final, self._provider_event,
+                on_final_unavailable=self.on_final_empty,
+            )
         self.agent_context = agent_context or AgentRuntimeContext()
         self.banking = BankingTools(self.http, self.agent_context, trace.session_id, send, session_identity)
         self.system_prompt = self.agent_context.system_prompt(config.system_prompt) + self.banking.prompt() + CONVERSATION_RULES
@@ -634,6 +637,7 @@ class ConversationPipeline:
         *,
         client_sent_ms: float | None = None,
         client_network_ms: float | None = None,
+        speech_prob: float | None = None,
     ) -> None:
         if getattr(self, "handoff_active", False) or getattr(self, "handoff_in_progress", False):
             return
@@ -644,6 +648,11 @@ class ConversationPipeline:
         duration_ms = len(pcm) / 2 / 16000 * 1000
         level = rms_pcm16(pcm)
         speaking = level >= self.config.speech_rms
+        # When the input filter supplies an RNNoise speech probability, a frame
+        # must also be recognizable as speech. This rejects loud non-speech
+        # (TV, music, room noise) that would otherwise pass the loudness gate.
+        if speech_prob is not None and self.config.speech_prob_min > 0:
+            speaking = speaking and speech_prob >= self.config.speech_prob_min
         if not uses_sbpn(self.config.tts_language) or speaking or self.speech_candidate_active or self.state in {"speaking", "speculating"}:
             await self.stt.append(pcm)
         if speaking:
@@ -804,6 +813,31 @@ class ConversationPipeline:
     async def _speech_ended(self) -> None:
         if self.state not in {"speaking", "speculating"}:
             return
+        committed_audio = bytes(self.turn_pcm16)
+        # Safety net: do not send a near-empty buffer (a tap, cough or line
+        # blip) to ASR and freeze the turn on its empty result. 0 disables each
+        # floor. A noise blip that slipped through the speech-probability gate is
+        # the other main case and is handled by ``on_final_empty`` on the empty
+        # transcript.
+        if self.config.min_utterance_ms > 0 or self.config.min_voiced_frame_percent > 0:
+            diag = pcm16_signal_diagnostics(committed_audio, speech_rms=self.config.speech_rms)
+            too_short = (self.config.min_utterance_ms > 0
+                         and diag["audio_duration_ms"] < self.config.min_utterance_ms)
+            too_unvoiced = (self.config.min_voiced_frame_percent > 0
+                            and diag["audio_voiced_frame_percent"] < self.config.min_voiced_frame_percent)
+            if too_short or too_unvoiced:
+                self.trace.record(
+                    "utterance_discarded_below_minimum",
+                    turn_id=self.turn_id,
+                    reason="committed_buffer_too_short_for_asr",
+                    audio_ms=diag["audio_duration_ms"],
+                    voiced_percent=diag["audio_voiced_frame_percent"],
+                )
+                self.turn_pcm16.clear()
+                self._clear_speech_candidate()
+                self.turn_id = None
+                self._transition("idle", "utterance_discarded_below_minimum")
+                return
         self.trace.record(
             "user_speech_end",
             turn_id=self.turn_id,
@@ -814,7 +848,6 @@ class ConversationPipeline:
         self.speech_ms = 0.0
         self.silence_ms = 0.0
         self.silence_candidate = False
-        committed_audio = bytes(self.turn_pcm16)
         self.banking.utterance(committed_audio)
         self.turn_pcm16.clear()
         self.trace.record(
@@ -906,6 +939,34 @@ class ConversationPipeline:
         self._clear_speech_candidate()
         self._transition("idle", "stt_recovery_completed" if recovered
                          else "stt_recovery_failed_retry_on_next_audio")
+        await self.send({"type": "lab_status", "content": "listening"})
+
+    async def on_final_empty(self) -> None:
+        """Authoritative final came back empty (a noise blip or too-short clip).
+
+        Do not sit in ``awaiting_final`` for the STT deadline while the caller
+        keeps talking: drop the pending timeout, clear the turn and go straight
+        back to listening so the next words are heard. The batch path already
+        reopened the realtime socket in its own ``finally``, so no provider
+        recover is needed here (calling recover() from inside the batch lock
+        would deadlock).
+        """
+        if self.state != "awaiting_final":
+            return
+        failed_turn = self.turn_id
+        if self.final_timeout_task:
+            self.final_timeout_task.cancel()
+            self.final_timeout_task = None
+        self.trace.record(
+            "stt_final_empty_recovered",
+            turn_id=failed_turn,
+            reason="empty_authoritative_final_return_to_listening",
+        )
+        self.turn_id = None
+        self.last_partial = self.final_text = ""
+        self.turn_pcm16.clear()
+        self._clear_speech_candidate()
+        self._transition("idle", "stt_final_empty_back_to_listening")
         await self.send({"type": "lab_status", "content": "listening"})
 
     async def on_partial(self, text: str, raw: str) -> None:

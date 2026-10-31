@@ -760,7 +760,9 @@ async def entrypoint(ctx: JobContext) -> None:
                 async with input_lock:
                     pcm = noise_filter.process(bytes(event.frame.data))
                     if pcm:
-                        await pipeline.audio(pcm)
+                        await pipeline.audio(
+                            pcm, speech_prob=noise_filter.last_speech_prob
+                        )
             tail = noise_filter.finish()
             if tail:
                 async with input_lock:
