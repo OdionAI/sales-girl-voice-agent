@@ -10,10 +10,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl gnupg ca-c
 WORKDIR /src
 ENV CARGO_BUILD_JOBS=2 CC=clang-21 CXX=clang++-21 LIBCLANG_PATH=/usr/lib/llvm-21/lib
 COPY Cargo.toml Cargo.lock ./
-COPY build.rs ./build.rs
 COPY src ./src
 COPY fixtures ./fixtures
-COPY third_party ./third_party
 RUN --mount=type=cache,id=sg-rvc-cargo-registry,target=/usr/local/cargo/registry --mount=type=cache,id=sg-rvc-linux-target,target=/src/target \
     cargo test --locked --release --all-features --lib && \
     cargo build --locked --release --all-features --bins && \

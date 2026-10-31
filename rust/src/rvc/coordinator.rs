@@ -21,6 +21,37 @@ enum State {
     Releasing,
     Playing,
 }
+/// Percent of 10 ms frames whose RMS clears the loudness floor. Used by the
+/// optional min-utterance safety net before committing audio to ASR.
+fn voiced_frame_percent(pcm: &[i16], speech_rms: f64) -> f64 {
+    if pcm.is_empty() {
+        return 0.0;
+    }
+    let mut voiced = 0usize;
+    let mut total = 0usize;
+    for frame in pcm.chunks(160) {
+        total += 1;
+        let rms =
+            (frame.iter().map(|s| f64::from(*s).powi(2)).sum::<f64>() / frame.len() as f64).sqrt();
+        if rms >= speech_rms {
+            voiced += 1;
+        }
+    }
+    voiced as f64 / total as f64 * 100.0
+}
+/// Decide whether a processed input frame counts as caller speech. When the
+/// noise filter reports an RNNoise speech probability (and the operator set a
+/// positive `speech_prob_min`), a frame must clear both the loudness floor and
+/// the probability floor, so loud non-speech (TV/music/room noise) cannot open
+/// or sustain a caller turn. APM/off report `None`, preserving the loudness-only
+/// VAD. Mirrors Python `ConversationPipeline.audio`.
+fn counts_as_speech(level: f64, speech_prob: Option<f64>, c: &Config) -> bool {
+    level >= c.speech_rms
+        && match speech_prob {
+            Some(p) if c.speech_prob_min > 0.0 => p >= c.speech_prob_min,
+            _ => true,
+        }
+}
 #[derive(Debug)]
 pub enum Output {
     Ready,
@@ -1468,12 +1499,13 @@ impl Coordinator {
         let duration = pcm.len() as f64 / 16.0;
         let level =
             (pcm.iter().map(|s| f64::from(*s).powi(2)).sum::<f64>() / pcm.len() as f64).sqrt();
+        // Loudness alone is not enough when RNNoise reports a speech
+        // probability: loud non-speech (TV/music/room noise) must not count.
+        let speaking = counts_as_speech(level, self.noise_filter.last_speech_prob(), &self.c);
         // Keep first speech-candidate frames and utterance-ending silence, but
         // never grow the provider's cumulative request with idle/muted audio.
         if let Some(asr) = &self.asr {
-            if level >= self.c.speech_rms
-                || matches!(self.state, State::Speaking | State::Speculating)
-            {
+            if speaking || matches!(self.state, State::Speaking | State::Speculating) {
                 let dropped = asr.append(pcm.clone());
                 if dropped > 0 {
                     self.trace.emit(
@@ -1490,7 +1522,7 @@ impl Coordinator {
                 .await;
             return;
         }
-        if level >= self.c.speech_rms {
+        if speaking {
             if self.silence_ms > 0.0
                 && self.flush_suspended
                 && matches!(self.state, State::Speaking | State::Speculating)
@@ -1587,6 +1619,28 @@ impl Coordinator {
             }
             self.silence_ms += duration;
             if self.silence_ms >= self.c.end_silence_ms {
+                // Safety net: never commit a near-empty buffer (a tap, cough or
+                // line blip) to ASR and freeze the turn on its empty result.
+                // 0 disables each floor; both default to off. The primary
+                // defence is the speech-probability gate above.
+                if self.c.min_utterance_ms > 0.0 || self.c.min_voiced_frame_percent > 0.0 {
+                    let audio_ms = self.pcm.len() as f64 / 16.0;
+                    let voiced = voiced_frame_percent(&self.pcm, self.c.speech_rms);
+                    let too_short =
+                        self.c.min_utterance_ms > 0.0 && audio_ms < self.c.min_utterance_ms;
+                    let too_unvoiced = self.c.min_voiced_frame_percent > 0.0
+                        && voiced < self.c.min_voiced_frame_percent;
+                    if too_short || too_unvoiced {
+                        self.trace.emit("utterance_discarded_below_minimum", self.turn, 0, json!({"reason":"committed_buffer_too_short_for_asr","audio_ms":audio_ms,"voiced_percent":voiced}));
+                        self.pcm.clear();
+                        self.candidate = false;
+                        self.preconfirm = None;
+                        self.speech_ms = 0.0;
+                        self.silence_ms = 0.0;
+                        self.transition(State::Idle, "utterance_discarded_below_minimum");
+                        return;
+                    }
+                }
                 self.silence_ms = 0.0;
                 self.transition(State::AwaitingFinal, "user_speech_end");
                 if let Some(bank) = &self.banking {
@@ -1604,7 +1658,7 @@ impl Coordinator {
                             1.0
                         })
                     .max(if providers::realtime_final(&self.c) {
-                        20.0
+                        5.0
                     } else {
                         0.0
                     }),
@@ -1716,12 +1770,19 @@ impl Coordinator {
             );
             return;
         }
-        if turn != self.turn
-            || self.state != State::AwaitingFinal
-            || !self.final_text.is_empty()
-            || text.is_empty()
-        {
+        if turn != self.turn || self.state != State::AwaitingFinal || !self.final_text.is_empty() {
             self.trace.emit("stt_final_rejected", turn, 0, json!({}));
+            return;
+        }
+        if text.is_empty() {
+            // An empty authoritative final (a noise blip / too-short clip) must
+            // return to listening immediately instead of sitting in
+            // AwaitingFinal until the safety timer fires — the "silent turn"
+            // bug. `unavailable` aborts the timeout, recovers the ASR socket,
+            // clears the turn and transitions back to Idle (no lock, safe here).
+            self.trace
+                .emit("stt_final_empty_recovered", turn, 0, json!({}));
+            self.unavailable(turn).await;
             return;
         }
         if let Some(t) = self.final_timeout.take() {
@@ -4195,4 +4256,61 @@ async fn generate(g: Generation) -> Result<(), String> {
             .map_err(|_| "session closed")?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod speech_gate_tests {
+    use super::{counts_as_speech, voiced_frame_percent};
+    use crate::rvc::Config;
+
+    fn config() -> Config {
+        serde_json::from_str(include_str!("../../fixtures/reference-config.json")).unwrap()
+    }
+
+    #[test]
+    fn loud_frame_with_low_speech_probability_is_not_speech() {
+        // The failing call: loud room noise (RMS ~1,600-1,800) with speech
+        // probability ~0.08-0.19 must not open a caller turn.
+        let c = config();
+        assert!(!counts_as_speech(1700.0, Some(0.08), &c));
+        assert!(!counts_as_speech(1700.0, Some(0.19), &c));
+    }
+
+    #[test]
+    fn loud_frame_with_high_speech_probability_is_speech() {
+        // Real speech read ~0.9 in the failing call; must still count.
+        let c = config();
+        assert!(counts_as_speech(1700.0, Some(0.9), &c));
+    }
+
+    #[test]
+    fn quiet_frame_is_not_speech_even_with_probability() {
+        let c = config();
+        assert!(!counts_as_speech(100.0, Some(0.9), &c));
+    }
+
+    #[test]
+    fn no_probability_falls_back_to_loudness_only() {
+        // WebRTC-APM / off report None; behaviour is unchanged.
+        let c = config();
+        assert!(counts_as_speech(1700.0, None, &c));
+        assert!(!counts_as_speech(100.0, None, &c));
+    }
+
+    #[test]
+    fn zero_probability_floor_disables_the_gate() {
+        let mut c = config();
+        c.speech_prob_min = 0.0;
+        assert!(counts_as_speech(1700.0, Some(0.0), &c));
+    }
+
+    #[test]
+    fn voiced_frame_percent_ignores_silent_frames() {
+        // Half loud (>=280), half silent across 10 ms frames.
+        let mut pcm = vec![1000i16; 160 * 5];
+        pcm.extend(std::iter::repeat_n(0i16, 160 * 5));
+        let pct = voiced_frame_percent(&pcm, 280.0);
+        assert!((pct - 50.0).abs() < 1e-9, "got {pct}");
+        assert_eq!(voiced_frame_percent(&[], 280.0), 0.0);
+    }
 }

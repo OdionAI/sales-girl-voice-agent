@@ -10,10 +10,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl gnupg ca-c
 WORKDIR /src
 ENV CARGO_BUILD_JOBS=2 CC=clang-21 CXX=clang++-21 LIBCLANG_PATH=/usr/lib/llvm-21/lib
 COPY rust/Cargo.toml rust/Cargo.lock ./
-COPY rust/build.rs ./build.rs
 COPY rust/src ./src
 COPY rust/fixtures ./fixtures
-COPY rust/third_party ./third_party
 # The image build only compiles the worker. Unit tests run in the "Rust unit
 # tests" CI job (.github/workflows/deploy-staging.yml), which executes on a
 # dedicated runner. Running the timing-sensitive rvc test suite inside this

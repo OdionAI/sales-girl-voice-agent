@@ -124,6 +124,12 @@ pub struct Config {
     pub speech_rms: f64,
     pub min_speech_ms: f64,
     pub end_silence_ms: f64,
+    #[serde(default = "default_speech_prob_min")]
+    pub speech_prob_min: f64,
+    #[serde(default)]
+    pub min_utterance_ms: f64,
+    #[serde(default)]
+    pub min_voiced_frame_percent: f64,
     #[serde(default = "default_max_utterance")]
     pub max_utterance_seconds: f64,
     pub stable_partial_ms: f64,
@@ -169,6 +175,9 @@ pub struct Config {
 }
 fn default_max_utterance() -> f64 {
     1800.0
+}
+fn default_speech_prob_min() -> f64 {
+    0.35
 }
 impl Config {
     pub fn load(path: &std::path::Path) -> Result<Self, String> {
@@ -249,6 +258,15 @@ impl Config {
             || self.llm_empty_retries > 16
         {
             return Err("invalid provider buffer/retry settings".into());
+        }
+        if !self.speech_prob_min.is_finite()
+            || !(0.0..=1.0).contains(&self.speech_prob_min)
+            || !self.min_utterance_ms.is_finite()
+            || self.min_utterance_ms < 0.0
+            || !self.min_voiced_frame_percent.is_finite()
+            || !(0.0..=100.0).contains(&self.min_voiced_frame_percent)
+        {
+            return Err("invalid speech-probability/utterance-floor configuration".into());
         }
         Ok(())
     }

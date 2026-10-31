@@ -1,30 +1,25 @@
 //! Operator-selected native WebRTC or RNNoise suppression before VAD/ASR.
 //! Resampling uses LiveKit; echo cancellation and automatic gain stay disabled.
 //!
-//! The RNNoise path links Xiph RNNoise v0.2 (the same model the Python worker's
-//! `pyrnnoise` uses) via the vendored `third_party/rnnoise` C library built in
-//! `build.rs`. Earlier revisions used the pure-Rust `nnnoiseless` 0.5.2 port of
-//! the *old* v0.1 model, which barely attenuated steady background noise and even
-//! scored pure tones as speech, so ambient noise still tripped the RMS speech
-//! gate and interrupted the agent.
+//! The RNNoise path uses the maintained `rnnoise2` crate, which builds the
+//! vendored Xiph RNNoise v0.2 (commit `70f1d25`) with the same default model the
+//! Python worker's `pyrnnoise` wraps. RNNoise also reports a per-frame speech
+//! probability; the mean for each processed chunk is exposed through
+//! [`InputNoiseFilter::last_speech_prob`] so the VAD can require acoustic speech
+//! (not merely loudness) before opening a caller turn. Earlier revisions used
+//! the pure-Rust `nnnoiseless` 0.5.2 port of the *old* v0.1 model, which barely
+//! attenuated steady background noise and even scored pure tones as speech, so
+//! ambient noise still tripped the RMS speech gate and interrupted the agent.
 use super::{Config, Trace};
 use livekit::webrtc::native::{apm::AudioProcessingModule, audio_resampler::AudioResampler};
+use rnnoise2::Denoiser;
 use serde_json::json;
-use std::ffi::c_void;
 
-/// RNNoise processes fixed 10 ms frames at 48 kHz (`rnnoise_get_frame_size()`).
+/// RNNoise processes fixed 10 ms frames at 48 kHz (`Denoiser::frame_size()`).
 const RNNOISE_RATE: u32 = 48_000;
 const RNNOISE_FRAME: usize = 480;
 /// Caller audio arrives at 16 kHz mono; 10 ms is 160 samples.
 const WORK_FRAME: usize = 160;
-
-extern "C" {
-    // Opaque RNNoise handles; the model argument may be null for the default.
-    fn rnnoise_create(model: *mut c_void) -> *mut c_void;
-    fn rnnoise_destroy(state: *mut c_void);
-    fn rnnoise_process_frame(state: *mut c_void, out: *mut f32, input: *const f32) -> f32;
-    fn rnnoise_get_frame_size() -> i32;
-}
 
 enum Backend {
     Off,
@@ -32,24 +27,20 @@ enum Backend {
     Rnnoise(NativeRnnoise),
 }
 struct NativeRnnoise {
-    state: *mut c_void,
+    denoiser: Denoiser,
     up: AudioResampler,
     down: AudioResampler,
 }
-// The denoise state is owned by a single call actor and only touched from that
-// task, but the actor may move between worker threads.
-unsafe impl Send for NativeRnnoise {}
+// `rnnoise2::Denoiser` is `Send`. The denoise state is owned by a single call
+// actor and only touched from that task, though the actor may move between
+// worker threads.
 impl NativeRnnoise {
     fn new() -> Option<Self> {
-        if unsafe { rnnoise_get_frame_size() } as usize != RNNOISE_FRAME {
-            return None;
-        }
-        let state = unsafe { rnnoise_create(std::ptr::null_mut()) };
-        if state.is_null() {
+        if Denoiser::frame_size() != RNNOISE_FRAME {
             return None;
         }
         Some(Self {
-            state,
+            denoiser: Denoiser::new(None)?,
             up: Default::default(),
             down: Default::default(),
         })
@@ -71,8 +62,7 @@ impl NativeRnnoise {
             *target = f32::from(*sample);
         }
         let mut output = [0.0f32; RNNOISE_FRAME];
-        let probability =
-            unsafe { rnnoise_process_frame(self.state, output.as_mut_ptr(), input.as_ptr()) };
+        let probability = self.denoiser.process(&input, &mut output);
         if !probability.is_finite() || output.iter().any(|sample| !sample.is_finite()) {
             return Err(());
         }
@@ -90,15 +80,11 @@ impl NativeRnnoise {
         Ok(probability.clamp(0.0, 1.0))
     }
 }
-impl Drop for NativeRnnoise {
-    fn drop(&mut self) {
-        unsafe { rnnoise_destroy(self.state) };
-    }
-}
 pub struct InputNoiseFilter {
     backend: Backend,
     speech_prob_total: f64,
     speech_prob_frames: usize,
+    last_speech_prob: Option<f64>,
     pending: Vec<i16>,
     trace: Trace,
     samples: usize,
@@ -142,6 +128,7 @@ impl InputNoiseFilter {
             backend,
             speech_prob_total: 0.0,
             speech_prob_frames: 0,
+            last_speech_prob: None,
             pending: vec![],
             trace,
             samples: 0,
@@ -151,7 +138,14 @@ impl InputNoiseFilter {
             processing_us: 0,
         }
     }
+    /// Mean RNNoise speech probability (0..1) for the most recent `process`
+    /// chunk, or `None` when suppression is off / WebRTC-APM (which report no
+    /// probability). The VAD gates on this to reject loud non-speech.
+    pub fn last_speech_prob(&self) -> Option<f64> {
+        self.last_speech_prob
+    }
     pub fn process(&mut self, pcm: Vec<i16>) -> Vec<i16> {
+        self.last_speech_prob = None;
         if matches!(self.backend, Backend::Off) {
             return pcm;
         }
@@ -185,6 +179,7 @@ impl InputNoiseFilter {
         };
         if result.is_err() {
             self.backend = Backend::Off;
+            self.last_speech_prob = None;
             self.trace.emit(
                 "input_noise_filter_error",
                 0,
@@ -194,6 +189,15 @@ impl InputNoiseFilter {
             let mut original = raw;
             original.append(&mut self.pending);
             return original;
+        }
+        if !probabilities.is_empty() {
+            self.last_speech_prob = Some(
+                probabilities
+                    .iter()
+                    .map(|value| f64::from(*value))
+                    .sum::<f64>()
+                    / probabilities.len() as f64,
+            );
         }
         self.processing_us += start.elapsed().as_micros();
         self.speech_prob_total += probabilities
@@ -386,6 +390,40 @@ mod tests {
             "loud background noise must be strongly suppressed: in_rms={in_rms} out_rms={out_rms} gain={}",
             out_rms / in_rms
         );
+    }
+    #[test]
+    fn native_rnnoise_exposes_speech_probability() {
+        // The VAD gates on this per-chunk probability. Verify the RNNoise path
+        // exposes a real probability in range (the gate decision against a
+        // threshold is unit-tested separately in coordinator::speech_gate_tests,
+        // because the exact value depends on the acoustic content).
+        let c = rnnoise_config();
+        let mut filter = InputNoiseFilter::new(&c, Trace::default());
+        let _ = filter.process(loud_noise_pcm(1600));
+        let prob = filter
+            .last_speech_prob()
+            .expect("RNNoise reports a speech probability");
+        assert!(
+            (0.0..=1.0).contains(&prob),
+            "probability out of range: {prob}"
+        );
+    }
+    #[test]
+    fn off_and_webrtc_backends_expose_no_speech_probability() {
+        // No probability => the caller's VAD falls back to the RMS threshold.
+        let mut off = config();
+        off.input_noise_suppression = false;
+        let mut filter = InputNoiseFilter::new(&off, Trace::default());
+        let _ = filter.process(noisy_pcm(1600));
+        assert!(filter.last_speech_prob().is_none());
+
+        let mut apm = config();
+        apm.input_noise_suppression = true;
+        apm.input_noise_agent_ids = vec!["*".into()];
+        apm.input_noise_implementation = "webrtc".into();
+        let mut filter = InputNoiseFilter::new(&apm, Trace::default());
+        let _ = filter.process(noisy_pcm(1600));
+        assert!(filter.last_speech_prob().is_none());
     }
     #[test]
     fn unselected_rnnoise_never_changes_or_buffers_audio() {
