@@ -11,6 +11,7 @@ import subprocess
 import sys
 import time
 import uuid
+from urllib.parse import urlsplit
 
 STACK = Path('/opt/attentive/releases/recovery-20261009')
 PROJECT = 'odion-recovery-lagos'
@@ -86,11 +87,78 @@ def wait_healthy():
     raise RuntimeError('New voice container did not become healthy')
 
 
-def image_override(path, image, environment=None):
+def image_override(path, image, environment=None, runtime=None):
     service = {'image': image}
+    if runtime:
+        service.update(runtime)
     if environment:
         service['environment'] = environment
     path.write_text(json.dumps({'services': {'voice': service}}) + '\n')
+
+
+def worker_runtime(previous, *, native):
+    config = previous['Config']
+    if native:
+        return {
+            'entrypoint': ['/usr/local/bin/rvc-worker'],
+            'command': ['--env'],
+            # Existing contact/outbox and recording mounts keep their ownership.
+            'user': config.get('User') or '0',
+            'healthcheck': {
+                'test': ['CMD', '/usr/local/bin/rvc-worker', '--healthcheck'],
+                'interval': '10s', 'timeout': '3s', 'start_period': '60s', 'retries': 3,
+            },
+        }
+    health = config.get('Healthcheck') or {}
+    restored = {'test': health['Test']} if health.get('Test') else {'disable': True}
+    for docker_key, compose_key in [('Interval', 'interval'), ('Timeout', 'timeout'),
+                                     ('StartPeriod', 'start_period')]:
+        if health.get(docker_key):
+            restored[compose_key] = f'{health[docker_key]}ns'
+    if 'Retries' in health:
+        restored['retries'] = health['Retries']
+    return {'entrypoint': config.get('Entrypoint'), 'command': config.get('Cmd'),
+            'user': config.get('User') or '0', 'healthcheck': restored}
+
+
+def native_admission_updates(previous_env):
+    """Read existing admission policy; never change the business's quota."""
+    updates = {}
+    livekit_url = previous_env.get('LIVEKIT_URL', '')
+    # The existing Compose bridge is an explicitly pinned internal transport.
+    livekit = urlsplit(livekit_url)
+    if (livekit.scheme == 'ws' and livekit.hostname == 'livekit'
+            and livekit.username is None and livekit.password is None
+            and 'RVC_LAB_ALLOW_INSECURE_LIVEKIT' not in previous_env):
+        updates['RVC_LAB_ALLOW_INSECURE_LIVEKIT'] = 'true'
+    business = previous_env.get('MOMO_CALL_CAPACITY_BUSINESS_ID', '').strip()
+    conversation = json.loads(subprocess.check_output([
+        'docker', 'inspect', 'odion-recovery-lagos-conversations-1']))[0]
+    labels = conversation['Config']['Labels']
+    if (labels.get('com.docker.compose.project') != PROJECT
+            or labels.get('com.docker.compose.service') != 'conversations'
+            or not conversation['State']['Running']):
+        raise RuntimeError('Capacity policy must come from the active Conversation service')
+    env = dict(entry.split('=', 1) for entry in conversation['Config']['Env'])
+    if not business:
+        if (env.get('MOMO_CALL_CAPACITY_BUSINESS_ID', '').strip()
+                and int(env.get('MOMO_CALL_CAPACITY_MAX_CONCURRENT', '0')) > 0):
+            raise RuntimeError('Existing capacity policy is enabled but worker admission is disabled')
+        return updates
+    if uuid.UUID(env.get('MOMO_CALL_CAPACITY_BUSINESS_ID', '')) != uuid.UUID(business):
+        raise RuntimeError('Worker and capacity API business scopes differ')
+    limit = int(env.get('MOMO_CALL_CAPACITY_MAX_CONCURRENT', '0'))
+    if limit < 1 or limit > 1024:
+        raise RuntimeError('Existing capacity quota is disabled or exceeds native worker bounds')
+    explicit = previous_env.get('RVC_LAB_MAX_JOBS', '')
+    if explicit and int(explicit) < limit:
+        raise RuntimeError('Native worker slots are below the existing AICC capacity quota')
+    updates['RVC_LAB_MAX_JOBS'] = explicit or str(max(8, limit))
+    updates['MOMO_CALL_CAPACITY_BUSINESS_ID'] = str(uuid.UUID(business))
+    # Verify the deployed API contract without making a reservation or touching data.
+    run('docker', 'exec', 'odion-recovery-lagos-conversations-1', 'python', '-c',
+        "import json,urllib.request; p=json.load(urllib.request.urlopen('http://127.0.0.1:8091/openapi.json',timeout=5))['paths']; assert '/v1/aicc/capacity/reservations' in p and '/v1/internal/aicc/capacity/reservations/claim-by-caller' in p")
+    return updates
 
 
 def momo_feedback_route(previous_env, agent_id):
@@ -242,6 +310,7 @@ def deploy(release, revision, enable_hausa_research=False, momo_feedback_agent_i
         'RVC_AICC_SIP_ROUTE': momo_feedback_route(previous_env, momo_feedback_agent_id)
     }
     updates['RVC_AICC_SIP_ROUTE'] = leadway_caller_routes(route_env)
+    updates.update(native_admission_updates(previous_env))
     expected_env = [f'{key}={value}' for key, value in (previous_env | updates).items()]
     old_image = f'attentive/voice:before-{release.name}'
     new_image = f'attentive/voice:ci-{release.name}'
@@ -250,8 +319,13 @@ def deploy(release, revision, enable_hausa_research=False, momo_feedback_agent_i
         '--label', f'org.opencontainers.image.revision={revision}',
         '--label', 'org.opencontainers.image.source=https://github.com/OdionAI/sales-girl-voice-agent',
         '-t', new_image, str(release))
-    run('docker', 'run', '--rm', '--network', 'none', new_image, 'python', '-c',
-        'import pyrnnoise; import latency_lab.livekit_worker')
+    # Docker reads values from the child environment. Command lines and files
+    # contain no credentials; multiline recording credentials stay intact.
+    native_env = previous_env | updates
+    env_args = [arg for key in native_env for arg in ('--env', key)]
+    run('docker', 'run', '--rm', '--network', 'none',
+        '--volumes-from', f"{previous['Id']}:ro", '--user', previous['Config'].get('User') or '0', *env_args,
+        new_image, '--check-env', env=os.environ | native_env)
     if inspect_voice()[0]['Id'] != previous['Id']:
         raise RuntimeError('Voice container changed during build; rerun')
     plan_updates = {
@@ -264,7 +338,8 @@ def deploy(release, revision, enable_hausa_research=False, momo_feedback_agent_i
             'environment_updates': plan_updates}
     (release / 'plan.json').write_text(json.dumps(plan, indent=2) + '\n')
     override = release / 'voice-ci.json'
-    image_override(override, new_image, updates)
+    image_override(override, new_image, previous_env | updates,
+                   worker_runtime(previous, native=True))
     attempted = False
     try:
         run(*compose([*files, override]), 'config', '-q', cwd=STACK)
@@ -281,7 +356,8 @@ def deploy(release, revision, enable_hausa_research=False, momo_feedback_agent_i
         if attempted:
             rollback = release / 'voice-rollback.json'
             # A null Compose value removes a key absent from the prior container.
-            image_override(rollback, old_image, {key: previous_env.get(key) for key in updates})
+            image_override(rollback, old_image, {key: previous_env.get(key) for key in updates},
+                           worker_runtime(previous, native=False))
             run(*compose([*files, rollback]), 'up', '-d', '--no-deps', '--no-build',
                 '--force-recreate', 'voice', cwd=STACK)
             wait_healthy()
@@ -310,7 +386,9 @@ if __name__ == '__main__':
         current, files = inspect_voice()
         print(json.dumps({'host': socket.gethostname(), 'project': PROJECT,
                           'image': current['Config']['Image'],
-                          'compose_files': len(files), 'health': 'healthy'}))
+                          'compose_files': len(files), 'health': 'healthy',
+                          'architecture': __import__('platform').machine(),
+                          'native_admission': native_admission_updates(dict(entry.split('=',1) for entry in current['Config']['Env']))}))
     else:
         if args.release is None or args.revision is None:
             parser.error('--release and --revision are required for deployment')
