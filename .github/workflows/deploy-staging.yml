@@ -18,8 +18,43 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Rust unit tests run on a dedicated GitHub runner rather than inside the
+  # staging image build. The rvc suite contains timing-sensitive tests whose
+  # in-process speculative-flush round-trip must beat an internal 80ms grace;
+  # on the constrained staging VM (4 vCPU + the full Compose stack) that budget
+  # is starved and the suite flakes. A dedicated runner has ample, uncontended
+  # CPU, so the same tests are deterministic there. The image build therefore
+  # only compiles (see deployment/staging/Dockerfile).
+  rust-tests:
+    if: github.ref_name == 'dev' && ((github.event_name == 'push' && !contains(github.event.head_commit.message, '[skip deploy]')) || (github.event_name == 'workflow_dispatch' && !inputs.verify_only))
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    container:
+      image: rust:1.99.0-bookworm@sha256:114c7a4425406451c2866b6aafe69fe29b1b298832db1277d411ac73c82d04d6
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install native build toolchain
+        run: |
+          set -euo pipefail
+          apt-get update
+          apt-get install -y --no-install-recommends curl gnupg ca-certificates
+          curl --fail --silent --show-error https://apt.llvm.org/llvm-snapshot.gpg.key -o /tmp/llvm-key.asc
+          gpg --show-keys --with-colons /tmp/llvm-key.asc | grep '^fpr:.*:6084F3CF814B57C1CF12EFD515CF4D18AF4F7421:'
+          gpg --dearmor -o /usr/share/keyrings/llvm.gpg /tmp/llvm-key.asc
+          echo 'deb [signed-by=/usr/share/keyrings/llvm.gpg] https://apt.llvm.org/bookworm/ llvm-toolchain-bookworm-21 main' > /etc/apt/sources.list.d/llvm.list
+          apt-get update
+          apt-get install -y --no-install-recommends cmake clang-21 libclang-21-dev pkg-config libssl-dev unzip
+          rm -rf /var/lib/apt/lists/* /tmp/llvm-key.asc
+      - name: Run Rust unit tests
+        working-directory: rust
+        env:
+          CC: clang-21
+          CXX: clang++-21
+          LIBCLANG_PATH: /usr/lib/llvm-21/lib
+        run: cargo test --locked --release --all-features --lib -- --test-threads=1
   staging:
-    if: github.ref_name == 'dev' && ((github.event_name == 'push' && !contains(github.event.head_commit.message, '[skip deploy]')) || github.event_name == 'workflow_dispatch')
+    needs: rust-tests
+    if: github.ref_name == 'dev' && !cancelled() && (needs.rust-tests.result == 'success' || needs.rust-tests.result == 'skipped') && ((github.event_name == 'push' && !contains(github.event.head_commit.message, '[skip deploy]')) || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
