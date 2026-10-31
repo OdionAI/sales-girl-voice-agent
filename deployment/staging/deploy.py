@@ -257,8 +257,14 @@ def deploy(release, revision, enable_hausa_research=False, reply_grace_ms='0',
             problems.append('container id unchanged (not recreated)')
         if env_diff:
             problems.append('env differs: ' + json.dumps(env_diff, default=str))
-        if current['Mounts'] != previous['Mounts']:
-            problems.append('mounts differ')
+        def _mount_set(mounts):
+            return sorted(
+                (m.get('Type'), m.get('Source'), m.get('Destination'), bool(m.get('RW')))
+                for m in mounts
+            )
+        if _mount_set(current['Mounts']) != _mount_set(previous['Mounts']):
+            problems.append('mounts differ: '
+                            + json.dumps([_mount_set(current['Mounts']), _mount_set(previous['Mounts'])]))
         if problems:
             raise RuntimeError('Voice verification failed: ' + '; '.join(problems))
     except Exception:
