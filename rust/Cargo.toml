@@ -7,7 +7,7 @@ publish = false
 [features]
 default = []
 local-call = ["rvc", "dep:axum"]
-rvc = ["rtc", "dep:reqwest", "dep:regex", "dep:base64", "dep:hmac", "dep:sha2", "dep:jsonschema", "dep:uuid", "dep:chrono", "dep:unicode-normalization", "dep:rusqlite", "dep:webauthn-rs", "dep:dotenvy"]
+rvc = ["rtc", "dep:reqwest", "dep:regex", "dep:base64", "dep:hmac", "dep:sha2", "dep:jsonschema", "dep:uuid", "dep:chrono", "dep:unicode-normalization", "dep:rusqlite", "dep:webauthn-rs", "dep:dotenvy", "dep:rnnoise2"]
 rtc = ["api", "dep:livekit"]
 api = ["worker", "livekit-api/services"]
 worker = ["dep:livekit-api", "dep:livekit-protocol", "dep:prost", "dep:tokio-tungstenite", "dep:futures-util"]
@@ -25,6 +25,9 @@ futures-util = { version = "=0.3.31", optional = true }
 livekit-protocol = { version = "=0.8.2", optional = true }
 prost = { version = "=0.14.4", optional = true }
 tokio-tungstenite = { version = "=0.28.0", optional = true, features = ["rustls-tls-webpki-roots"] }
+# Maintained Rust binding over vendored Xiph RNNoise (v0.2 commit 70f1d25 + the
+# same default model as pyrnnoise). Builds the C library via rnnoise2-sys.
+rnnoise2 = { version = "=0.1.2", optional = true }
 
 reqwest = { version = "=0.13.5", optional = true, default-features = false, features = ["json", "stream", "multipart", "rustls"] }
 regex = { version = "=1.13.1", optional = true }
@@ -39,10 +42,6 @@ chrono = { version = "=0.4.45", optional = true }
 unicode-normalization = { version = "=0.1.25", optional = true }
 rusqlite = { version = "=0.38.0", optional = true, features = ["bundled"] }
 webauthn-rs = { version = "=0.6.2", optional = true, default-features = false }
-
-[build-dependencies]
-cc = "=1.10.0"
-sha2 = "=0.10.9"
 
 [[bin]]
 name = "rtc-smoke"

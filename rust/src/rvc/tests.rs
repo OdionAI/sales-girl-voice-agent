@@ -1334,6 +1334,58 @@ async fn unavailable_authoritative_final_discards_speculation_and_rejects_late_f
     assert!(h.sink.pcm.lock().unwrap().is_empty());
     h.close().await;
 }
+#[tokio::test]
+async fn empty_authoritative_final_returns_to_listening() {
+    // Regression for the 21 s "silent turn": a noise blip creates a turn whose
+    // ASR final is empty. The coordinator must return to listening immediately
+    // (emit stt_final_empty_recovered + listening status) instead of sitting in
+    // AwaitingFinal until the safety timer fires.
+    let mut h = Harness::new(false).await;
+    h.voice().await;
+    h.end().await;
+    h.until("user_speech_end").await;
+    h.session
+        .input
+        .send(Input::Final {
+            turn: 1,
+            text: String::new(),
+        })
+        .await
+        .unwrap();
+    h.until("stt_final_empty_recovered").await;
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            if let Some(Output::Status(_)) = h.out.recv().await {
+                break;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    // No response was produced for the empty turn.
+    assert!(h.sink.pcm.lock().unwrap().is_empty());
+    h.close().await;
+}
+#[tokio::test]
+async fn below_minimum_utterance_is_discarded_before_asr() {
+    // Safety net: a committed buffer shorter than min_utterance_ms is dropped
+    // before ASR and the turn returns to idle (no user_speech_end / commit).
+    let h = Harness::configured(false, |c| {
+        c.min_utterance_ms = 100_000.0;
+    })
+    .await;
+    h.voice().await;
+    h.end().await;
+    h.until("utterance_discarded_below_minimum").await;
+    assert!(
+        !h.trace
+            .events()
+            .iter()
+            .any(|e| e.event == "user_speech_end"),
+        "discarded utterance must not commit to ASR"
+    );
+    h.close().await;
+}
 #[test]
 fn unsupported_realtime_final_configuration_is_refused() {
     let mut c: Config =
