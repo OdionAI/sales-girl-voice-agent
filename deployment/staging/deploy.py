@@ -241,12 +241,26 @@ def deploy(release, revision, enable_hausa_research=False, reply_grace_ms='0',
             item.split('=', 1) if '=' in item else (item, '')
             for item in current['Config']['Env']
         )
-        env_ok = all(current_env.get(key) == value for key, value in expected_env_dict.items())
-        if (current['Config'].get('Image') != new_image
-                or current['Id'] == previous['Id']
-                or not env_ok
-                or current['Mounts'] != previous['Mounts']):
-            raise RuntimeError('Voice image, environment or mounts changed unexpectedly')
+        def _redact(key, value):
+            if value is not None and ('SECRET' in key or 'API_KEY' in key or 'TOKEN' in key or 'PASSWORD' in key):
+                return f'<set len={len(str(value))}>' if value else '<empty>'
+            return value
+        env_diff = {
+            key: (_redact(key, current_env.get(key)), _redact(key, value))
+            for key, value in expected_env_dict.items()
+            if current_env.get(key) != value
+        }
+        problems = []
+        if current['Config'].get('Image') != new_image:
+            problems.append(f"image tag {current['Config'].get('Image')!r} != {new_image!r}")
+        if current['Id'] == previous['Id']:
+            problems.append('container id unchanged (not recreated)')
+        if env_diff:
+            problems.append('env differs: ' + json.dumps(env_diff, default=str))
+        if current['Mounts'] != previous['Mounts']:
+            problems.append('mounts differ')
+        if problems:
+            raise RuntimeError('Voice verification failed: ' + '; '.join(problems))
     except Exception:
         if attempted:
             rollback = release / 'voice-rollback.json'
