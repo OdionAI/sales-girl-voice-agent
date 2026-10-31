@@ -338,10 +338,6 @@ impl JobHandler for Handler {
                 }
             }
             let _ = bridge.drain_cleanup().await;
-            let lease = capacity.lock().await.take();
-            if let Some(mut lease) = lease {
-                lease.release().await;
-            }
             if let Some(bound) = outbound.as_mut() {
                 let conversation = session
                     .canonical_ids()
@@ -360,10 +356,16 @@ impl JobHandler for Handler {
             }
             let _ = tokio::time::timeout(Duration::from_secs(2), &mut drain.0).await;
             publisher.close().await;
-            trace
-                .save(&self.directory.join(format!("{}.jsonl", j.job.id)))
-                .map_err(|_| "trace save failed")?;
+            // Trace is synchronous already; do not truncate its live file while
+            // cleanup/heartbeat tasks may still append events.
             room_guard.close().await;
+            // Do not advertise a business slot while SDK/job cleanup can still
+            // keep the worker full. A fresh dispatch is not automatically retried
+            // by LiveKit when it observes no available worker.
+            let lease = capacity.lock().await.take();
+            if let Some(mut lease) = lease {
+                lease.release().await;
+            }
             result
         })
     }
@@ -418,7 +420,7 @@ fn input_task(track: RemoteAudioTrack, session: coordinator::Session) -> AbortTa
     }))
 }
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+pub(crate) async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = std::env::args().collect();
     if args.get(1).is_some_and(|s| s == "--check-env") {
         sg_voice_prototype::rvc::environment::from_environment()?;
@@ -555,6 +557,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Some(Event::Registered(_)) => {registered.store(true,std::sync::atomic::Ordering::SeqCst);println!("worker_ready");},
                 Some(Event::Disconnected|Event::Stopped)=>{registered.store(false,std::sync::atomic::Ordering::SeqCst);},
                 Some(Event::Ended(_, _)) if !production => break,
+                Some(Event::Ended(id, success)) => println!("worker_job_ended {id} success={success}"),
                 None => break,
                 _ => {},
             }

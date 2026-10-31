@@ -75,3 +75,10 @@ required-features = ["local-call"]
 name = "rvc-noise-review"
 path = "src/bin/rvc_noise_review.rs"
 required-features = ["rvc"]
+
+[[bin]]
+name = "rvc-capacity-smoke"
+test = false
+harness = false
+path = "src/bin/rvc_capacity_smoke.rs"
+required-features = ["rvc"]

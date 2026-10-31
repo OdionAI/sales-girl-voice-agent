@@ -269,7 +269,15 @@ fn status(a: &Admission, seq: u64) -> Ws {
             } else {
                 p::WorkerStatus::WsAvailable
             } as i32),
-            load: a.slots.len() as f32 / a.max as f32,
+            // Server-side affinity uses target_load - load, independently of
+            // WS_AVAILABLE. A fractional slot ratio can strand free slots above
+            // the server's target. Fixed-slot admission reports binary capacity;
+            // job_count retains the measured concurrent-job count.
+            load: if a.draining || a.slots.len() >= a.max {
+                1.0
+            } else {
+                0.0
+            },
             job_count: a
                 .slots
                 .values()
@@ -903,6 +911,38 @@ mod tests {
             assert!(!task.is_finished());
             tokio::time::advance(Duration::from_secs(if success { 3 } else { 240 })).await;
             assert_eq!(task.await.unwrap().is_ok(), success);
+        }
+    }
+    #[test]
+    fn free_slots_keep_positive_server_affinity_at_every_occupancy() {
+        for occupied in 0..=8 {
+            let mut a = admission();
+            a.max = 8;
+            for i in 0..occupied {
+                let (tx, _) = watch::channel(false);
+                a.slots.insert(i.to_string(), Slot::Running { cancel: tx });
+            }
+            let Ws::Binary(bytes) = status(&a, 1) else {
+                panic!("binary worker update")
+            };
+            let Some(p::worker_message::Message::UpdateWorker(update)) =
+                p::WorkerMessage::decode(bytes).unwrap().message
+            else {
+                panic!("worker status")
+            };
+            assert_eq!(update.job_count, occupied);
+            if occupied < 8 {
+                assert_eq!(update.status, Some(p::WorkerStatus::WsAvailable as i32));
+                for target in [0.1_f32, 0.5, 0.65, 0.9] {
+                    assert!(
+                        (target - update.load).max(0.0) > 0.0,
+                        "a free slot must remain discoverable by server affinity"
+                    );
+                }
+            } else {
+                assert_eq!(update.status, Some(p::WorkerStatus::WsFull as i32));
+                assert!(update.load >= 1.0);
+            }
         }
     }
     #[tokio::test]
