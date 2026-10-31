@@ -1,0 +1,24 @@
+Host staging-jump
+  HostName 83.101.50.32
+  User root
+  IdentityFile ~/.ssh/staging_deploy_key
+  IdentitiesOnly yes
+  BatchMode yes
+  StrictHostKeyChecking yes
+  UserKnownHostsFile ~/.ssh/staging_known_hosts
+  ConnectTimeout 15
+  ServerAliveInterval 15
+  ServerAliveCountMax 2
+
+Host staging-app
+  HostName 10.40.40.155
+  User root
+  ProxyJump staging-jump
+  IdentityFile ~/.ssh/staging_deploy_key
+  IdentitiesOnly yes
+  BatchMode yes
+  StrictHostKeyChecking yes
+  UserKnownHostsFile ~/.ssh/staging_known_hosts
+  ConnectTimeout 15
+  ServerAliveInterval 15
+  ServerAliveCountMax 2
