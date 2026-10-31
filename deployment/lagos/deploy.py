@@ -132,8 +132,6 @@ def native_admission_updates(previous_env):
             and 'RVC_LAB_ALLOW_INSECURE_LIVEKIT' not in previous_env):
         updates['RVC_LAB_ALLOW_INSECURE_LIVEKIT'] = 'true'
     business = previous_env.get('MOMO_CALL_CAPACITY_BUSINESS_ID', '').strip()
-    if not business:
-        return updates
     conversation = json.loads(subprocess.check_output([
         'docker', 'inspect', 'odion-recovery-lagos-conversations-1']))[0]
     labels = conversation['Config']['Labels']
@@ -142,6 +140,11 @@ def native_admission_updates(previous_env):
             or not conversation['State']['Running']):
         raise RuntimeError('Capacity policy must come from the active Conversation service')
     env = dict(entry.split('=', 1) for entry in conversation['Config']['Env'])
+    if not business:
+        if (env.get('MOMO_CALL_CAPACITY_BUSINESS_ID', '').strip()
+                and int(env.get('MOMO_CALL_CAPACITY_MAX_CONCURRENT', '0')) > 0):
+            raise RuntimeError('Existing capacity policy is enabled but worker admission is disabled')
+        return updates
     if uuid.UUID(env.get('MOMO_CALL_CAPACITY_BUSINESS_ID', '')) != uuid.UUID(business):
         raise RuntimeError('Worker and capacity API business scopes differ')
     limit = int(env.get('MOMO_CALL_CAPACITY_MAX_CONCURRENT', '0'))

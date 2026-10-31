@@ -78,6 +78,7 @@ class LagosReleaseTests(unittest.TestCase):
             with patch.object(release, 'RELEASE_ROOT', root), \
                  patch.object(release, 'inspect_voice', return_value=(previous, [root / 'compose.yml'])), \
                  patch.object(release, 'run') as run, \
+                 patch.object(release, 'native_admission_updates', return_value={}), \
                  patch.object(release, 'wait_healthy', side_effect=[current, previous]), \
                  patch.object(release.subprocess, 'check_output', return_value='new-image\n'):
                 if drift:
@@ -298,7 +299,7 @@ class NativeAdmissionTests(unittest.TestCase):
         business='11111111-2222-3333-4444-555555555555'
         container={'Config':{'Labels':{'com.docker.compose.project':release.PROJECT,'com.docker.compose.service':'conversations'},'Env':[f'MOMO_CALL_CAPACITY_BUSINESS_ID={business}','MOMO_CALL_CAPACITY_MAX_CONCURRENT=12']},'State':{'Running':True}}
         with patch.object(release.subprocess,'check_output',return_value=json.dumps([container]).encode()), patch.object(release,'run') as run:
-            for env in [{'MOMO_CALL_CAPACITY_BUSINESS_ID':'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'},{'MOMO_CALL_CAPACITY_BUSINESS_ID':business,'RVC_LAB_MAX_JOBS':'8'}]:
+            for env in [{},{'MOMO_CALL_CAPACITY_BUSINESS_ID':'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'},{'MOMO_CALL_CAPACITY_BUSINESS_ID':business,'RVC_LAB_MAX_JOBS':'8'}]:
                 with self.assertRaises(RuntimeError):release.native_admission_updates(env)
             run.assert_not_called()
 
