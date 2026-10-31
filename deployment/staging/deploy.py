@@ -187,7 +187,8 @@ def deploy(release, revision, enable_hausa_research=False, reply_grace_ms='0',
         updates['RVC_LAB_DEEPSEEK_API_KEY'] = ''
     if enable_hausa_research:
         updates[HAUSA_RESEARCH_KEY] = 'true'
-    expected_env = [f'{key}={value}' for key, value in (previous_env | updates).items()]
+    expected_env_dict = dict(previous_env | updates)
+    expected_env = [f'{key}={value}' for key, value in expected_env_dict.items()]
     old_image = f'attentive/voice:staging-before-{release.name}'
     new_image = f'attentive/voice:staging-ci-{release.name}'
     run('docker', 'tag', previous['Image'], old_image)
@@ -228,9 +229,22 @@ def deploy(release, revision, enable_hausa_research=False, reply_grace_ms='0',
         run(*compose([*files, override]), 'up', '-d', '--no-deps', '--no-build',
             '--force-recreate', 'voice', cwd=STACK)
         current = wait_healthy()
-        if (current['Image'] != subprocess.check_output(['docker', 'image', 'inspect',
-                new_image, '--format', '{{.Id}}'], text=True).strip()
-                or sorted(current['Config']['Env']) != sorted(expected_env)
+        # Verify against what we asked Compose to run, not raw image IDs: with
+        # the containerd image store `docker image inspect <tag>.Id` is the
+        # manifest digest, whereas a container's `.Image` is its config digest,
+        # so an id equality check can never pass. Config.Image carries the tag
+        # the container was created from (the override pins it to new_image),
+        # and the just-created container is authoritative for that tag. Require
+        # every expected env key be present with the right value (the image may
+        # legitimately contribute extra default env) and the mounts unchanged.
+        current_env = dict(
+            item.split('=', 1) if '=' in item else (item, '')
+            for item in current['Config']['Env']
+        )
+        env_ok = all(current_env.get(key) == value for key, value in expected_env_dict.items())
+        if (current['Config'].get('Image') != new_image
+                or current['Id'] == previous['Id']
+                or not env_ok
                 or current['Mounts'] != previous['Mounts']):
             raise RuntimeError('Voice image, environment or mounts changed unexpectedly')
     except Exception:
