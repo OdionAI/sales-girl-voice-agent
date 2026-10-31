@@ -31,6 +31,11 @@ jobs:
     timeout-minutes: 60
     container:
       image: rust:1.99.0-bookworm@sha256:114c7a4425406451c2866b6aafe69fe29b1b298832db1277d411ac73c82d04d6
+    # Jobs that run inside a container default to `sh` (dash), which does not
+    # support `set -euo pipefail`. Pin bash so the toolchain-install step works.
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v5
       - name: Install native build toolchain
