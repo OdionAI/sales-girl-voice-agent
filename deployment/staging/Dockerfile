@@ -12,8 +12,10 @@ ENV CARGO_BUILD_JOBS=2 CC=clang-21 CXX=clang++-21 LIBCLANG_PATH=/usr/lib/llvm-21
 COPY rust/Cargo.toml rust/Cargo.lock ./
 COPY rust/src ./src
 COPY rust/fixtures ./fixtures
+# The staging VM has limited vCPU; run the timing-sensitive unit tests serially so
+# 3s "tts_first_pcm" deadlines are not starved by parallel test execution.
 RUN --mount=type=cache,id=sg-rvc-cargo-registry,target=/usr/local/cargo/registry --mount=type=cache,id=sg-rvc-linux-target,target=/src/target \
-    cargo test --locked --release --all-features --lib && \
+    cargo test --locked --release --all-features --lib -- --test-threads=1 && \
     cargo build --locked --release --features rvc --bin rvc-worker && \
     mkdir /out && cp target/release/rvc-worker /out/
 FROM debian:bookworm-slim
