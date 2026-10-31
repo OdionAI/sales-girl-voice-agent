@@ -186,6 +186,13 @@ def deploy(release, revision, enable_hausa_research=False, reply_grace_ms='0',
     new_image = f'attentive/voice:staging-ci-{release.name}'
     run('docker', 'tag', previous['Image'], old_image)
     run('docker', 'build', '-f', str(release / 'deployment/staging/Dockerfile'),
+        # The staging VM uses the containerd image store with BuildKit. By
+        # default BuildKit attaches provenance/SBOM attestations and exports an
+        # image *index* (manifest list); `docker image inspect <tag>.Id` then
+        # returns that index digest, which never matches the platform config
+        # digest a container actually runs. Disable attestations so the tag is a
+        # single-platform image and its Id matches the running container's.
+        '--provenance=false', '--sbom=false',
         '--label', f'org.opencontainers.image.revision={revision}',
         '--label', 'org.opencontainers.image.source=https://github.com/OdionAI/sales-girl-voice-agent',
         '-t', new_image, str(release))
