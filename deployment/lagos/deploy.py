@@ -323,6 +323,8 @@ def deploy(release, revision, enable_hausa_research=False, momo_feedback_agent_i
     run('docker', 'tag', previous['Image'], old_image)
     run('docker', 'build', '-f', str(release / 'deployment/lagos/Dockerfile'),
         '--provenance=false', '--sbom=false',
+        # The release job requires the same full suite on a dedicated CI runner.
+        '--build-arg', 'RUN_NATIVE_TESTS=false',
         '--label', f'org.opencontainers.image.revision={revision}',
         '--label', 'org.opencontainers.image.source=https://github.com/OdionAI/sales-girl-voice-agent',
         '-t', new_image, str(release))
