@@ -407,7 +407,8 @@ if __name__ == '__main__':
                               (entry.split('=', 1) for entry in current['Config']['Env'] if '=' in entry)
                               if key in {'RVC_LAB_END_SILENCE_MS', 'RVC_LAB_LLM_PROVIDER',
                                          'RVC_LAB_MAX_JOBS', 'MOMO_CALL_CAPACITY_BUSINESS_ID',
-                                         'RVC_LAB_INPUT_NOISE_IMPLEMENTATION'}},
+                                         'RVC_INPUT_NOISE_SUPPRESSION', 'RVC_INPUT_NOISE_AGENT_IDS',
+                                         'RVC_INPUT_NOISE_IMPLEMENTATION'}},
                           'native_admission': native_admission_updates(dict(entry.split('=',1) for entry in current['Config']['Env']))}))
     else:
         if args.release is None or args.revision is None:
