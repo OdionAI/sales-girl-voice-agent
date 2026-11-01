@@ -153,6 +153,10 @@ class ConversationPipeline:
         session_identity: dict | None = None,
     ) -> None:
         config = apply_language_stack(config, agent_context, session_identity)
+        if (config.stt_chat_url and agent_context is not None
+                and agent_context.business_id == "a0c8cda2-3b46-4ee0-898c-48f9a4d3a444"):
+            vocabulary = "OPay. Digits: 0 zero, 1 one, 2 two, 3 three, 4 four, 5 five, 6 six, 7 seven, 8 eight, 9 nine."
+            config = replace(config, stt_context=f"{config.stt_context} {vocabulary}".strip())
         self.config = config
         self.trace = trace
         self.send = send
@@ -1935,7 +1939,7 @@ class ConversationPipeline:
                         "status": result.status,
                         "request": pending.call.arguments,
                         "result": {key: value for key, value in result.data.items()
-                                   if key in {"ticket_code", "id", "sent", "mocked", "status"}
+                                   if key in {"sent", "mocked", "status"}
                                    and isinstance(value, (str, int, float, bool, type(None)))},
                     }
                     await self._generate_natural_action_response(
@@ -2011,6 +2015,10 @@ class ConversationPipeline:
         return messages
 
     def _retain_tool_result(self, attempt: Attempt, call: ActionToolCall, body: dict) -> tuple[dict, dict]:
+        if call.name == "create_ticket":
+            body = dict(body)
+            body["data"] = {key: value for key, value in (body.get("data") or {}).items()
+                            if key not in {"ticket_code", "id"}}
         request = {"role": "assistant", "content": call.assistant_content, "tool_calls": [{
             "id": call.id, "type": "function", "function": {
                 "name": call.name, "arguments": json.dumps(call.arguments),

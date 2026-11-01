@@ -451,16 +451,10 @@ class ActionToolExecutor:
                 body,
                 elapsed,
             )
-        code = str(body.get("ticket_code") or body.get("id") or "").strip()
         message = action_feedback_text(
             "The support ticket has been created.",
             "Le ticket d’assistance a été créé.", self.context.tts_language_hint,
         )
-        if code:
-            message += action_feedback_text(
-                f" The reference is {code}.", f" La référence est {code}.",
-                self.context.tts_language_hint,
-            )
         return ActionResult("success", message, body, elapsed)
 
     async def _send_email(self, call: ActionToolCall, started_ns: int) -> ActionResult:
