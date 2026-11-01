@@ -397,11 +397,20 @@ if __name__ == '__main__':
     args = parser.parse_args()
     if args.verify_only:
         current, files = inspect_voice()
+        build_processes = {}
+        for comm in Path('/proc').glob('[0-9]*/comm'):
+            try:
+                name = comm.read_text().strip()
+            except OSError:
+                continue
+            if name in {'rustc', 'cargo', 'clang-21', 'clang++'} or name.startswith('sg_voice_proto'):
+                build_processes[name] = build_processes.get(name, 0) + 1
         print(json.dumps({'host': socket.gethostname(), 'project': PROJECT,
                           'image': current['Config']['Image'],
                           'compose_files': len(files), 'health': 'healthy',
                           'architecture': __import__('platform').machine(),
                           'read_only': True, 'cpus': os.cpu_count(),
+                          'build_processes': build_processes,
                           'disk_free_gib': round(__import__('shutil').disk_usage(STACK).free/1024**3, 1),
                           'revision': current['Config'].get('Labels', {}).get('org.opencontainers.image.revision'),
                           'entrypoint': current['Config'].get('Entrypoint'),
