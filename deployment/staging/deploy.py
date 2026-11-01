@@ -31,6 +31,8 @@ DEFAULT_INACTIVITY_PILOT_AGENT_IDS = '*'
 # Reuse the shared prod Qwen realtime ASR. Chat transcripts remain authoritative
 # and fall back to realtime finals, exactly as in Lagos.
 STAGING_ASR_ENV = {
+    # Staging-only trial: shorten turn endpointing while retaining final ASR validation.
+    'RVC_LAB_END_SILENCE_MS': '150',
     'RVC_LAB_STT_PROVIDER': 'self_hosted',
     'RVC_LAB_STT_MODEL': 'Qwen3-ASR',
     'RVC_LAB_STT_WS_URL': 'ws://102.88.137.124:8080/asr-rt/v1/realtime',

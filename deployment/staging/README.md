@@ -21,6 +21,14 @@ Differences from Lagos, by design:
 - `deploy.py` therefore omits the Lagos SIP-route and AICC capacity mutations;
   it only rebuilds/recreates the `voice` service.
 
+## Turn endpointing trial
+
+Staging explicitly sets `RVC_LAB_END_SILENCE_MS=150` (previously 300). This
+shortens the pause used to end a caller turn; final transcript validation,
+speculation, interruptions and the inactivity check-in remain enabled. The
+Lagos deployment and production configuration are unchanged. To roll back,
+restore this staging-only setting to 300 and run the normal staging release.
+
 ## CI
 
 `.github/workflows/deploy-staging.yml` deploys `dev` on every push (and via
