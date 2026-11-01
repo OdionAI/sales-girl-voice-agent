@@ -255,7 +255,7 @@ mod tests {
             .push((uri.path().into(), body));
         if uri.path().ends_with("runtime-config") {
             return Json(
-                json!({"business_id":"business-a","agent_id":"agent-a","name":"Fixture agent","instructions":"Saved instructions.","outbound_enabled":true,"tts_voice_id":"access-ghana-cindy","tools":if fake.bad.load(Ordering::SeqCst){json!([{"name":"directory_not_ported","url":"builtin://directory"}])}else{json!([{"name":"end_call","url":"builtin://end_call"},{"name":"transfer_to_aicc","url":"builtin://transfer_to_aicc"}])}}),
+                json!({"business_id":"business-a","agent_id":"agent-a","name":"Fixture agent","instructions":"Saved instructions.","outbound_enabled":true,"tts_voice_id":"access-ghana-cindy","tools":if fake.bad.load(Ordering::SeqCst){json!([{"name":"directory_not_ported","url":"builtin://directory"}])}else{json!([{"name":"end_call","url":"builtin://end_call"},{"name":"transfer_to_aicc","url":"internal://transfer-to-aicc"}])}}),
             );
         }
         if uri.path().ends_with("claim-by-recipient") {
