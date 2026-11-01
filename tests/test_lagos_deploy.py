@@ -72,14 +72,17 @@ class LagosReleaseTests(unittest.TestCase):
             previous = {'Id': 'old-container', 'Image': 'old-image',
                         'Config': {'Env': base_env}, 'Mounts': [{'Source': '/data'}]}
             current = {**previous, 'Id': 'new-container', 'Image': 'new-image',
-                       'Config': {'Env': list(expected_env)}}
+                       'Config': {'Env': list(expected_env) + ['IMAGE_DEFAULT=from-image']}}
             if drift:
-                current['Config']['Env'] = list(expected_env) + ['UNEXPECTED=change']
+                current['Config']['Env'].append('UNEXPECTED=change')
             with patch.object(release, 'RELEASE_ROOT', root), \
                  patch.object(release, 'inspect_voice', return_value=(previous, [root / 'compose.yml'])), \
                  patch.object(release, 'run') as run, \
+                 patch.object(release, 'native_admission_updates', return_value={}), \
                  patch.object(release, 'wait_healthy', side_effect=[current, previous]), \
-                 patch.object(release.subprocess, 'check_output', return_value='new-image\n'):
+                 patch.object(release.subprocess, 'check_output', side_effect=lambda args, **kw:
+                              json.dumps(['IMAGE_DEFAULT=from-image'])
+                              if args[-1] == '{{json .Config.Env}}' else 'new-image\n'):
                 if drift:
                     with self.assertRaisesRegex(RuntimeError, 'environment or mounts'):
                         release.deploy(target, revision, enabled, AGENT_ID,
@@ -105,7 +108,10 @@ class LagosReleaseTests(unittest.TestCase):
                                    llm_provider, 'deepseek-flash', 'high', deepseek_api_key)
                     self.assertTrue((target / 'DEPLOYED').exists())
                 override = json.loads((target / 'voice-ci.json').read_text())['services']['voice']
-                self.assertEqual(override.get('environment', {}), updates)
+                self.assertEqual(override.get('environment', {}), previous_env | updates)
+                self.assertEqual(override['entrypoint'], ['/usr/local/bin/rvc-worker'])
+                self.assertEqual(override['command'], ['--env'])
+                self.assertEqual(override['healthcheck']['test'], ['CMD', '/usr/local/bin/rvc-worker', '--healthcheck'])
                 if llm_provider == 'deepseek':
                     plan = json.loads((target / 'plan.json').read_text())
                     self.assertEqual(plan['environment_updates']['RVC_LAB_DEEPSEEK_API_KEY'], '[redacted]')
@@ -280,3 +286,35 @@ class LagosReleaseTests(unittest.TestCase):
 
         updated = json.loads(release.leadway_caller_routes(env))['caller_routes']
         self.assertNotIn('08112812216', updated)
+
+class NativeAdmissionTests(unittest.TestCase):
+    def test_native_slots_cover_the_existing_capacity_policy_without_changing_it(self):
+        business='11111111-2222-3333-4444-555555555555'
+        container={'Config':{'Labels':{'com.docker.compose.project':release.PROJECT,'com.docker.compose.service':'conversations'},'Env':[f'MOMO_CALL_CAPACITY_BUSINESS_ID={business}','MOMO_CALL_CAPACITY_MAX_CONCURRENT=12']},'State':{'Running':True}}
+        env={'MOMO_CALL_CAPACITY_BUSINESS_ID':business.replace('-',''),'LIVEKIT_URL':'ws://livekit:7880'}
+        with patch.object(release.subprocess,'check_output',return_value=json.dumps([container]).encode()), patch.object(release,'run') as run:
+            updates=release.native_admission_updates(env)
+        self.assertEqual(updates['RVC_LAB_MAX_JOBS'],'12')
+        self.assertEqual(updates['MOMO_CALL_CAPACITY_BUSINESS_ID'],business)
+        self.assertEqual(updates['RVC_LAB_ALLOW_INSECURE_LIVEKIT'],'true')
+        self.assertNotIn('MOMO_CALL_CAPACITY_MAX_CONCURRENT',updates)
+        self.assertEqual(run.call_count,1)
+        self.assertIn('openapi.json',run.call_args.args[-1])
+
+    def test_mismatched_scope_and_too_few_worker_slots_fail_before_cutover(self):
+        business='11111111-2222-3333-4444-555555555555'
+        container={'Config':{'Labels':{'com.docker.compose.project':release.PROJECT,'com.docker.compose.service':'conversations'},'Env':[f'MOMO_CALL_CAPACITY_BUSINESS_ID={business}','MOMO_CALL_CAPACITY_MAX_CONCURRENT=12']},'State':{'Running':True}}
+        with patch.object(release.subprocess,'check_output',return_value=json.dumps([container]).encode()), patch.object(release,'run') as run:
+            for env in [{},{'MOMO_CALL_CAPACITY_BUSINESS_ID':'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'},{'MOMO_CALL_CAPACITY_BUSINESS_ID':business,'RVC_LAB_MAX_JOBS':'8'}]:
+                with self.assertRaises(RuntimeError):release.native_admission_updates(env)
+            run.assert_not_called()
+
+    def test_rollback_restores_python_command_and_original_healthcheck(self):
+        previous={'Config':{'Entrypoint':None,'Cmd':['python','-m','latency_lab.livekit_worker','start'],'User':'','Healthcheck':{'Test':['CMD-SHELL','python health.py'],'Interval':10000000000,'Timeout':3000000000,'Retries':4}}}
+        native=release.worker_runtime(previous,native=True)
+        self.assertEqual(native['command'],['--env'])
+        old=release.worker_runtime(previous,native=False)
+        self.assertEqual(old['command'],previous['Config']['Cmd'])
+        self.assertIsNone(old['entrypoint'])
+        self.assertEqual(old['healthcheck']['test'],['CMD-SHELL','python health.py'])
+        self.assertEqual(old['healthcheck']['interval'],'10000000000ns')

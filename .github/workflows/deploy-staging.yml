@@ -1,0 +1,136 @@
+name: Deploy staging voice worker
+
+on:
+  push:
+    branches: [dev]
+  workflow_dispatch:
+    inputs:
+      verify_only:
+        description: Check the current staging worker and SSH route without deploying
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: staging-voice-release
+  cancel-in-progress: false
+
+jobs:
+  # Rust unit tests run on a dedicated GitHub runner rather than inside the
+  # staging image build. The rvc suite contains timing-sensitive tests whose
+  # in-process speculative-flush round-trip must beat an internal 80ms grace;
+  # on the constrained staging VM (4 vCPU + the full Compose stack) that budget
+  # is starved and the suite flakes. A dedicated runner has ample, uncontended
+  # CPU, so the same tests are deterministic there. The image build therefore
+  # only compiles (see deployment/staging/Dockerfile).
+  rust-tests:
+    if: github.ref_name == 'dev' && ((github.event_name == 'push' && !contains(github.event.head_commit.message, '[skip deploy]')) || (github.event_name == 'workflow_dispatch' && !inputs.verify_only))
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    container:
+      image: rust:1.99.0-bookworm@sha256:114c7a4425406451c2866b6aafe69fe29b1b298832db1277d411ac73c82d04d6
+    # Jobs that run inside a container default to `sh` (dash), which does not
+    # support `set -euo pipefail`. Pin bash so the toolchain-install step works.
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install native build toolchain
+        run: |
+          set -euo pipefail
+          apt-get update
+          apt-get install -y --no-install-recommends curl gnupg ca-certificates
+          curl --fail --silent --show-error https://apt.llvm.org/llvm-snapshot.gpg.key -o /tmp/llvm-key.asc
+          gpg --show-keys --with-colons /tmp/llvm-key.asc | grep '^fpr:.*:6084F3CF814B57C1CF12EFD515CF4D18AF4F7421:'
+          gpg --dearmor -o /usr/share/keyrings/llvm.gpg /tmp/llvm-key.asc
+          echo 'deb [signed-by=/usr/share/keyrings/llvm.gpg] https://apt.llvm.org/bookworm/ llvm-toolchain-bookworm-21 main' > /etc/apt/sources.list.d/llvm.list
+          apt-get update
+          apt-get install -y --no-install-recommends cmake clang-21 libclang-21-dev pkg-config libssl-dev unzip
+          rm -rf /var/lib/apt/lists/* /tmp/llvm-key.asc
+      - name: Run Rust unit tests
+        working-directory: rust
+        env:
+          CC: clang-21
+          CXX: clang++-21
+          LIBCLANG_PATH: /usr/lib/llvm-21/lib
+          RNNOISE_MODEL_PATH: /opt/rnnoise/rnnoise_data-0a8755f8e2d834eff6a54714ecc7d75f9932e845df35f8b59bc52a7cfe6e8b37.tar.gz
+        run: |
+          set -euo pipefail
+          # rnnoise2-sys downloads this model with a blocking reqwest client in
+          # its build script, which is flaky (times out). Fetch the pinned,
+          # checksum-verified archive once with curl and let it unpack locally.
+          mkdir -p /opt/rnnoise
+          curl --fail --location --retry 8 --retry-delay 5 --connect-timeout 30 \
+            -o "$RNNOISE_MODEL_PATH" \
+            "https://media.xiph.org/rnnoise/models/rnnoise_data-0a8755f8e2d834eff6a54714ecc7d75f9932e845df35f8b59bc52a7cfe6e8b37.tar.gz"
+          echo "0a8755f8e2d834eff6a54714ecc7d75f9932e845df35f8b59bc52a7cfe6e8b37  $RNNOISE_MODEL_PATH" | sha256sum -c -
+          cargo test --locked --release --all-features --lib -- --test-threads=1
+  staging:
+    needs: rust-tests
+    if: github.ref_name == 'dev' && !cancelled() && (needs.rust-tests.result == 'success' || needs.rust-tests.result == 'skipped') && ((github.event_name == 'push' && !contains(github.event.head_commit.message, '[skip deploy]')) || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Test worker release
+        if: github.event_name == 'push' || !inputs.verify_only
+        run: |
+          python -m pip install -r requirements.txt -r latency_lab/requirements.txt
+          python -m unittest discover -s tests -p 'test_*.py'
+          python -m unittest discover -s latency_lab/tests -p 'test_*.py'
+      - name: Configure pinned staging SSH route
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "$SSH_PRIVATE_KEY"
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/staging_deploy_key
+          chmod 600 ~/.ssh/staging_deploy_key
+          cp deployment/staging/known_hosts ~/.ssh/staging_known_hosts
+          cp deployment/staging/ssh_config ~/.ssh/config
+          chmod 600 ~/.ssh/config ~/.ssh/staging_known_hosts
+          ssh-keygen -y -f ~/.ssh/staging_deploy_key >/dev/null
+          ssh staging-app python3 - --verify-only < deployment/staging/deploy.py
+      - name: Build and deploy exact Git revision
+        if: github.event_name == 'push' || !inputs.verify_only
+        env:
+          ENABLE_HAUSA_RESEARCH: ${{ vars.ENABLE_HAUSA_TWB_VOICES || 'false' }}
+          REPLY_GRACE_MS: ${{ vars.RVC_LAB_REPLY_GRACE_MS || '0' }}
+          REPLY_GRACE_AGENT_IDS: ${{ vars.RVC_LAB_REPLY_GRACE_AGENT_IDS || '' }}
+          LLM_PROVIDER: ${{ vars.RVC_LAB_LLM_PROVIDER || 'qwen' }}
+          DEEPSEEK_MODEL: ${{ vars.RVC_LAB_DEEPSEEK_MODEL || 'deepseek-flash' }}
+          DEEPSEEK_REASONING_EFFORT: ${{ vars.RVC_LAB_DEEPSEEK_REASONING_EFFORT || 'high' }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY || '' }}
+        run: |
+          set -euo pipefail
+          [[ "$REPLY_GRACE_MS" =~ ^[0-9]{1,4}$ ]] || { printf 'Invalid RVC_LAB_REPLY_GRACE_MS value\n' >&2; exit 1; }
+          [[ "$REPLY_GRACE_AGENT_IDS" =~ ^[0-9a-fA-F,-]*$ ]] || { printf 'Invalid RVC_LAB_REPLY_GRACE_AGENT_IDS value\n' >&2; exit 1; }
+          [[ "$LLM_PROVIDER" == qwen || "$LLM_PROVIDER" == deepseek ]] || { printf 'Invalid RVC_LAB_LLM_PROVIDER value\n' >&2; exit 1; }
+          [[ "$DEEPSEEK_REASONING_EFFORT" == low || "$DEEPSEEK_REASONING_EFFORT" == high || "$DEEPSEEK_REASONING_EFFORT" == max ]] || { printf 'Invalid DeepSeek reasoning effort\n' >&2; exit 1; }
+          llm_args=(--llm-provider "$LLM_PROVIDER" --deepseek-model "$DEEPSEEK_MODEL" --deepseek-reasoning-effort "$DEEPSEEK_REASONING_EFFORT")
+          research_args=()
+          case "$ENABLE_HAUSA_RESEARCH" in
+            true) research_args+=(--enable-hausa-research) ;;
+            false) ;;
+            *) printf 'Invalid ENABLE_HAUSA_TWB_VOICES value\n' >&2; exit 1 ;;
+          esac
+          release="/opt/attentive/releases/voice-ci/${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          ssh staging-app "install -d -m 700 '$release'"
+          git archive HEAD | ssh staging-app "tar -xf - --no-same-owner -C '$release'"
+          if [[ "$LLM_PROVIDER" == deepseek ]]; then
+            test -n "$DEEPSEEK_API_KEY"
+            printf '%s' "$DEEPSEEK_API_KEY" | ssh staging-app python3 "$release/deployment/staging/deploy.py" --release "$release" --revision "$GITHUB_SHA" --reply-grace-ms "$REPLY_GRACE_MS" --reply-grace-agent-ids "$REPLY_GRACE_AGENT_IDS" "${research_args[@]}" "${llm_args[@]}" --deepseek-api-key-stdin
+          else
+            ssh staging-app python3 "$release/deployment/staging/deploy.py" --release "$release" --revision "$GITHUB_SHA" --reply-grace-ms "$REPLY_GRACE_MS" --reply-grace-agent-ids "$REPLY_GRACE_AGENT_IDS" "${research_args[@]}" "${llm_args[@]}"
+          fi
+          printf 'Staging voice revision `%s` is deployed.\n' "$GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"
+      - name: Remove runner SSH key
+        if: always()
+        run: rm -f ~/.ssh/staging_deploy_key

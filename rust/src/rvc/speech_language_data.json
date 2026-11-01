@@ -1,0 +1,81 @@
+{
+  "profiles": {
+    "yo": {
+      "name": "Yoruba",
+      "model": "coqui-yoruba-vits",
+      "voice": "balogun",
+      "url": "http://102.88.137.124:8080/tts-yoruba/v1/audio/speech",
+      "opening": "Ẹ káàbọ̀. Báwo ni mo ṣe lè ràn yín lọ́wọ́ lónìí?",
+      "goodbye": "Ẹ ṣé gan-an. Ó dàbọ̀.",
+      "inactivity_checkin": "Ṣé ẹ ṣì wà níbẹ̀? Ṣé mo tún lè ràn yín lọ́wọ́?",
+      "inactivity_goodbye": "Mi ò gbọ́ ìdáhùn yín, nítorí náà màá parí ìpè yìí báyìí. Ó dàbọ̀.",
+      "acknowledgement": "Ẹ jọ̀ọ́, ẹ fún mi ní àkókò díẹ̀ láti ṣàyẹ̀wò rẹ̀."
+    },
+    "ha": {
+      "name": "Hausa",
+      "model": "coqui-hausa-vits",
+      "voice": "hausa",
+      "url": "http://102.88.137.124:8080/tts-hausa/v1/audio/speech",
+      "opening": "Sannu da zuwa. Ta yaya zan iya taimaka muku yau?",
+      "goodbye": "Na gode sosai. Sai an jima.",
+      "inactivity_checkin": "Kuna nan kuwa? Akwai wani abu da zan taimaka muku?",
+      "inactivity_goodbye": "Ban ji amsarku ba, zan kawo ƙarshen kiran yanzu. Sai an jima.",
+      "acknowledgement": "Don Allah, ku ba ni ɗan lokaci in duba muku."
+    },
+    "ig": {
+      "name": "Igbo",
+      "model": "igbo-sorotts-three-voices-v1",
+      "voice": "chinedu",
+      "url": "http://102.88.137.124:8080/tts-igbo/v1/audio/speech",
+      "request_language": "ig",
+      "request_timeout_seconds": 1800,
+      "opening": "Ndeewo. Kedu ka m ga-esi nyere gị aka taa?",
+      "goodbye": "Daalụ nke ukwuu. Ka ọ dị.",
+      "inactivity_checkin": "Ị ka nọ ebe ahụ? Ọ dị ihe ọzọ m nwere ike inyere gị aka?",
+      "inactivity_goodbye": "Anụghị m azịza gị, ya mere m ga-akwụsị oku a ugbu a. Ka ọ dị.",
+      "acknowledgement": "Biko, chere obere oge ka m lelee ya."
+    }
+  },
+  "hausa_voices": {
+    "haisha": "spk_f_1",
+    "adamu": "spk_m_1",
+    "muhammad": "spk_m_2"
+  },
+  "igbo_voices": {
+    "chinedu": "ibo1",
+    "eze": "ibo2",
+    "ada": "ibo3"
+  },
+  "hausa_legacy": [
+    "",
+    "coqui-hausa-vits",
+    "default",
+    "hausa",
+    "hausa-twb-voice-1.0",
+    "musa"
+  ],
+  "igbo_legacy": [
+    "",
+    "default",
+    "igbo",
+    "igbo-sorotts-three-voices-v1",
+    "qwen-igbo-cleaned5h-epoch20",
+    "qwen-igbo-epoch20"
+  ],
+  "abdul_model": "hausa-ljspeech-vits-epoch271",
+  "abdul_checkpoint": "a92c761456510945bd1a556987c673bc7768546f97436eb840bf6e06b4f64dc4",
+  "pidgin_rules": "\n\nCALL LANGUAGE: Nigerian Pidgin (pcm). Speak natural Nigerian Pidgin throughout\nthis call, not standard English. This applies to greetings, tool acknowledgements,\nprogress updates, answers and goodbyes, even when the instructions, retrieved\ninformation, customer context or tool results are in English. Do not switch to\nformal English unless the caller explicitly asks or an exact quotation is necessary.\nUse abeg, wetin, wey, dey, don, fit, na, una, am and make I where natural; do not\nforce slang. For the spoken verb confirm, write konfam, with K. This is the only\ntested pronunciation-spelling exception; do not invent other phonetic spellings.\nPreserve facts, names, brands, addresses, amounts, URLs, account/phone numbers and\ncodes. Never respell tool names, JSON keys, enums, numeric arguments or stored\ncustomer records. These rules apply only to spoken natural-language output.\nUse short complete sentences, one question at a time, without Markdown or numbered\nlists. Keep all existing safety and business rules. Speak amounts as the correct\namount in words, and read identifiers digit by digit without losing any leading\nzero. Keep numeric tool arguments as numbers. For example:\n\"Abeg, konfam your account number again.\"\n\"Make I check am for you. Give me small time, abeg.\"\n",
+  "ejiro_model": "qwen-pidgin-f1-cleaned-epoch5",
+  "pidgin_voice": "favour",
+  "ejiro_url": "http://102.88.137.124:8080/tts-ejiro/v1/audio/speech",
+  "dynamic_model": "dynamic-accent-pidgin-flash",
+  "dynamic_url": "http://102.88.137.124:8080/tts-pidgin-dynamic/v1/audio/speech",
+  "dynamic_checkpoint": "f59a6fc0dacc331844cf8b513ec99e4d5c75f2583115037c8d38ba9ff7e3a307",
+  "dynamic_voices": [
+    "maro",
+    "rukky"
+  ],
+  "sbpn_model": "ogunlao/SBPN_multilingual_base",
+  "sbpn_url": "http://102.88.137.124:8080/asr-sbpn/v1/audio/transcriptions",
+  "sbpn_ws_url": "ws://102.88.137.124:8080/asr-sbpn/v1/realtime"
+}
