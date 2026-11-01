@@ -18,8 +18,59 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  rust-tests:
+    if: github.ref_name == 'main' && ((github.event_name == 'push' && !contains(github.event.head_commit.message, '[skip deploy]')) || (github.event_name == 'workflow_dispatch' && !inputs.verify_only))
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    container:
+      image: rust:1.99.0-bookworm@sha256:114c7a4425406451c2866b6aafe69fe29b1b298832db1277d411ac73c82d04d6
+    # Jobs that run inside a container default to `sh` (dash), which does not
+    # support `set -euo pipefail`. Pin bash so the toolchain-install step works.
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install native build toolchain
+        run: |
+          set -euo pipefail
+          apt-get update
+          apt-get install -y --no-install-recommends curl gnupg ca-certificates
+          curl --fail --silent --show-error https://apt.llvm.org/llvm-snapshot.gpg.key -o /tmp/llvm-key.asc
+          gpg --show-keys --with-colons /tmp/llvm-key.asc | grep '^fpr:.*:6084F3CF814B57C1CF12EFD515CF4D18AF4F7421:'
+          gpg --dearmor -o /usr/share/keyrings/llvm.gpg /tmp/llvm-key.asc
+          echo 'deb [signed-by=/usr/share/keyrings/llvm.gpg] https://apt.llvm.org/bookworm/ llvm-toolchain-bookworm-21 main' > /etc/apt/sources.list.d/llvm.list
+          apt-get update
+          apt-get install -y --no-install-recommends cmake clang-21 libclang-21-dev pkg-config libssl-dev unzip
+          rm -rf /var/lib/apt/lists/* /tmp/llvm-key.asc
+      - uses: actions/cache@v4
+        with:
+          path: |
+            /usr/local/cargo/registry
+            /usr/local/cargo/git
+            rust/target
+          key: lagos-rust-1.99-clang21-${{ runner.os }}-${{ hashFiles('rust/Cargo.lock') }}
+      - name: Run Rust unit tests
+        working-directory: rust
+        env:
+          CC: clang-21
+          CXX: clang++-21
+          LIBCLANG_PATH: /usr/lib/llvm-21/lib
+          RNNOISE_MODEL_PATH: /opt/rnnoise/rnnoise_data-0a8755f8e2d834eff6a54714ecc7d75f9932e845df35f8b59bc52a7cfe6e8b37.tar.gz
+        run: |
+          set -euo pipefail
+          # rnnoise2-sys downloads this model with a blocking reqwest client in
+          # its build script, which is flaky (times out). Fetch the pinned,
+          # checksum-verified archive once with curl and let it unpack locally.
+          mkdir -p /opt/rnnoise
+          curl --fail --location --retry 8 --retry-delay 5 --connect-timeout 30 \
+            -o "$RNNOISE_MODEL_PATH" \
+            "https://media.xiph.org/rnnoise/models/rnnoise_data-0a8755f8e2d834eff6a54714ecc7d75f9932e845df35f8b59bc52a7cfe6e8b37.tar.gz"
+          echo "0a8755f8e2d834eff6a54714ecc7d75f9932e845df35f8b59bc52a7cfe6e8b37  $RNNOISE_MODEL_PATH" | sha256sum -c -
+          cargo test --locked --release --all-features --lib -- --test-threads=1
   lagos:
-    if: (github.ref_name == 'main' && github.event_name == 'push' && !contains(github.event.head_commit.message, '[skip deploy]')) || (github.event_name == 'workflow_dispatch' && (github.ref_name == 'main' || inputs.verify_only))
+    needs: rust-tests
+    if: always() && !cancelled() && ((github.ref_name == 'main' && needs.rust-tests.result == 'success' && ((github.event_name == 'push' && !contains(github.event.head_commit.message, '[skip deploy]')) || (github.event_name == 'workflow_dispatch' && !inputs.verify_only))) || (github.event_name == 'workflow_dispatch' && inputs.verify_only && needs.rust-tests.result == 'skipped'))
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:

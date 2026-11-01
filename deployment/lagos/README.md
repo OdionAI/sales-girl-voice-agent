@@ -225,3 +225,14 @@ Manual verification can run from a candidate branch; actual releases remain
 restricted to `main`. Promote the signed-session dashboard/frontend integration
 before replacing the worker. Retain the previous Python image and Compose chain
 for rollback.
+
+## Dedicated native test gate
+
+The production release requires the complete, serial Rust library suite on a
+dedicated GitHub runner before building on the live VM. The speculative-ASR
+fixtures require mock responses within an 80ms grace and can flake on a loaded
+VM even with serial test execution. The host build therefore uses
+`RUN_NATIVE_TESTS=false` only after that mandatory job succeeds. Standalone
+Docker builds and the native CI image build default to running all tests.
+Read-only verification can skip the test job; an actual release cannot. No
+production timing threshold or test assertion is relaxed.
