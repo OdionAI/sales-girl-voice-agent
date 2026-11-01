@@ -401,6 +401,8 @@ if __name__ == '__main__':
                           'image': current['Config']['Image'],
                           'compose_files': len(files), 'health': 'healthy',
                           'architecture': __import__('platform').machine(),
+                          'read_only': True, 'cpus': os.cpu_count(),
+                          'disk_free_gib': round(__import__('shutil').disk_usage(STACK).free/1024**3, 1),
                           'revision': current['Config'].get('Labels', {}).get('org.opencontainers.image.revision'),
                           'entrypoint': current['Config'].get('Entrypoint'),
                           'settings': {key: value for key, value in

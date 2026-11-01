@@ -14,12 +14,12 @@ permissions:
   contents: read
 
 concurrency:
-  group: lagos-voice-release
+  group: lagos-readonly-inspection
   cancel-in-progress: false
 
 jobs:
   lagos:
-    if: (github.ref_name == 'main' && github.event_name == 'push' && !contains(github.event.head_commit.message, '[skip deploy]')) || (github.event_name == 'workflow_dispatch' && (github.ref_name == 'main' || inputs.verify_only))
+    if: github.event_name == 'workflow_dispatch' && inputs.verify_only
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
