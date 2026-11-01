@@ -10,6 +10,12 @@ on:
         type: boolean
         default: true
 
+      trace_job_id:
+        description: Optional owned synthetic call job ID for sanitized trace inspection
+        required: false
+        type: string
+        default: ""
+
 permissions:
   contents: read
 
@@ -87,6 +93,14 @@ jobs:
             ssh lagos-app python3 "$release/deployment/lagos/deploy.py" --release "$release" --revision "$GITHUB_SHA" --momo-feedback-agent-id "$MOMO_FEEDBACK_AGENT_ID" --reply-grace-ms "$REPLY_GRACE_MS" --reply-grace-agent-ids "$REPLY_GRACE_AGENT_IDS" "${research_args[@]}" "${llm_args[@]}"
           fi
           printf 'Lagos voice revision `%s` is deployed.\n' "$GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"
+      - name: Read sanitized synthetic-call trace
+        if: inputs.trace_job_id != ''
+        env:
+          TRACE_JOB_ID: ${{ inputs.trace_job_id }}
+        run: |
+          set -euo pipefail
+          [[ "$TRACE_JOB_ID" =~ ^AJ_[A-Za-z0-9_-]{6,80}$ ]]
+          ssh lagos-app python3 - "$TRACE_JOB_ID" < deployment/lagos/inspect_trace.py
       - name: Remove runner SSH key
         if: always()
         run: rm -f ~/.ssh/lagos_deploy_key
