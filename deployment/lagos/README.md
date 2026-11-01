@@ -86,13 +86,18 @@ writes it to a root-only environment file on the app VM. It builds an image
 labelled with the exact commit, switches the sidecar to `VOICE_AUTH_STORE=wema`,
 sets `VOICE_AUTH_COSINE_THRESHOLD` from the Actions variable
 `WEMA_VOICE_AUTH_COSINE_THRESHOLD` (default `0.60`), checks health, and restores
-the previous local-store image if health fails. For the current diagnostic test,
-setting that variable to `0.50` will let the latest observed `0.515` score pass;
-restore it to `0.60` after the test. A passing score alone is not proof that the
-threshold is safe for normal transaction authorization.
+the previous local-store image if health fails. The requested Wema operating
+setting is `0.30`; set the repository variable to `0.30` and run the normal Lagos
+release on `main` to apply it. A passing score alone is not proof of caller identity;
+the remaining enrollment, audio-sufficiency, and sidecar checks still apply.
 The worker sends the dashboard-signed Wema `customer_id` to `/verify`. A
 successful health check does not prove an enrolled caller matches; confirm with
 a real Wema call before relying on transactions.
+For Wema chat ASR, the worker adds OPay and spoken names for digits zero through
+nine to the saved vocabulary hint. Ticket creation feedback confirms success
+without reading out the returned ticket reference. Phone and account numbers
+remain spoken as digit words separated by spaces, with no punctuation between
+digits.
 
 Before any Wema banking tool runs, the worker finishes any generated speech and
 waits for its LiveKit playout queue to drain. If that speech did not acknowledge

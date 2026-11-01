@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock
 
 from aiohttp import web
 
+from latency_lab.agentic import AgentRuntimeContext
 from latency_lab.config import LabConfig
 from latency_lab.pipeline import ConversationPipeline
 from latency_lab.providers import RSTTClient, is_asr_context_echo
@@ -51,6 +52,27 @@ async def start_backend(backend):
 
 
 class SttChatFinalTest(unittest.IsolatedAsyncioTestCase):
+    async def test_wema_hint_includes_opay_and_spoken_digits_only_for_wema(self):
+        with tempfile.TemporaryDirectory() as directory:
+            trace = TraceRecorder(Path(directory), "wema-hint")
+            config = LabConfig(stt_chat_url="http://localhost/chat", stt_context="Wema Bank")
+            wema = ConversationPipeline(
+                config, trace, AsyncMock(),
+                agent_context=AgentRuntimeContext(business_id="a0c8cda2-3b46-4ee0-898c-48f9a4d3a444"),
+            )
+            other = ConversationPipeline(
+                config, trace, AsyncMock(),
+                agent_context=AgentRuntimeContext(business_id="another-business"),
+            )
+            try:
+                self.assertIn("OPay", wema.stt.config.stt_context)
+                self.assertIn("0 zero", wema.stt.config.stt_context)
+                self.assertIn("9 nine", wema.stt.config.stt_context)
+                self.assertEqual(other.stt.config.stt_context, "Wema Bank")
+            finally:
+                await wema.http.close()
+                await other.http.close()
+
     async def _run(self, chat_text, context="Wema hint: Glo, OPay, Wema Bank, naira"):
         backend = FakeBackend(chat_text)
         runner, origin = await start_backend(backend)

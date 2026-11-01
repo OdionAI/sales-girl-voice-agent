@@ -456,6 +456,12 @@ runtime never forwards this credential to a different scheme, host, or port.
   is email-shaped. The sidecar must have Wema enrollment lookup enabled to use
   `customer_id`; this worker change alone does not switch the deployed sidecar
   from its local email-keyed store.
+- Wema chat ASR includes OPay and the names of digits zero through nine in its
+  vocabulary hint. The Lagos sidecar cosine threshold is selected by the
+  `WEMA_VOICE_AUTH_COSINE_THRESHOLD` Actions variable; the requested setting is
+  `0.30` and takes effect on a Lagos release.
+- ticket creation confirms success without speaking the ticket number; account
+  and phone digits are spoken as words with spaces and no punctuation between them
 - it does not authenticate to GCP, publish to Artifact Registry, or use IAP
 - the approved personal-GCP dependency is the external NG/Odion TTS endpoint;
   Huawei MaaS `glm-5.2` remains the live and post-call text model
