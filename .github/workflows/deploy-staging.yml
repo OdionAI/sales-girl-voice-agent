@@ -56,7 +56,18 @@ jobs:
           CC: clang-21
           CXX: clang++-21
           LIBCLANG_PATH: /usr/lib/llvm-21/lib
-        run: cargo test --locked --release --all-features --lib -- --test-threads=1
+          RNNOISE_MODEL_PATH: /opt/rnnoise/rnnoise_data-0a8755f8e2d834eff6a54714ecc7d75f9932e845df35f8b59bc52a7cfe6e8b37.tar.gz
+        run: |
+          set -euo pipefail
+          # rnnoise2-sys downloads this model with a blocking reqwest client in
+          # its build script, which is flaky (times out). Fetch the pinned,
+          # checksum-verified archive once with curl and let it unpack locally.
+          mkdir -p /opt/rnnoise
+          curl --fail --location --retry 8 --retry-delay 5 --connect-timeout 30 \
+            -o "$RNNOISE_MODEL_PATH" \
+            "https://media.xiph.org/rnnoise/models/rnnoise_data-0a8755f8e2d834eff6a54714ecc7d75f9932e845df35f8b59bc52a7cfe6e8b37.tar.gz"
+          echo "0a8755f8e2d834eff6a54714ecc7d75f9932e845df35f8b59bc52a7cfe6e8b37  $RNNOISE_MODEL_PATH" | sha256sum -c -
+          cargo test --locked --release --all-features --lib -- --test-threads=1
   staging:
     needs: rust-tests
     if: github.ref_name == 'dev' && !cancelled() && (needs.rust-tests.result == 'success' || needs.rust-tests.result == 'skipped') && ((github.event_name == 'push' && !contains(github.event.head_commit.message, '[skip deploy]')) || github.event_name == 'workflow_dispatch')
