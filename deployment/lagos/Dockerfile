@@ -22,7 +22,7 @@ COPY rust/Cargo.toml rust/Cargo.lock ./
 COPY rust/src ./src
 COPY rust/fixtures ./fixtures
 RUN --mount=type=cache,id=sg-rvc-cargo-registry,target=/usr/local/cargo/registry --mount=type=cache,id=sg-rvc-linux-target,target=/src/target \
-    cargo test --locked --release --all-features --lib && \
+    cargo test --locked --release --all-features --lib -- --test-threads=1 && \
     cargo build --locked --release --features rvc --bin rvc-worker && \
     mkdir /out && cp target/release/rvc-worker /out/
 FROM debian:bookworm-slim
