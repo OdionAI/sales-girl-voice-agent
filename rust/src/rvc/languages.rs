@@ -465,6 +465,26 @@ mod tests {
         serde_json::from_str(include_str!("../../fixtures/reference-config.json")).unwrap()
     }
     #[test]
+    fn native_yoruba_uses_stable_model_alias_for_saved_balogun() {
+        let mut config = config();
+        let context = AgentContext {
+            tts_language_hint: "Yoruba".into(),
+            tts_voice_id: "balogun".into(),
+            ..Default::default()
+        };
+        apply(&mut config, &context, &serde_json::json!({})).unwrap();
+        assert_eq!(config.tts_model, "coqui-yoruba-vits");
+        assert_eq!(config.tts_voice, "balogun");
+        assert_eq!(config.stt_model, SBPN_MODEL);
+        for request in tts_requests(&config, &"Ẹ káàbọ̀. ".repeat(30)).unwrap() {
+            assert_eq!(request.body["model"], "coqui-yoruba-vits");
+            assert_eq!(request.body["voice"], "balogun");
+            assert_eq!(request.body["stream"], true);
+            assert_eq!(request.body["response_format"], "pcm");
+            assert_eq!(request.sample_rate, 24000);
+        }
+    }
+    #[test]
     fn native_language_routes_match_independent_python_profiles() {
         let f = fixture();
         assert_eq!(&f["speech_language_data"], data());

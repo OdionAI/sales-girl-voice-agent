@@ -1,4 +1,5 @@
 import asyncio
+import json
 import unittest
 from dataclasses import replace
 from pathlib import Path
@@ -18,6 +19,11 @@ from latency_lab.trace import TraceRecorder
 
 
 class SpeechLanguageTests(unittest.IsolatedAsyncioTestCase):
+    def test_native_worker_routes_match_current_python_profiles(self):
+        root = Path(__file__).resolve().parents[2]
+        native = json.loads((root / "rust/src/rvc/speech_language_data.json").read_text())
+        self.assertEqual(native["profiles"], LANGUAGES)
+
     def test_saved_language_selects_both_providers_and_retains_llm(self):
         base = LabConfig(llm_model="existing-llm", tts_ref_audio="old-clone.wav")
         for code, aliases in (("yo", ("yo", "yor", "Yoruba", "Yorùbá")), ("ha", ("ha", "hau", "Hausa")),
