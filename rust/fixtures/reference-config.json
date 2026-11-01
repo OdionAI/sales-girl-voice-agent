@@ -1,4 +1,5 @@
 {
+  "transfer_streaming_replies": false,
   "speech_language_override": "",
   "engagement_enabled": false,
   "inactivity_pilot_agent_ids": [],

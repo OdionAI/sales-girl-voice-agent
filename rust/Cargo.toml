@@ -84,3 +84,8 @@ test = false
 harness = false
 path = "src/bin/rvc_capacity_smoke.rs"
 required-features = ["rvc"]
+
+[[bin]]
+name = "rvc-transfer-review"
+path = "src/bin/rvc_transfer_review.rs"
+required-features = ["rvc"]

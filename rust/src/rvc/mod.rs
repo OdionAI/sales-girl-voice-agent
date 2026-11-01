@@ -25,6 +25,7 @@ pub mod report;
 pub mod sip;
 mod text;
 pub mod transfer;
+mod transfer_stream;
 pub mod usage;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -101,6 +102,9 @@ pub struct Config {
     pub llm_first_output_timeout_seconds: f64,
     pub llm_empty_retries: usize,
     pub llm_empty_retry_delay_seconds: f64,
+    /// Opt-in parallel routing for non-thinking DeepSeek; legacy guard stays default.
+    #[serde(default)]
+    pub transfer_streaming_replies: bool,
     pub tts_url: String,
     pub tts_model: String,
     pub tts_voice: String,

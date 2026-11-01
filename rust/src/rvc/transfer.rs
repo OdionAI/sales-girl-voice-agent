@@ -65,6 +65,15 @@ pub(crate) async fn generate_guarded(
     let directory_routing = tools
         .iter()
         .any(|tool| tool["function"]["name"] == super::directory::LOOKUP);
+    if p.config.transfer_streaming_replies
+        && super::providers::deepseek_wire(&p.config)
+        && !p.config.llm_enable_thinking
+        && !quiet
+        && !directory
+        && tools.iter().any(|tool| tool["function"]["name"] == TOOL)
+    {
+        return super::transfer_stream::generate(p, messages, tools, turn, attempt, out).await;
+    }
     if !directory && !tools.iter().any(|tool| tool["function"]["name"] == TOOL) {
         return p.llm(messages, tools, quiet, turn, attempt, out).await;
     }
