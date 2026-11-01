@@ -99,7 +99,7 @@ jobs:
           TRACE_JOB_ID: ${{ inputs.trace_job_id }}
         run: |
           set -euo pipefail
-          [[ "$TRACE_JOB_ID" =~ ^AJ_[A-Za-z0-9_-]{6,80}$ ]]
+          [[ "$TRACE_JOB_ID" == RECENT || "$TRACE_JOB_ID" =~ ^AJ_[A-Za-z0-9_-]{6,80}$ ]]
           ssh lagos-app python3 - "$TRACE_JOB_ID" < deployment/lagos/inspect_trace.py
       - name: Remove runner SSH key
         if: always()
