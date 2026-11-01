@@ -21,8 +21,13 @@ RUN mkdir -p /opt/rnnoise && \
 COPY rust/Cargo.toml rust/Cargo.lock ./
 COPY rust/src ./src
 COPY rust/fixtures ./fixtures
+ARG RUN_NATIVE_TESTS=true
 RUN --mount=type=cache,id=sg-rvc-cargo-registry,target=/usr/local/cargo/registry --mount=type=cache,id=sg-rvc-linux-target,target=/src/target \
-    cargo test --locked --release --all-features --lib -- --test-threads=1 && \
+    case "$RUN_NATIVE_TESTS" in \
+      true) cargo test --locked --release --all-features --lib -- --test-threads=1 ;; \
+      false) : ;; \
+      *) echo "Invalid RUN_NATIVE_TESTS value" >&2; exit 1 ;; \
+    esac && \
     cargo build --locked --release --features rvc --bin rvc-worker && \
     mkdir /out && cp target/release/rvc-worker /out/
 FROM debian:bookworm-slim
