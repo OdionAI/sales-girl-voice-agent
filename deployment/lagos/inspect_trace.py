@@ -30,6 +30,44 @@ if job == "BALOGUN":
     clean = {key: body.get(key) for key in ("agent_id", "name", "tts_language_hint", "tts_voice_id")}
     clean["tools"] = [{"name": t.get("name"), "url": str(t.get("url", "")).split("?")[0], "is_active": t.get("is_active")} for t in body.get("tools", [])]
     print(json.dumps(clean))
+    conv_base = env.get("CONVERSATION_API_BASE_URL") or env.get("CONVERSATION_SERVICE_BASE_URL")
+    if conv_base:
+        cp = urllib.parse.urlsplit(conv_base)
+        addr = cp.hostname
+        for c in containers:
+            for network in c["NetworkSettings"]["Networks"].values():
+                if cp.hostname in (network.get("Aliases") or []) or c["Name"].lstrip("/") == cp.hostname:
+                    addr = network["IPAddress"]
+        prefix = urllib.parse.urlunsplit((cp.scheme, addr + (":"+str(cp.port) if cp.port else ""), cp.path.rstrip("/"), "", ""))
+        ch = dict(headers)
+        ch["Host"] = cp.netloc
+        ch["X-Service-Token"] = env.get("CONVERSATION_SERVICE_TOKEN") or token
+        def read(path):
+            with urllib.request.urlopen(urllib.request.Request(prefix+path, headers=ch), timeout=10) as response:
+                return json.load(response)
+        traces = Path("/opt/attentive/releases/recovery-20261009/.private/traces/traces")
+        for trace in sorted(traces.glob("AJ_*.jsonl"), key=lambda p:p.stat().st_mtime, reverse=True)[:6]:
+            sid = None
+            if trace.stat().st_size > 16*1024*1024: continue
+            for line in trace.open():
+                try: event = json.loads(line)
+                except ValueError: continue
+                if event.get("event") == "conversation_persist_started":
+                    sid = event.get("data", {}).get("session_id")
+            if not sid or not re.fullmatch(r"[a-fA-F0-9-]{36}", sid): continue
+            try:
+                detail = read("/v1/conversations/sessions/"+sid)
+                matched = detail.get("agent_id") == "3801e455-224a-4872-b406-95a4db6b8ffa"
+                out = {"job_id":trace.stem,"balogun":matched,"status":detail.get("session",{}).get("status")}
+                if matched:
+                    cid = detail.get("session",{}).get("conversation_id", "")
+                    if re.fullmatch(r"[a-fA-F0-9-]{36}", cid):
+                        context = read("/v1/conversations/"+cid+"/context?session_id="+sid+"&limit=50")
+                        messages = [m for m in context.get("messages",[]) if m.get("role")=="assistant"]
+                        out["assistant_messages"] = [{"chars":len(str(m.get("content",""))),"yoruba_letters":sum(c in "ẹọṣẸỌṢ" for c in str(m.get("content","")))} for m in messages]
+                print(json.dumps(out))
+            except Exception as error:
+                print(json.dumps({"job_id":trace.stem,"inspection_error":type(error).__name__}))
     raise SystemExit(0)
 if job == "RECENT":
     root = Path("/opt/attentive/releases/recovery-20261009/.private/traces/traces")
