@@ -5120,7 +5120,7 @@
     "profiles": {
       "yo": {
         "name": "Yoruba",
-        "model": "yoruba-ljspeech-vits-epoch92",
+        "model": "coqui-yoruba-vits",
         "voice": "balogun",
         "url": "http://102.88.137.124:8080/tts-yoruba/v1/audio/speech",
         "opening": "Ẹ káàbọ̀. Báwo ni mo ṣe lè ràn yín lọ́wọ́ lónìí?",
@@ -6356,7 +6356,7 @@
       "research": false,
       "expected": {
         "tts_language": "Yoruba",
-        "tts_model": "yoruba-ljspeech-vits-epoch92",
+        "tts_model": "coqui-yoruba-vits",
         "tts_voice": "balogun",
         "tts_url": "http://102.88.137.124:8080/tts-yoruba/v1/audio/speech",
         "tts_seed": "",
@@ -6374,7 +6374,7 @@
       "research": true,
       "expected": {
         "tts_language": "Yoruba",
-        "tts_model": "yoruba-ljspeech-vits-epoch92",
+        "tts_model": "coqui-yoruba-vits",
         "tts_voice": "balogun",
         "tts_url": "http://102.88.137.124:8080/tts-yoruba/v1/audio/speech",
         "tts_seed": "",
@@ -6394,7 +6394,7 @@
       "research": false,
       "expected": {
         "tts_language": "Yoruba",
-        "tts_model": "yoruba-ljspeech-vits-epoch92",
+        "tts_model": "coqui-yoruba-vits",
         "tts_voice": "balogun",
         "tts_url": "http://102.88.137.124:8080/tts-yoruba/v1/audio/speech",
         "tts_seed": "",
@@ -6414,7 +6414,7 @@
       "research": true,
       "expected": {
         "tts_language": "Yoruba",
-        "tts_model": "yoruba-ljspeech-vits-epoch92",
+        "tts_model": "coqui-yoruba-vits",
         "tts_voice": "balogun",
         "tts_url": "http://102.88.137.124:8080/tts-yoruba/v1/audio/speech",
         "tts_seed": "",
@@ -6432,7 +6432,7 @@
       "research": false,
       "expected": {
         "tts_language": "Yoruba",
-        "tts_model": "yoruba-ljspeech-vits-epoch92",
+        "tts_model": "coqui-yoruba-vits",
         "tts_voice": "balogun",
         "tts_url": "http://102.88.137.124:8080/tts-yoruba/v1/audio/speech",
         "tts_seed": "",
@@ -6450,7 +6450,7 @@
       "research": true,
       "expected": {
         "tts_language": "Yoruba",
-        "tts_model": "yoruba-ljspeech-vits-epoch92",
+        "tts_model": "coqui-yoruba-vits",
         "tts_voice": "balogun",
         "tts_url": "http://102.88.137.124:8080/tts-yoruba/v1/audio/speech",
         "tts_seed": "",
@@ -6470,7 +6470,7 @@
       "research": false,
       "expected": {
         "tts_language": "Yoruba",
-        "tts_model": "yoruba-ljspeech-vits-epoch92",
+        "tts_model": "coqui-yoruba-vits",
         "tts_voice": "balogun",
         "tts_url": "http://102.88.137.124:8080/tts-yoruba/v1/audio/speech",
         "tts_seed": "",
@@ -6490,7 +6490,7 @@
       "research": true,
       "expected": {
         "tts_language": "Yoruba",
-        "tts_model": "yoruba-ljspeech-vits-epoch92",
+        "tts_model": "coqui-yoruba-vits",
         "tts_voice": "balogun",
         "tts_url": "http://102.88.137.124:8080/tts-yoruba/v1/audio/speech",
         "tts_seed": "",
@@ -6508,7 +6508,7 @@
       "research": false,
       "expected": {
         "tts_language": "Yoruba",
-        "tts_model": "yoruba-ljspeech-vits-epoch92",
+        "tts_model": "coqui-yoruba-vits",
         "tts_voice": "balogun",
         "tts_url": "http://102.88.137.124:8080/tts-yoruba/v1/audio/speech",
         "tts_seed": "",
@@ -6526,7 +6526,7 @@
       "research": true,
       "expected": {
         "tts_language": "Yoruba",
-        "tts_model": "yoruba-ljspeech-vits-epoch92",
+        "tts_model": "coqui-yoruba-vits",
         "tts_voice": "balogun",
         "tts_url": "http://102.88.137.124:8080/tts-yoruba/v1/audio/speech",
         "tts_seed": "",
@@ -6546,7 +6546,7 @@
       "research": false,
       "expected": {
         "tts_language": "Yoruba",
-        "tts_model": "yoruba-ljspeech-vits-epoch92",
+        "tts_model": "coqui-yoruba-vits",
         "tts_voice": "balogun",
         "tts_url": "http://102.88.137.124:8080/tts-yoruba/v1/audio/speech",
         "tts_seed": "",
@@ -6566,7 +6566,7 @@
       "research": true,
       "expected": {
         "tts_language": "Yoruba",
-        "tts_model": "yoruba-ljspeech-vits-epoch92",
+        "tts_model": "coqui-yoruba-vits",
         "tts_voice": "balogun",
         "tts_url": "http://102.88.137.124:8080/tts-yoruba/v1/audio/speech",
         "tts_seed": "",
@@ -6584,7 +6584,7 @@
       "research": false,
       "expected": {
         "tts_language": "Yoruba",
-        "tts_model": "yoruba-ljspeech-vits-epoch92",
+        "tts_model": "coqui-yoruba-vits",
         "tts_voice": "balogun",
         "tts_url": "http://102.88.137.124:8080/tts-yoruba/v1/audio/speech",
         "tts_seed": "",
@@ -6602,7 +6602,7 @@
       "research": true,
       "expected": {
         "tts_language": "Yoruba",
-        "tts_model": "yoruba-ljspeech-vits-epoch92",
+        "tts_model": "coqui-yoruba-vits",
         "tts_voice": "balogun",
         "tts_url": "http://102.88.137.124:8080/tts-yoruba/v1/audio/speech",
         "tts_seed": "",
@@ -6622,7 +6622,7 @@
       "research": false,
       "expected": {
         "tts_language": "Yoruba",
-        "tts_model": "yoruba-ljspeech-vits-epoch92",
+        "tts_model": "coqui-yoruba-vits",
         "tts_voice": "balogun",
         "tts_url": "http://102.88.137.124:8080/tts-yoruba/v1/audio/speech",
         "tts_seed": "",
@@ -6642,7 +6642,7 @@
       "research": true,
       "expected": {
         "tts_language": "Yoruba",
-        "tts_model": "yoruba-ljspeech-vits-epoch92",
+        "tts_model": "coqui-yoruba-vits",
         "tts_voice": "balogun",
         "tts_url": "http://102.88.137.124:8080/tts-yoruba/v1/audio/speech",
         "tts_seed": "",
@@ -6660,7 +6660,7 @@
       "research": false,
       "expected": {
         "tts_language": "Yoruba",
-        "tts_model": "yoruba-ljspeech-vits-epoch92",
+        "tts_model": "coqui-yoruba-vits",
         "tts_voice": "balogun",
         "tts_url": "http://102.88.137.124:8080/tts-yoruba/v1/audio/speech",
         "tts_seed": "",
@@ -6678,7 +6678,7 @@
       "research": true,
       "expected": {
         "tts_language": "Yoruba",
-        "tts_model": "yoruba-ljspeech-vits-epoch92",
+        "tts_model": "coqui-yoruba-vits",
         "tts_voice": "balogun",
         "tts_url": "http://102.88.137.124:8080/tts-yoruba/v1/audio/speech",
         "tts_seed": "",
@@ -6698,7 +6698,7 @@
       "research": false,
       "expected": {
         "tts_language": "Yoruba",
-        "tts_model": "yoruba-ljspeech-vits-epoch92",
+        "tts_model": "coqui-yoruba-vits",
         "tts_voice": "balogun",
         "tts_url": "http://102.88.137.124:8080/tts-yoruba/v1/audio/speech",
         "tts_seed": "",
@@ -6718,7 +6718,7 @@
       "research": true,
       "expected": {
         "tts_language": "Yoruba",
-        "tts_model": "yoruba-ljspeech-vits-epoch92",
+        "tts_model": "coqui-yoruba-vits",
         "tts_voice": "balogun",
         "tts_url": "http://102.88.137.124:8080/tts-yoruba/v1/audio/speech",
         "tts_seed": "",
@@ -7465,21 +7465,21 @@
       "text": "Amount ₦1,500.50, call 001. Amount ₦1,500.50, call 001. Amount ₦1,500.50, call 001. Amount ₦1,500.50, call 001. Amount ₦1,500.50, call 001. Amount ₦1,500.50, call 001. Amount ₦1,500.50, call 001. Amount ₦1,500.50, call 001. Amount ₦1,500.50, call 001. Amount ₦1,500.50, call 001. Amount ₦1,500.50, call 001. Amount ₦1,500.50, call 001. ",
       "requests": [
         {
-          "model": "yoruba-ljspeech-vits-epoch92",
+          "model": "coqui-yoruba-vits",
           "voice": "balogun",
           "input": "Amount ₦1,500.50, call 001. Amount ₦1,500.50, call 001. Amount ₦1,500.50, call 001. Amount ₦1,500.50, call 001. Amount ₦1,500.50, call 001. ",
           "response_format": "pcm",
           "stream": true
         },
         {
-          "model": "yoruba-ljspeech-vits-epoch92",
+          "model": "coqui-yoruba-vits",
           "voice": "balogun",
           "input": "Amount ₦1,500.50, call 001. Amount ₦1,500.50, call 001. Amount ₦1,500.50, call 001. Amount ₦1,500.50, call 001. Amount ₦1,500.50, call 001. ",
           "response_format": "pcm",
           "stream": true
         },
         {
-          "model": "yoruba-ljspeech-vits-epoch92",
+          "model": "coqui-yoruba-vits",
           "voice": "balogun",
           "input": "Amount ₦1,500.50, call 001. Amount ₦1,500.50, call 001. ",
           "response_format": "pcm",
