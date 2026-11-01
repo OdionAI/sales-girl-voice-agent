@@ -133,6 +133,10 @@ class LagosReleaseTests(unittest.TestCase):
                     {
                         'a0c8cda2-3b46-4ee0-898c-48f9a4d3a444',
                         '00f99439-59d9-42a2-9c3a-db06422ea6cf',
+                        'ccc440c5-452d-4690-abc0-61758c11cebd',
+                        'ccc440c5452d4690abc061758c11cebd',
+                        'f2ff0fe3-d56c-4688-9048-9a76a6310d4a',
+                        'f2ff0fe3d56c468890489a76a6310d4a',
                     },
                 )
                 self.assertEqual(
