@@ -25,7 +25,10 @@ pub(crate) fn enabled(context: &super::profiles::AgentContext) -> bool {
                 && tool["name"]
                     .as_str()
                     .is_some_and(|name| name.trim() == TOOL)
-                && tool["url"] == "builtin://transfer_to_aicc"
+                // Existing saved agents use both addresses for this application-owned
+                // capability. Neither address is an HTTP destination.
+                && matches!(tool["url"].as_str(),
+                    Some("builtin://transfer_to_aicc" | "internal://transfer-to-aicc"))
         })
 }
 pub(crate) fn definition() -> Value {
@@ -486,6 +489,33 @@ pub(crate) mod tests {
         atomic::{AtomicUsize, Ordering},
         Mutex,
     };
+    #[test]
+    fn saved_transfer_aliases_are_supported_without_accepting_arbitrary_routes() {
+        use super::super::profiles::AgentContext;
+        for url in ["builtin://transfer_to_aicc", "internal://transfer-to-aicc"] {
+            let mut context = AgentContext {
+                loaded: true,
+                tools: vec![json!({"name":TOOL,"url":url})],
+                ..Default::default()
+            };
+            assert!(enabled(&context), "{url}");
+            context.tools[0]["is_active"] = json!(false);
+            assert!(!enabled(&context));
+        }
+        for url in [
+            "https://example.test/transfer",
+            "internal://transfer-to-aicc/other",
+            "internal://transfer-to-aicc?destination=other",
+            "builtin://other",
+        ] {
+            let context = AgentContext {
+                loaded: true,
+                tools: vec![json!({"name":TOOL,"url":url})],
+                ..Default::default()
+            };
+            assert!(!enabled(&context), "{url}");
+        }
+    }
     #[derive(Default)]
     pub(crate) struct Fake {
         pub(crate) mode: AtomicUsize,
