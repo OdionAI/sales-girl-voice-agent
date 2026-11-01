@@ -13,3 +13,5 @@ screenlog.*
 node_modules
 .DS_Store
 conversation_memory.db
+rust/target
+rust/artifacts

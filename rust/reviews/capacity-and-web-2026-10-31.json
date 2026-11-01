@@ -1,0 +1,24 @@
+{
+  "capacity": {
+    "limit": 8,
+    "initial_contenders": 24,
+    "admitted": 8,
+    "simulated_human_fallback": 8,
+    "simulated_ivr_fallback": 8,
+    "sdk_sip_calls_ready": 8,
+    "first_hangup_release_ms": 58,
+    "replacement_race_contenders": 12,
+    "replacement_admitted": 1,
+    "released": 9,
+    "release_requests": 9,
+    "active_after_hangup": 0,
+    "actual_external_aicc_handoff_tested": false
+  },
+  "web_surfaces": [
+    "dashboard-public",
+    "dashboard-owner",
+    "frontend-slug",
+    "frontend-domain"
+  ],
+  "frontend_billing_refusal": 402
+}

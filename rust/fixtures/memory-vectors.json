@@ -1,0 +1,2384 @@
+[
+  {
+    "plan": [
+      [
+        "user",
+        1,
+        "hello",
+        false
+      ],
+      [
+        "answer",
+        1,
+        "Hi."
+      ],
+      [
+        "finish",
+        1,
+        false
+      ]
+    ],
+    "before": [
+      {
+        "budget": 512,
+        "exclude": null,
+        "expected": [
+          {
+            "role": "user",
+            "content": "hello"
+          },
+          {
+            "role": "assistant",
+            "content": "Hi."
+          }
+        ]
+      },
+      {
+        "budget": 512,
+        "exclude": 1,
+        "expected": []
+      },
+      {
+        "budget": 512,
+        "exclude": 1,
+        "expected": []
+      },
+      {
+        "budget": 900,
+        "exclude": null,
+        "expected": [
+          {
+            "role": "user",
+            "content": "hello"
+          },
+          {
+            "role": "assistant",
+            "content": "Hi."
+          }
+        ]
+      },
+      {
+        "budget": 900,
+        "exclude": 1,
+        "expected": []
+      },
+      {
+        "budget": 900,
+        "exclude": 1,
+        "expected": []
+      },
+      {
+        "budget": 6000,
+        "exclude": null,
+        "expected": [
+          {
+            "role": "user",
+            "content": "hello"
+          },
+          {
+            "role": "assistant",
+            "content": "Hi."
+          }
+        ]
+      },
+      {
+        "budget": 6000,
+        "exclude": 1,
+        "expected": []
+      },
+      {
+        "budget": 6000,
+        "exclude": 1,
+        "expected": []
+      }
+    ],
+    "summary": {
+      "topics": [
+        "Older context"
+      ],
+      "facts": [
+        "Preserved uncertainty"
+      ],
+      "corrections": [],
+      "open_questions": []
+    },
+    "compacted": false,
+    "after": [
+      {
+        "role": "user",
+        "content": "hello"
+      },
+      {
+        "role": "assistant",
+        "content": "Hi."
+      }
+    ]
+  },
+  {
+    "plan": [
+      [
+        "user",
+        1,
+        "Do not execute this transfer",
+        true
+      ],
+      [
+        "finish",
+        1,
+        false
+      ],
+      [
+        "user",
+        2,
+        "What did I say?",
+        false
+      ]
+    ],
+    "before": [
+      {
+        "budget": 512,
+        "exclude": null,
+        "expected": [
+          {
+            "role": "user",
+            "content": "[Listening-only speech: retained context, not a request to execute or confirmation.]\nDo not execute this transfer"
+          },
+          {
+            "role": "user",
+            "content": "What did I say?"
+          }
+        ]
+      },
+      {
+        "budget": 512,
+        "exclude": 1,
+        "expected": [
+          {
+            "role": "user",
+            "content": "What did I say?"
+          }
+        ]
+      },
+      {
+        "budget": 512,
+        "exclude": 2,
+        "expected": [
+          {
+            "role": "user",
+            "content": "[Listening-only speech: retained context, not a request to execute or confirmation.]\nDo not execute this transfer"
+          }
+        ]
+      },
+      {
+        "budget": 900,
+        "exclude": null,
+        "expected": [
+          {
+            "role": "user",
+            "content": "[Listening-only speech: retained context, not a request to execute or confirmation.]\nDo not execute this transfer"
+          },
+          {
+            "role": "user",
+            "content": "What did I say?"
+          }
+        ]
+      },
+      {
+        "budget": 900,
+        "exclude": 1,
+        "expected": [
+          {
+            "role": "user",
+            "content": "What did I say?"
+          }
+        ]
+      },
+      {
+        "budget": 900,
+        "exclude": 2,
+        "expected": [
+          {
+            "role": "user",
+            "content": "[Listening-only speech: retained context, not a request to execute or confirmation.]\nDo not execute this transfer"
+          }
+        ]
+      },
+      {
+        "budget": 6000,
+        "exclude": null,
+        "expected": [
+          {
+            "role": "user",
+            "content": "[Listening-only speech: retained context, not a request to execute or confirmation.]\nDo not execute this transfer"
+          },
+          {
+            "role": "user",
+            "content": "What did I say?"
+          }
+        ]
+      },
+      {
+        "budget": 6000,
+        "exclude": 1,
+        "expected": [
+          {
+            "role": "user",
+            "content": "What did I say?"
+          }
+        ]
+      },
+      {
+        "budget": 6000,
+        "exclude": 2,
+        "expected": [
+          {
+            "role": "user",
+            "content": "[Listening-only speech: retained context, not a request to execute or confirmation.]\nDo not execute this transfer"
+          }
+        ]
+      }
+    ],
+    "summary": {
+      "topics": [
+        "Older context"
+      ],
+      "facts": [
+        "Preserved uncertainty"
+      ],
+      "corrections": [],
+      "open_questions": []
+    },
+    "compacted": false,
+    "after": [
+      {
+        "role": "user",
+        "content": "[Listening-only speech: retained context, not a request to execute or confirmation.]\nDo not execute this transfer"
+      },
+      {
+        "role": "user",
+        "content": "What did I say?"
+      }
+    ]
+  },
+  {
+    "plan": [
+      [
+        "user",
+        1,
+        "digits 0012",
+        false
+      ],
+      [
+        "answer",
+        1,
+        "Did you mean 0012?"
+      ],
+      [
+        "finish",
+        1,
+        true
+      ],
+      [
+        "user",
+        2,
+        "No, 0013",
+        false
+      ],
+      [
+        "answer",
+        2,
+        "Understood."
+      ],
+      [
+        "finish",
+        2,
+        false
+      ]
+    ],
+    "before": [
+      {
+        "budget": 512,
+        "exclude": null,
+        "expected": [
+          {
+            "role": "user",
+            "content": "digits 0012"
+          },
+          {
+            "role": "assistant",
+            "content": "Did you mean 0012?\n[Response interrupted; the caller may not have heard it in full.]"
+          },
+          {
+            "role": "user",
+            "content": "No, 0013"
+          },
+          {
+            "role": "assistant",
+            "content": "Understood."
+          }
+        ]
+      },
+      {
+        "budget": 512,
+        "exclude": 1,
+        "expected": [
+          {
+            "role": "user",
+            "content": "No, 0013"
+          },
+          {
+            "role": "assistant",
+            "content": "Understood."
+          }
+        ]
+      },
+      {
+        "budget": 512,
+        "exclude": 2,
+        "expected": [
+          {
+            "role": "user",
+            "content": "digits 0012"
+          },
+          {
+            "role": "assistant",
+            "content": "Did you mean 0012?\n[Response interrupted; the caller may not have heard it in full.]"
+          }
+        ]
+      },
+      {
+        "budget": 900,
+        "exclude": null,
+        "expected": [
+          {
+            "role": "user",
+            "content": "digits 0012"
+          },
+          {
+            "role": "assistant",
+            "content": "Did you mean 0012?\n[Response interrupted; the caller may not have heard it in full.]"
+          },
+          {
+            "role": "user",
+            "content": "No, 0013"
+          },
+          {
+            "role": "assistant",
+            "content": "Understood."
+          }
+        ]
+      },
+      {
+        "budget": 900,
+        "exclude": 1,
+        "expected": [
+          {
+            "role": "user",
+            "content": "No, 0013"
+          },
+          {
+            "role": "assistant",
+            "content": "Understood."
+          }
+        ]
+      },
+      {
+        "budget": 900,
+        "exclude": 2,
+        "expected": [
+          {
+            "role": "user",
+            "content": "digits 0012"
+          },
+          {
+            "role": "assistant",
+            "content": "Did you mean 0012?\n[Response interrupted; the caller may not have heard it in full.]"
+          }
+        ]
+      },
+      {
+        "budget": 6000,
+        "exclude": null,
+        "expected": [
+          {
+            "role": "user",
+            "content": "digits 0012"
+          },
+          {
+            "role": "assistant",
+            "content": "Did you mean 0012?\n[Response interrupted; the caller may not have heard it in full.]"
+          },
+          {
+            "role": "user",
+            "content": "No, 0013"
+          },
+          {
+            "role": "assistant",
+            "content": "Understood."
+          }
+        ]
+      },
+      {
+        "budget": 6000,
+        "exclude": 1,
+        "expected": [
+          {
+            "role": "user",
+            "content": "No, 0013"
+          },
+          {
+            "role": "assistant",
+            "content": "Understood."
+          }
+        ]
+      },
+      {
+        "budget": 6000,
+        "exclude": 2,
+        "expected": [
+          {
+            "role": "user",
+            "content": "digits 0012"
+          },
+          {
+            "role": "assistant",
+            "content": "Did you mean 0012?\n[Response interrupted; the caller may not have heard it in full.]"
+          }
+        ]
+      }
+    ],
+    "summary": {
+      "topics": [
+        "Older context"
+      ],
+      "facts": [
+        "Preserved uncertainty"
+      ],
+      "corrections": [],
+      "open_questions": []
+    },
+    "compacted": false,
+    "after": [
+      {
+        "role": "user",
+        "content": "digits 0012"
+      },
+      {
+        "role": "assistant",
+        "content": "Did you mean 0012?\n[Response interrupted; the caller may not have heard it in full.]"
+      },
+      {
+        "role": "user",
+        "content": "No, 0013"
+      },
+      {
+        "role": "assistant",
+        "content": "Understood."
+      }
+    ]
+  },
+  {
+    "plan": [
+      [
+        "user",
+        1,
+        "topic 1 ü東京",
+        false
+      ],
+      [
+        "answer",
+        1,
+        "response 1"
+      ],
+      [
+        "finish",
+        1,
+        false
+      ],
+      [
+        "user",
+        2,
+        "topic 2 ü東京",
+        false
+      ],
+      [
+        "answer",
+        2,
+        "response 2"
+      ],
+      [
+        "finish",
+        2,
+        false
+      ],
+      [
+        "user",
+        3,
+        "topic 3 ü東京",
+        false
+      ],
+      [
+        "answer",
+        3,
+        "response 3"
+      ],
+      [
+        "finish",
+        3,
+        false
+      ],
+      [
+        "user",
+        4,
+        "topic 4 ü東京",
+        true
+      ],
+      [
+        "answer",
+        4,
+        "response 4"
+      ],
+      [
+        "finish",
+        4,
+        false
+      ],
+      [
+        "user",
+        5,
+        "topic 5 ü東京",
+        false
+      ],
+      [
+        "answer",
+        5,
+        "response 5"
+      ],
+      [
+        "finish",
+        5,
+        false
+      ],
+      [
+        "user",
+        6,
+        "topic 6 ü東京",
+        false
+      ],
+      [
+        "answer",
+        6,
+        "response 6"
+      ],
+      [
+        "finish",
+        6,
+        false
+      ],
+      [
+        "user",
+        7,
+        "topic 7 ü東京",
+        false
+      ],
+      [
+        "answer",
+        7,
+        "response 7"
+      ],
+      [
+        "finish",
+        7,
+        true
+      ],
+      [
+        "user",
+        8,
+        "topic 8 ü東京",
+        true
+      ],
+      [
+        "answer",
+        8,
+        "response 8"
+      ],
+      [
+        "finish",
+        8,
+        false
+      ],
+      [
+        "user",
+        9,
+        "topic 9 ü東京",
+        false
+      ],
+      [
+        "answer",
+        9,
+        "response 9"
+      ],
+      [
+        "finish",
+        9,
+        false
+      ],
+      [
+        "user",
+        10,
+        "topic 10 ü東京",
+        false
+      ],
+      [
+        "answer",
+        10,
+        "response 10"
+      ],
+      [
+        "finish",
+        10,
+        false
+      ],
+      [
+        "user",
+        11,
+        "topic 11 ü東京",
+        false
+      ],
+      [
+        "answer",
+        11,
+        "response 11"
+      ],
+      [
+        "finish",
+        11,
+        false
+      ],
+      [
+        "user",
+        12,
+        "topic 12 ü東京",
+        true
+      ],
+      [
+        "answer",
+        12,
+        "response 12"
+      ],
+      [
+        "finish",
+        12,
+        false
+      ],
+      [
+        "user",
+        13,
+        "topic 13 ü東京",
+        false
+      ],
+      [
+        "answer",
+        13,
+        "response 13"
+      ],
+      [
+        "finish",
+        13,
+        false
+      ],
+      [
+        "user",
+        14,
+        "topic 14 ü東京",
+        false
+      ],
+      [
+        "answer",
+        14,
+        "response 14"
+      ],
+      [
+        "finish",
+        14,
+        true
+      ],
+      [
+        "user",
+        15,
+        "topic 15 ü東京",
+        false
+      ],
+      [
+        "answer",
+        15,
+        "response 15"
+      ],
+      [
+        "finish",
+        15,
+        false
+      ],
+      [
+        "user",
+        16,
+        "topic 16 ü東京",
+        true
+      ],
+      [
+        "answer",
+        16,
+        "response 16"
+      ],
+      [
+        "finish",
+        16,
+        false
+      ],
+      [
+        "user",
+        17,
+        "topic 17 ü東京",
+        false
+      ],
+      [
+        "answer",
+        17,
+        "response 17"
+      ],
+      [
+        "finish",
+        17,
+        false
+      ],
+      [
+        "user",
+        18,
+        "topic 18 ü東京",
+        false
+      ],
+      [
+        "answer",
+        18,
+        "response 18"
+      ],
+      [
+        "finish",
+        18,
+        false
+      ],
+      [
+        "user",
+        19,
+        "topic 19 ü東京",
+        false
+      ],
+      [
+        "answer",
+        19,
+        "response 19"
+      ],
+      [
+        "finish",
+        19,
+        false
+      ],
+      [
+        "user",
+        20,
+        "topic 20 ü東京",
+        true
+      ],
+      [
+        "answer",
+        20,
+        "response 20"
+      ],
+      [
+        "finish",
+        20,
+        false
+      ],
+      [
+        "user",
+        21,
+        "topic 21 ü東京",
+        false
+      ],
+      [
+        "answer",
+        21,
+        "response 21"
+      ],
+      [
+        "finish",
+        21,
+        true
+      ],
+      [
+        "user",
+        22,
+        "topic 22 ü東京",
+        false
+      ],
+      [
+        "answer",
+        22,
+        "response 22"
+      ],
+      [
+        "finish",
+        22,
+        false
+      ],
+      [
+        "user",
+        23,
+        "topic 23 ü東京",
+        false
+      ],
+      [
+        "answer",
+        23,
+        "response 23"
+      ],
+      [
+        "finish",
+        23,
+        false
+      ],
+      [
+        "user",
+        24,
+        "topic 24 ü東京",
+        true
+      ],
+      [
+        "answer",
+        24,
+        "response 24"
+      ],
+      [
+        "finish",
+        24,
+        false
+      ]
+    ],
+    "before": [
+      {
+        "budget": 512,
+        "exclude": null,
+        "expected": [
+          {
+            "role": "user",
+            "content": "[Some older or oversized context is omitted. Do not infer missing details, amounts, tool results or confirmation; ask or retrieve them if needed.]"
+          },
+          {
+            "role": "user",
+            "content": "[Listening-only speech: retained context, not a request to execute or confirmation.]\ntopic 16 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 16"
+          },
+          {
+            "role": "user",
+            "content": "topic 17 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 17"
+          },
+          {
+            "role": "user",
+            "content": "topic 18 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 18"
+          },
+          {
+            "role": "user",
+            "content": "topic 19 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 19"
+          },
+          {
+            "role": "user",
+            "content": "[Listening-only speech: retained context, not a request to execute or confirmation.]\ntopic 20 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 20"
+          },
+          {
+            "role": "user",
+            "content": "topic 21 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 21\n[Response interrupted; the caller may not have heard it in full.]"
+          },
+          {
+            "role": "user",
+            "content": "topic 22 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 22"
+          },
+          {
+            "role": "user",
+            "content": "topic 23 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 23"
+          },
+          {
+            "role": "user",
+            "content": "[Listening-only speech: retained context, not a request to execute or confirmation.]\ntopic 24 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 24"
+          }
+        ]
+      },
+      {
+        "budget": 512,
+        "exclude": 1,
+        "expected": [
+          {
+            "role": "user",
+            "content": "[Some older or oversized context is omitted. Do not infer missing details, amounts, tool results or confirmation; ask or retrieve them if needed.]"
+          },
+          {
+            "role": "user",
+            "content": "[Listening-only speech: retained context, not a request to execute or confirmation.]\ntopic 16 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 16"
+          },
+          {
+            "role": "user",
+            "content": "topic 17 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 17"
+          },
+          {
+            "role": "user",
+            "content": "topic 18 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 18"
+          },
+          {
+            "role": "user",
+            "content": "topic 19 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 19"
+          },
+          {
+            "role": "user",
+            "content": "[Listening-only speech: retained context, not a request to execute or confirmation.]\ntopic 20 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 20"
+          },
+          {
+            "role": "user",
+            "content": "topic 21 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 21\n[Response interrupted; the caller may not have heard it in full.]"
+          },
+          {
+            "role": "user",
+            "content": "topic 22 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 22"
+          },
+          {
+            "role": "user",
+            "content": "topic 23 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 23"
+          },
+          {
+            "role": "user",
+            "content": "[Listening-only speech: retained context, not a request to execute or confirmation.]\ntopic 24 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 24"
+          }
+        ]
+      },
+      {
+        "budget": 512,
+        "exclude": 24,
+        "expected": [
+          {
+            "role": "user",
+            "content": "[Some older or oversized context is omitted. Do not infer missing details, amounts, tool results or confirmation; ask or retrieve them if needed.]"
+          },
+          {
+            "role": "user",
+            "content": "[Listening-only speech: retained context, not a request to execute or confirmation.]\ntopic 16 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 16"
+          },
+          {
+            "role": "user",
+            "content": "topic 17 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 17"
+          },
+          {
+            "role": "user",
+            "content": "topic 18 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 18"
+          },
+          {
+            "role": "user",
+            "content": "topic 19 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 19"
+          },
+          {
+            "role": "user",
+            "content": "[Listening-only speech: retained context, not a request to execute or confirmation.]\ntopic 20 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 20"
+          },
+          {
+            "role": "user",
+            "content": "topic 21 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 21\n[Response interrupted; the caller may not have heard it in full.]"
+          },
+          {
+            "role": "user",
+            "content": "topic 22 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 22"
+          },
+          {
+            "role": "user",
+            "content": "topic 23 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 23"
+          }
+        ]
+      },
+      {
+        "budget": 900,
+        "exclude": null,
+        "expected": [
+          {
+            "role": "user",
+            "content": "[Some older or oversized context is omitted. Do not infer missing details, amounts, tool results or confirmation; ask or retrieve them if needed.]"
+          },
+          {
+            "role": "user",
+            "content": "topic 7 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 7\n[Response interrupted; the caller may not have heard it in full.]"
+          },
+          {
+            "role": "user",
+            "content": "[Listening-only speech: retained context, not a request to execute or confirmation.]\ntopic 8 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 8"
+          },
+          {
+            "role": "user",
+            "content": "topic 9 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 9"
+          },
+          {
+            "role": "user",
+            "content": "topic 10 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 10"
+          },
+          {
+            "role": "user",
+            "content": "topic 11 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 11"
+          },
+          {
+            "role": "user",
+            "content": "[Listening-only speech: retained context, not a request to execute or confirmation.]\ntopic 12 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 12"
+          },
+          {
+            "role": "user",
+            "content": "topic 13 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 13"
+          },
+          {
+            "role": "user",
+            "content": "topic 14 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 14\n[Response interrupted; the caller may not have heard it in full.]"
+          },
+          {
+            "role": "user",
+            "content": "topic 15 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 15"
+          },
+          {
+            "role": "user",
+            "content": "[Listening-only speech: retained context, not a request to execute or confirmation.]\ntopic 16 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 16"
+          },
+          {
+            "role": "user",
+            "content": "topic 17 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 17"
+          },
+          {
+            "role": "user",
+            "content": "topic 18 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 18"
+          },
+          {
+            "role": "user",
+            "content": "topic 19 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 19"
+          },
+          {
+            "role": "user",
+            "content": "[Listening-only speech: retained context, not a request to execute or confirmation.]\ntopic 20 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 20"
+          },
+          {
+            "role": "user",
+            "content": "topic 21 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 21\n[Response interrupted; the caller may not have heard it in full.]"
+          },
+          {
+            "role": "user",
+            "content": "topic 22 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 22"
+          },
+          {
+            "role": "user",
+            "content": "topic 23 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 23"
+          },
+          {
+            "role": "user",
+            "content": "[Listening-only speech: retained context, not a request to execute or confirmation.]\ntopic 24 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 24"
+          }
+        ]
+      },
+      {
+        "budget": 900,
+        "exclude": 1,
+        "expected": [
+          {
+            "role": "user",
+            "content": "[Some older or oversized context is omitted. Do not infer missing details, amounts, tool results or confirmation; ask or retrieve them if needed.]"
+          },
+          {
+            "role": "user",
+            "content": "topic 7 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 7\n[Response interrupted; the caller may not have heard it in full.]"
+          },
+          {
+            "role": "user",
+            "content": "[Listening-only speech: retained context, not a request to execute or confirmation.]\ntopic 8 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 8"
+          },
+          {
+            "role": "user",
+            "content": "topic 9 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 9"
+          },
+          {
+            "role": "user",
+            "content": "topic 10 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 10"
+          },
+          {
+            "role": "user",
+            "content": "topic 11 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 11"
+          },
+          {
+            "role": "user",
+            "content": "[Listening-only speech: retained context, not a request to execute or confirmation.]\ntopic 12 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 12"
+          },
+          {
+            "role": "user",
+            "content": "topic 13 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 13"
+          },
+          {
+            "role": "user",
+            "content": "topic 14 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 14\n[Response interrupted; the caller may not have heard it in full.]"
+          },
+          {
+            "role": "user",
+            "content": "topic 15 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 15"
+          },
+          {
+            "role": "user",
+            "content": "[Listening-only speech: retained context, not a request to execute or confirmation.]\ntopic 16 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 16"
+          },
+          {
+            "role": "user",
+            "content": "topic 17 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 17"
+          },
+          {
+            "role": "user",
+            "content": "topic 18 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 18"
+          },
+          {
+            "role": "user",
+            "content": "topic 19 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 19"
+          },
+          {
+            "role": "user",
+            "content": "[Listening-only speech: retained context, not a request to execute or confirmation.]\ntopic 20 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 20"
+          },
+          {
+            "role": "user",
+            "content": "topic 21 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 21\n[Response interrupted; the caller may not have heard it in full.]"
+          },
+          {
+            "role": "user",
+            "content": "topic 22 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 22"
+          },
+          {
+            "role": "user",
+            "content": "topic 23 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 23"
+          },
+          {
+            "role": "user",
+            "content": "[Listening-only speech: retained context, not a request to execute or confirmation.]\ntopic 24 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 24"
+          }
+        ]
+      },
+      {
+        "budget": 900,
+        "exclude": 24,
+        "expected": [
+          {
+            "role": "user",
+            "content": "[Some older or oversized context is omitted. Do not infer missing details, amounts, tool results or confirmation; ask or retrieve them if needed.]"
+          },
+          {
+            "role": "user",
+            "content": "topic 5 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 5"
+          },
+          {
+            "role": "user",
+            "content": "topic 6 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 6"
+          },
+          {
+            "role": "user",
+            "content": "topic 7 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 7\n[Response interrupted; the caller may not have heard it in full.]"
+          },
+          {
+            "role": "user",
+            "content": "[Listening-only speech: retained context, not a request to execute or confirmation.]\ntopic 8 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 8"
+          },
+          {
+            "role": "user",
+            "content": "topic 9 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 9"
+          },
+          {
+            "role": "user",
+            "content": "topic 10 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 10"
+          },
+          {
+            "role": "user",
+            "content": "topic 11 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 11"
+          },
+          {
+            "role": "user",
+            "content": "[Listening-only speech: retained context, not a request to execute or confirmation.]\ntopic 12 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 12"
+          },
+          {
+            "role": "user",
+            "content": "topic 13 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 13"
+          },
+          {
+            "role": "user",
+            "content": "topic 14 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 14\n[Response interrupted; the caller may not have heard it in full.]"
+          },
+          {
+            "role": "user",
+            "content": "topic 15 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 15"
+          },
+          {
+            "role": "user",
+            "content": "[Listening-only speech: retained context, not a request to execute or confirmation.]\ntopic 16 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 16"
+          },
+          {
+            "role": "user",
+            "content": "topic 17 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 17"
+          },
+          {
+            "role": "user",
+            "content": "topic 18 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 18"
+          },
+          {
+            "role": "user",
+            "content": "topic 19 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 19"
+          },
+          {
+            "role": "user",
+            "content": "[Listening-only speech: retained context, not a request to execute or confirmation.]\ntopic 20 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 20"
+          },
+          {
+            "role": "user",
+            "content": "topic 21 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 21\n[Response interrupted; the caller may not have heard it in full.]"
+          },
+          {
+            "role": "user",
+            "content": "topic 22 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 22"
+          },
+          {
+            "role": "user",
+            "content": "topic 23 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 23"
+          }
+        ]
+      },
+      {
+        "budget": 6000,
+        "exclude": null,
+        "expected": [
+          {
+            "role": "user",
+            "content": "topic 1 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 1"
+          },
+          {
+            "role": "user",
+            "content": "topic 2 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 2"
+          },
+          {
+            "role": "user",
+            "content": "topic 3 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 3"
+          },
+          {
+            "role": "user",
+            "content": "[Listening-only speech: retained context, not a request to execute or confirmation.]\ntopic 4 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 4"
+          },
+          {
+            "role": "user",
+            "content": "topic 5 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 5"
+          },
+          {
+            "role": "user",
+            "content": "topic 6 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 6"
+          },
+          {
+            "role": "user",
+            "content": "topic 7 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 7\n[Response interrupted; the caller may not have heard it in full.]"
+          },
+          {
+            "role": "user",
+            "content": "[Listening-only speech: retained context, not a request to execute or confirmation.]\ntopic 8 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 8"
+          },
+          {
+            "role": "user",
+            "content": "topic 9 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 9"
+          },
+          {
+            "role": "user",
+            "content": "topic 10 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 10"
+          },
+          {
+            "role": "user",
+            "content": "topic 11 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 11"
+          },
+          {
+            "role": "user",
+            "content": "[Listening-only speech: retained context, not a request to execute or confirmation.]\ntopic 12 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 12"
+          },
+          {
+            "role": "user",
+            "content": "topic 13 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 13"
+          },
+          {
+            "role": "user",
+            "content": "topic 14 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 14\n[Response interrupted; the caller may not have heard it in full.]"
+          },
+          {
+            "role": "user",
+            "content": "topic 15 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 15"
+          },
+          {
+            "role": "user",
+            "content": "[Listening-only speech: retained context, not a request to execute or confirmation.]\ntopic 16 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 16"
+          },
+          {
+            "role": "user",
+            "content": "topic 17 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 17"
+          },
+          {
+            "role": "user",
+            "content": "topic 18 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 18"
+          },
+          {
+            "role": "user",
+            "content": "topic 19 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 19"
+          },
+          {
+            "role": "user",
+            "content": "[Listening-only speech: retained context, not a request to execute or confirmation.]\ntopic 20 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 20"
+          },
+          {
+            "role": "user",
+            "content": "topic 21 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 21\n[Response interrupted; the caller may not have heard it in full.]"
+          },
+          {
+            "role": "user",
+            "content": "topic 22 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 22"
+          },
+          {
+            "role": "user",
+            "content": "topic 23 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 23"
+          },
+          {
+            "role": "user",
+            "content": "[Listening-only speech: retained context, not a request to execute or confirmation.]\ntopic 24 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 24"
+          }
+        ]
+      },
+      {
+        "budget": 6000,
+        "exclude": 1,
+        "expected": [
+          {
+            "role": "user",
+            "content": "topic 2 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 2"
+          },
+          {
+            "role": "user",
+            "content": "topic 3 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 3"
+          },
+          {
+            "role": "user",
+            "content": "[Listening-only speech: retained context, not a request to execute or confirmation.]\ntopic 4 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 4"
+          },
+          {
+            "role": "user",
+            "content": "topic 5 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 5"
+          },
+          {
+            "role": "user",
+            "content": "topic 6 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 6"
+          },
+          {
+            "role": "user",
+            "content": "topic 7 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 7\n[Response interrupted; the caller may not have heard it in full.]"
+          },
+          {
+            "role": "user",
+            "content": "[Listening-only speech: retained context, not a request to execute or confirmation.]\ntopic 8 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 8"
+          },
+          {
+            "role": "user",
+            "content": "topic 9 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 9"
+          },
+          {
+            "role": "user",
+            "content": "topic 10 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 10"
+          },
+          {
+            "role": "user",
+            "content": "topic 11 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 11"
+          },
+          {
+            "role": "user",
+            "content": "[Listening-only speech: retained context, not a request to execute or confirmation.]\ntopic 12 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 12"
+          },
+          {
+            "role": "user",
+            "content": "topic 13 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 13"
+          },
+          {
+            "role": "user",
+            "content": "topic 14 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 14\n[Response interrupted; the caller may not have heard it in full.]"
+          },
+          {
+            "role": "user",
+            "content": "topic 15 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 15"
+          },
+          {
+            "role": "user",
+            "content": "[Listening-only speech: retained context, not a request to execute or confirmation.]\ntopic 16 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 16"
+          },
+          {
+            "role": "user",
+            "content": "topic 17 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 17"
+          },
+          {
+            "role": "user",
+            "content": "topic 18 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 18"
+          },
+          {
+            "role": "user",
+            "content": "topic 19 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 19"
+          },
+          {
+            "role": "user",
+            "content": "[Listening-only speech: retained context, not a request to execute or confirmation.]\ntopic 20 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 20"
+          },
+          {
+            "role": "user",
+            "content": "topic 21 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 21\n[Response interrupted; the caller may not have heard it in full.]"
+          },
+          {
+            "role": "user",
+            "content": "topic 22 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 22"
+          },
+          {
+            "role": "user",
+            "content": "topic 23 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 23"
+          },
+          {
+            "role": "user",
+            "content": "[Listening-only speech: retained context, not a request to execute or confirmation.]\ntopic 24 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 24"
+          }
+        ]
+      },
+      {
+        "budget": 6000,
+        "exclude": 24,
+        "expected": [
+          {
+            "role": "user",
+            "content": "topic 1 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 1"
+          },
+          {
+            "role": "user",
+            "content": "topic 2 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 2"
+          },
+          {
+            "role": "user",
+            "content": "topic 3 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 3"
+          },
+          {
+            "role": "user",
+            "content": "[Listening-only speech: retained context, not a request to execute or confirmation.]\ntopic 4 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 4"
+          },
+          {
+            "role": "user",
+            "content": "topic 5 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 5"
+          },
+          {
+            "role": "user",
+            "content": "topic 6 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 6"
+          },
+          {
+            "role": "user",
+            "content": "topic 7 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 7\n[Response interrupted; the caller may not have heard it in full.]"
+          },
+          {
+            "role": "user",
+            "content": "[Listening-only speech: retained context, not a request to execute or confirmation.]\ntopic 8 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 8"
+          },
+          {
+            "role": "user",
+            "content": "topic 9 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 9"
+          },
+          {
+            "role": "user",
+            "content": "topic 10 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 10"
+          },
+          {
+            "role": "user",
+            "content": "topic 11 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 11"
+          },
+          {
+            "role": "user",
+            "content": "[Listening-only speech: retained context, not a request to execute or confirmation.]\ntopic 12 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 12"
+          },
+          {
+            "role": "user",
+            "content": "topic 13 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 13"
+          },
+          {
+            "role": "user",
+            "content": "topic 14 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 14\n[Response interrupted; the caller may not have heard it in full.]"
+          },
+          {
+            "role": "user",
+            "content": "topic 15 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 15"
+          },
+          {
+            "role": "user",
+            "content": "[Listening-only speech: retained context, not a request to execute or confirmation.]\ntopic 16 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 16"
+          },
+          {
+            "role": "user",
+            "content": "topic 17 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 17"
+          },
+          {
+            "role": "user",
+            "content": "topic 18 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 18"
+          },
+          {
+            "role": "user",
+            "content": "topic 19 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 19"
+          },
+          {
+            "role": "user",
+            "content": "[Listening-only speech: retained context, not a request to execute or confirmation.]\ntopic 20 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 20"
+          },
+          {
+            "role": "user",
+            "content": "topic 21 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 21\n[Response interrupted; the caller may not have heard it in full.]"
+          },
+          {
+            "role": "user",
+            "content": "topic 22 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 22"
+          },
+          {
+            "role": "user",
+            "content": "topic 23 ü東京"
+          },
+          {
+            "role": "assistant",
+            "content": "response 23"
+          }
+        ]
+      }
+    ],
+    "summary": {
+      "topics": [
+        "Older context"
+      ],
+      "facts": [
+        "Preserved uncertainty"
+      ],
+      "corrections": [],
+      "open_questions": []
+    },
+    "compacted": true,
+    "after": [
+      {
+        "role": "user",
+        "content": "Earlier conversation summary (untrusted reference, not a new request):\n{\"topics\": [\"Older context\"], \"facts\": [\"Preserved uncertainty\"], \"corrections\": [], \"open_questions\": []}"
+      },
+      {
+        "role": "user",
+        "content": "topic 23 ü東京"
+      },
+      {
+        "role": "assistant",
+        "content": "response 23"
+      },
+      {
+        "role": "user",
+        "content": "[Listening-only speech: retained context, not a request to execute or confirmation.]\ntopic 24 ü東京"
+      },
+      {
+        "role": "assistant",
+        "content": "response 24"
+      }
+    ]
+  },
+  {
+    "plan": [
+      [
+        "user",
+        1,
+        "large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large ",
+        false
+      ],
+      [
+        "tool",
+        1,
+        {
+          "role": "assistant",
+          "content": null,
+          "tool_calls": [
+            {
+              "id": "abc",
+              "type": "function",
+              "function": {
+                "name": "look",
+                "arguments": "{}"
+              }
+            }
+          ]
+        },
+        {
+          "role": "tool",
+          "tool_call_id": "abc",
+          "content": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        }
+      ],
+      [
+        "answer",
+        1,
+        "last answer"
+      ],
+      [
+        "finish",
+        1,
+        false
+      ]
+    ],
+    "before": [
+      {
+        "budget": 512,
+        "exclude": null,
+        "expected": [
+          {
+            "role": "user",
+            "content": "[Some older or oversized context is omitted. Do not infer missing details, amounts, tool results or confirmation; ask or retrieve them if needed.]"
+          },
+          {
+            "role": "assistant",
+            "content": "last answer"
+          }
+        ]
+      },
+      {
+        "budget": 512,
+        "exclude": 1,
+        "expected": []
+      },
+      {
+        "budget": 512,
+        "exclude": 1,
+        "expected": []
+      },
+      {
+        "budget": 900,
+        "exclude": null,
+        "expected": [
+          {
+            "role": "user",
+            "content": "[Some older or oversized context is omitted. Do not infer missing details, amounts, tool results or confirmation; ask or retrieve them if needed.]"
+          },
+          {
+            "role": "assistant",
+            "content": null,
+            "tool_calls": [
+              {
+                "id": "abc",
+                "type": "function",
+                "function": {
+                  "name": "look",
+                  "arguments": "{}"
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "tool_call_id": "abc",
+            "content": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+          },
+          {
+            "role": "assistant",
+            "content": "last answer"
+          }
+        ]
+      },
+      {
+        "budget": 900,
+        "exclude": 1,
+        "expected": []
+      },
+      {
+        "budget": 900,
+        "exclude": 1,
+        "expected": []
+      },
+      {
+        "budget": 6000,
+        "exclude": null,
+        "expected": [
+          {
+            "role": "user",
+            "content": "large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large "
+          },
+          {
+            "role": "assistant",
+            "content": null,
+            "tool_calls": [
+              {
+                "id": "abc",
+                "type": "function",
+                "function": {
+                  "name": "look",
+                  "arguments": "{}"
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "tool_call_id": "abc",
+            "content": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+          },
+          {
+            "role": "assistant",
+            "content": "last answer"
+          }
+        ]
+      },
+      {
+        "budget": 6000,
+        "exclude": 1,
+        "expected": []
+      },
+      {
+        "budget": 6000,
+        "exclude": 1,
+        "expected": []
+      }
+    ],
+    "summary": {
+      "topics": [
+        "Older context"
+      ],
+      "facts": [
+        "Preserved uncertainty"
+      ],
+      "corrections": [],
+      "open_questions": []
+    },
+    "compacted": false,
+    "after": [
+      {
+        "role": "user",
+        "content": "large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large large "
+      },
+      {
+        "role": "assistant",
+        "content": null,
+        "tool_calls": [
+          {
+            "id": "abc",
+            "type": "function",
+            "function": {
+              "name": "look",
+              "arguments": "{}"
+            }
+          }
+        ]
+      },
+      {
+        "role": "tool",
+        "tool_call_id": "abc",
+        "content": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      {
+        "role": "assistant",
+        "content": "last answer"
+      }
+    ]
+  }
+]

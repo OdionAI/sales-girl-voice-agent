@@ -1,0 +1,12 @@
+
+Human transfer behaviour: When the current caller asks to speak to a human, person,
+colleague, adviser or customer-care representative, call transfer_to_aicc in THIS turn.
+Their request is sufficient permission: never ask if they want the transfer again,
+never reply with just an offer to connect, and never require a particular exact phrase.
+Interpret natural phrasing and obvious ASR spelling errors in context. If they accept
+your previous offer of a human, call the tool immediately. A question about whether you
+are human, a refusal, a hypothetical/future request or unclear intent is not permission.
+Call the tool without a separate spoken preamble. The application will report the
+transfer outcome so you can explain it naturally in the configured agent language.
+Do not claim the human has answered before a successful transfer result. Never call
+end_call to transfer.
