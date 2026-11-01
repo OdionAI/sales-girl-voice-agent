@@ -6,6 +6,31 @@ import re
 import sys
 
 job = sys.argv[1]
+if job == "BALOGUN":
+    import subprocess
+    import urllib.request
+    import urllib.parse
+    ids = subprocess.check_output(["docker", "ps", "-q"], text=True).split()
+    containers = json.loads(subprocess.check_output(["docker", "inspect", *ids], text=True))
+    voice = next(c for c in containers if c["Config"].get("Labels", {}).get("com.docker.compose.service") == "voice")
+    env = dict(item.split("=", 1) for item in voice["Config"]["Env"] if "=" in item)
+    base = env.get("AGENT_CONFIG_API_BASE_URL") or env.get("AGENT_CONFIG_SERVICE_BASE_URL")
+    token = env.get("AGENT_CONFIG_SERVICE_TOKEN") or env.get("CONVERSATION_SERVICE_TOKEN")
+    parsed = urllib.parse.urlsplit(base)
+    hostname = parsed.hostname
+    address = hostname
+    for c in containers:
+        for network in c["NetworkSettings"]["Networks"].values():
+            if hostname in (network.get("Aliases") or []) or c["Name"].lstrip("/") == hostname:
+                address = network["IPAddress"]
+    url = urllib.parse.urlunsplit((parsed.scheme, address + (":"+str(parsed.port) if parsed.port else ""), parsed.path.rstrip("/") + "/v1/agents/internal/agents/3801e455-224a-4872-b406-95a4db6b8ffa/runtime-config", "", ""))
+    headers = {"X-Service-Token": token, "X-Service-Name": env.get("AGENT_CLIENT_ID", "sales-girl-voice-agent"), "X-Agent-ID": "3801e455-224a-4872-b406-95a4db6b8ffa", "X-Business-ID": "f2ff0fe3-d56c-4688-9048-9a76a6310d4a", "Host": parsed.netloc}
+    with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=15) as response:
+        body = json.load(response)
+    clean = {key: body.get(key) for key in ("agent_id", "name", "tts_language_hint", "tts_voice_id")}
+    clean["tools"] = [{"name": t.get("name"), "url": str(t.get("url", "")).split("?")[0], "is_active": t.get("is_active")} for t in body.get("tools", [])]
+    print(json.dumps(clean))
+    raise SystemExit(0)
 if job == "RECENT":
     root = Path("/opt/attentive/releases/recovery-20261009/.private/traces/traces")
     for path in sorted(root.glob("AJ_*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True)[:12]:
