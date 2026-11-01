@@ -213,3 +213,15 @@ Local regression checks: `python -m unittest tests.test_lagos_deploy`, native
 isolated LiveKit/container network and verifies registration plus readiness
 across disconnection/reconnection, without production accounts or providers.
 Rollback restores the previous image, entrypoint, command, user and healthcheck.
+
+## Native production cutover
+
+The native release retains the staging-tested 150 ms caller endpointing threshold,
+final ASR validation, speculative generation and RNNoise speech-probability gating.
+BuildKit attestations are disabled to compare platform image IDs consistently.
+Verification accepts image-added environment defaults and compares mounts without
+ordering dependence, while requiring every preserved/operator setting to match.
+Manual verification can run from a candidate branch; actual releases remain
+restricted to `main`. Promote the signed-session dashboard/frontend integration
+before replacing the worker. Retain the previous Python image and Compose chain
+for rollback.

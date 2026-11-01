@@ -23,6 +23,7 @@ REPLY_GRACE_AGENT_IDS_KEY = 'RVC_LAB_REPLY_GRACE_AGENT_IDS'
 INACTIVITY_PILOT_AGENT_IDS_KEY = 'RVC_LAB_INACTIVITY_PILOT_AGENT_IDS'
 DEFAULT_INACTIVITY_PILOT_AGENT_IDS = '*'
 LAGOS_ASR_ENV = {
+    'RVC_LAB_END_SILENCE_MS': '150',
     'RVC_LAB_STT_PROVIDER': 'self_hosted',
     'RVC_LAB_STT_MODEL': 'Qwen3-ASR',
     'RVC_LAB_STT_WS_URL': 'ws://102.88.137.124:8080/asr-rt/v1/realtime',
@@ -276,7 +277,8 @@ def deploy(release, revision, enable_hausa_research=False, momo_feedback_agent_i
             or (release / 'plan.json').exists()):
         raise ValueError('Unexpected or reused release directory')
     previous, files = inspect_voice()
-    previous_env = dict(item.split('=', 1) for item in previous['Config']['Env'])
+    previous_env = dict(item.split('=', 1) if '=' in item else (item, '')
+                        for item in previous['Config']['Env'])
     # Lagos ASR is shared by the voice worker. Reassert Qwen realtime + batch
     # endpoints each release so stale Whisper overrides cannot persist.
     updates = dict(LAGOS_ASR_ENV)
@@ -320,6 +322,7 @@ def deploy(release, revision, enable_hausa_research=False, momo_feedback_agent_i
     new_image = f'attentive/voice:ci-{release.name}'
     run('docker', 'tag', previous['Image'], old_image)
     run('docker', 'build', '-f', str(release / 'deployment/lagos/Dockerfile'),
+        '--provenance=false', '--sbom=false',
         '--label', f'org.opencontainers.image.revision={revision}',
         '--label', 'org.opencontainers.image.source=https://github.com/OdionAI/sales-girl-voice-agent',
         '-t', new_image, str(release))
@@ -351,10 +354,16 @@ def deploy(release, revision, enable_hausa_research=False, momo_feedback_agent_i
         run(*compose([*files, override]), 'up', '-d', '--no-deps', '--no-build',
             '--force-recreate', 'voice', cwd=STACK)
         current = wait_healthy()
+        image_defaults = json.loads(subprocess.check_output(
+            ['docker', 'image', 'inspect', new_image, '--format', '{{json .Config.Env}}'],
+            text=True)) or []
+        effective_env = dict(item.split('=', 1) for item in image_defaults) | previous_env | updates
+        current_env = dict(item.split('=', 1) for item in current['Config']['Env'])
         if (current['Image'] != subprocess.check_output(['docker', 'image', 'inspect',
                 new_image, '--format', '{{.Id}}'], text=True).strip()
-                or sorted(current['Config']['Env']) != sorted(expected_env)
-                or current['Mounts'] != previous['Mounts']):
+                or current_env != effective_env
+                or sorted(json.dumps(m, sort_keys=True) for m in current['Mounts'])
+                   != sorted(json.dumps(m, sort_keys=True) for m in previous['Mounts'])):
             raise RuntimeError('Voice image, environment or mounts changed unexpectedly')
     except Exception:
         if attempted:
@@ -392,6 +401,14 @@ if __name__ == '__main__':
                           'image': current['Config']['Image'],
                           'compose_files': len(files), 'health': 'healthy',
                           'architecture': __import__('platform').machine(),
+                          'revision': current['Config'].get('Labels', {}).get('org.opencontainers.image.revision'),
+                          'entrypoint': current['Config'].get('Entrypoint'),
+                          'settings': {key: value for key, value in
+                              (entry.split('=', 1) for entry in current['Config']['Env'] if '=' in entry)
+                              if key in {'RVC_LAB_END_SILENCE_MS', 'RVC_LAB_LLM_PROVIDER',
+                                         'RVC_LAB_MAX_JOBS', 'MOMO_CALL_CAPACITY_BUSINESS_ID',
+                                         'RVC_INPUT_NOISE_SUPPRESSION', 'RVC_INPUT_NOISE_AGENT_IDS',
+                                         'RVC_INPUT_NOISE_IMPLEMENTATION'}},
                           'native_admission': native_admission_updates(dict(entry.split('=',1) for entry in current['Config']['Env']))}))
     else:
         if args.release is None or args.revision is None:
