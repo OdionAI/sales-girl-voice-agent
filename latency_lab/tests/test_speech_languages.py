@@ -161,7 +161,7 @@ class SpeechLanguageTests(unittest.IsolatedAsyncioTestCase):
                 base = LabConfig(llm_model="unchanged-llm")
                 context = SimpleNamespace(tts_language_hint="Yoruba", tts_voice_id=saved_voice)
                 config = replace(apply_language_stack(base, context), tts_url=self.url)
-                self.assertEqual(config.tts_model, "yoruba-ljspeech-vits-epoch92")
+                self.assertEqual(config.tts_model, "coqui-yoruba-vits")
                 self.assertEqual(config.tts_voice, "balogun")
                 self.assertEqual(config.stt_model, SBPN_MODEL)
                 self.assertEqual(config.llm_model, "unchanged-llm")
@@ -172,7 +172,7 @@ class SpeechLanguageTests(unittest.IsolatedAsyncioTestCase):
                         _, chunks = await client.stream(text)
                         self.assertTrue(b"".join([part async for part in chunks]))
                 self.assertGreater(len(self.requests), 2)
-                self.assertTrue(all(item["model"] == "yoruba-ljspeech-vits-epoch92"
+                self.assertTrue(all(item["model"] == "coqui-yoruba-vits"
                                     and item["voice"] == "balogun" for item in self.requests))
 
     async def test_saved_hausa_speaker_reaches_every_streaming_turn(self):

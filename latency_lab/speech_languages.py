@@ -10,7 +10,7 @@ from .providers import is_wema_voice
 
 
 LANGUAGES = {
-    "yo": {"name": "Yoruba", "model": "yoruba-ljspeech-vits-epoch92", "voice": "balogun",
+    "yo": {"name": "Yoruba", "model": "coqui-yoruba-vits", "voice": "balogun",
            "url": "http://102.88.137.124:8080/tts-yoruba/v1/audio/speech",
            "opening": "Ẹ káàbọ̀. Báwo ni mo ṣe lè ràn yín lọ́wọ́ lónìí?",
            "goodbye": "Ẹ ṣé gan-an. Ó dàbọ̀.",
