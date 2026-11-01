@@ -267,6 +267,31 @@ pub(crate) fn resolve_call(
         caller,
     })
 }
+#[cfg(test)]
+#[test]
+fn saved_balogun_profile_passes_startup_with_legacy_transfer_address() {
+    let context = AgentContext {
+        loaded: true,
+        tts_language_hint: "Yoruba".into(),
+        tts_voice_id: "balogun".into(),
+        tools: vec![
+            json!({"name":"end_call","url":"builtin://end_call"}),
+            json!({"name":"transfer_to_aicc","url":"internal://transfer-to-aicc"}),
+            json!({"name":"create_ticket","url":"internal://create-ticket"}),
+        ],
+        ..Default::default()
+    };
+    validate_capabilities(&context).unwrap();
+    let mut config: super::Config =
+        serde_json::from_str(include_str!("../../fixtures/reference-config.json")).unwrap();
+    super::languages::apply(&mut config, &context, &Value::Null).unwrap();
+    config.agent_context = context;
+    super::profiles::apply_stt_scope(&mut config);
+    config.validate().unwrap();
+    assert_eq!(config.tts_voice, "balogun");
+    assert_eq!(config.tts_model, "coqui-yoruba-vits");
+}
+
 fn validate_capabilities(context: &AgentContext) -> Result<(), String> {
     let bank = super::banking::configured_names(context);
     for tool in context
