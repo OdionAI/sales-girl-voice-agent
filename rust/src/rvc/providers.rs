@@ -28,6 +28,9 @@ pub enum LlmEvent {
 #[derive(Clone, Copy)]
 pub struct LlmOptions {
     pub required: bool,
+    /// Routing must end with both tool_calls and [DONE] before releasing speech.
+    pub require_tool_completion: bool,
+    pub purpose: &'static str,
     pub turn: u64,
     pub attempt: u64,
     pub max_tokens: usize,
@@ -37,6 +40,8 @@ impl Default for LlmOptions {
     fn default() -> Self {
         Self {
             required: false,
+            require_tool_completion: false,
+            purpose: "response",
             turn: 0,
             attempt: 0,
             max_tokens: 180,
@@ -134,6 +139,7 @@ struct LlmSpan {
     finished: Option<f64>,
     first: bool,
     done: bool,
+    purpose: &'static str,
 }
 impl LlmSpan {
     fn finish(&mut self) {
@@ -147,6 +153,7 @@ impl Drop for LlmSpan {
         self.finish();
         let mut data = self.usage.llm_observation(self.usage_id);
         data["request_id"] = json!(self.request_id);
+        data["purpose"] = json!(self.purpose);
         data["request_index"] = json!(self.index + 1);
         data["completed"] = json!(self.done);
         data["first_text_observed"] = json!(self.first);
@@ -265,6 +272,8 @@ impl Providers {
         tx: mpsc::Sender<LlmEvent>,
     ) -> Result<(), String> {
         let LlmOptions {
+            require_tool_completion,
+            purpose,
             required,
             turn,
             attempt,
@@ -277,6 +286,8 @@ impl Providers {
             messages,
             tools,
             LlmOptions {
+                require_tool_completion,
+                purpose,
                 required,
                 turn,
                 attempt,
@@ -286,8 +297,12 @@ impl Providers {
         );
         let mut empty_retries = 0;
         let mut sent = false;
-        self.trace
-            .emit("llm_request_start", turn, attempt, json!({"request":0}));
+        self.trace.emit(
+            "llm_request_start",
+            turn,
+            attempt,
+            json!({"request":0,"purpose":purpose}),
+        );
         for index in 0..(4 + c.llm_empty_retries) {
             let usage_request = self.usage.llm_started();
             let mut span = LlmSpan {
@@ -302,6 +317,7 @@ impl Providers {
                 finished: None,
                 first: false,
                 done: false,
+                purpose,
             };
             let request = self
                 .client
@@ -339,6 +355,7 @@ impl Providers {
             let mut assistant_content = String::new();
             let mut calls: BTreeMap<u64, (String, String, String)> = BTreeMap::new();
             let mut done = false;
+            let mut finish_reason = None;
             let mut first = true;
             let mut first_tool = true;
             let deadline = tokio::time::Instant::now()
@@ -379,6 +396,9 @@ impl Providers {
                         Err(_) => continue,
                     };
                     self.usage.llm_usage(usage_request, &item["usage"]);
+                    if let Some(reason) = item["choices"][0]["finish_reason"].as_str() {
+                        finish_reason = Some(reason.to_owned());
+                    }
                     let delta = &item["choices"][0]["delta"];
                     if deepseek_wire(c) {
                         if let Some(text) = delta["reasoning_content"].as_str() {
@@ -411,7 +431,7 @@ impl Providers {
                                         "llm_first_tool",
                                         turn,
                                         attempt,
-                                        json!({"assembled":false}),
+                                        json!({"assembled":false,"purpose":purpose}),
                                     );
                                 }
                             }
@@ -426,7 +446,7 @@ impl Providers {
                             if first {
                                 first = false;
                                 span.first = true;
-                                self.trace.emit("llm_first_token", turn, attempt, json!({"request_id":span.request_id,"provider_ttft_ms":(span.start.elapsed().as_secs_f64()*1_000_000.0).round()/1000.0}));
+                                self.trace.emit("llm_first_token", turn, attempt, json!({"request_id":span.request_id,"purpose":purpose,"provider_ttft_ms":(span.start.elapsed().as_secs_f64()*1_000_000.0).round()/1000.0}));
                             }
                             sent = true;
                             tx.send(LlmEvent::Text(text))
@@ -440,6 +460,10 @@ impl Providers {
                 }
             }
             span.finish();
+            if require_tool_completion && (!done || finish_reason.as_deref() != Some("tool_calls"))
+            {
+                return Err("incomplete routing stream".into());
+            }
             if !sent
                 && calls.values().all(|(_, name, _)| name.is_empty())
                 && empty_retries < c.llm_empty_retries
@@ -461,8 +485,12 @@ impl Providers {
                 if !name.is_empty() {
                     let arguments = serde_json::from_str(&raw)
                         .map_err(|_| "invalid structured tool arguments")?;
-                    self.trace
-                        .emit("tool_call_prepared", turn, attempt, json!({}));
+                    self.trace.emit(
+                        "tool_call_prepared",
+                        turn,
+                        attempt,
+                        json!({"purpose":purpose}),
+                    );
                     tx.send(LlmEvent::Tool {
                         id: if id.is_empty() {
                             format!("tool-call-{call_index}")

@@ -118,7 +118,25 @@ async fn llm(State(s): State<Arc<Fixture>>, Json(body): Json<Value>) -> Response
     } else {
         None
     };
-    let item = if let Some(content) = background {
+    let ordinary_route = body["tools"].as_array().is_some_and(|tools| {
+        tools
+            .iter()
+            .any(|tool| tool["function"]["name"] == "rvc_answer_normally")
+    }) && (!text.contains("human request")
+        || text.contains("human request refused"))
+        && ![
+            "ticket request",
+            "goodbye request",
+            "silence",
+            "resume",
+            "knowledge request",
+            "bank ",
+        ]
+        .iter()
+        .any(|keyword| text.contains(keyword));
+    let item = if ordinary_route {
+        json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":"ordinary-route","function":{"name":"rvc_answer_normally","arguments":"{}"}}]}}]})
+    } else if let Some(content) = background {
         json!({"choices":[{"delta":{"content":content}}]})
     } else if system.contains("Fresh provider result") {
         if directory_request.contains("email") {
@@ -215,7 +233,19 @@ async fn llm(State(s): State<Arc<Fixture>>, Json(body): Json<Value>) -> Response
     } else {
         String::new()
     };
-    let raw = format!("{private_context}data: {item}\n\n{usage}data: [DONE]\n\n");
+    let routing_finish = if body["tools"].as_array().is_some_and(|tools| {
+        tools
+            .iter()
+            .any(|tool| tool["function"]["name"] == "rvc_answer_normally")
+    }) {
+        format!(
+            "data: {}\n\n",
+            json!({"choices":[{"delta":{},"finish_reason":"tool_calls"}]})
+        )
+    } else {
+        String::new()
+    };
+    let raw = format!("{private_context}data: {item}\n\n{usage}{routing_finish}data: [DONE]\n\n");
     (
         [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
         raw,
@@ -453,73 +483,96 @@ impl Harness {
 }
 #[tokio::test]
 async fn speculative_tts_is_held_until_owned_final_and_wrong_final_is_rejected() {
-    let mut h = Harness::new(false).await;
-    h.voice().await;
-    h.session
-        .input
-        .send(Input::Partial("first request".into()))
-        .await
-        .unwrap();
-    h.until("tts_first_pcm").await;
-    assert!(h.sink.pcm.lock().unwrap().is_empty());
-    h.session
-        .input
-        .send(Input::Final {
-            turn: 1,
-            text: "first request".into(),
+    for streaming in [false, true] {
+        let mut h = Harness::configured(false, |c| {
+            if streaming {
+                configured_human(c);
+                c.transfer_streaming_replies = true;
+                c.llm_provider = "deepseek".into();
+                c.llm_enable_thinking = false;
+            }
         })
-        .await
-        .unwrap();
-    tokio::time::sleep(Duration::from_millis(10)).await;
-    assert!(h.sink.pcm.lock().unwrap().is_empty());
-    h.end().await;
-    h.until("user_speech_end").await;
-    h.session
-        .input
-        .send(Input::Final {
-            turn: 1,
-            text: "first request".into(),
-        })
-        .await
-        .unwrap();
-    h.complete(1).await;
-    assert!(h.sink.pcm.lock().unwrap().iter().all(|s| *s == 111));
-    assert!(!h.sink.pcm.lock().unwrap().is_empty());
-    {
-        let requests = h.fixture.requests.lock().unwrap();
-        let request = requests
-            .iter()
-            .find(|r| r.get("messages").is_some())
+        .await;
+        h.voice().await;
+        h.session
+            .input
+            .send(Input::Partial("first request".into()))
+            .await
             .unwrap();
-        assert_eq!(request["max_tokens"], 180);
-        assert_eq!(request["temperature"], 0.35);
+        h.until("tts_first_pcm").await;
+        assert!(h.sink.pcm.lock().unwrap().is_empty());
+        h.session
+            .input
+            .send(Input::Final {
+                turn: 1,
+                text: "first request".into(),
+            })
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        assert!(h.sink.pcm.lock().unwrap().is_empty());
+        h.end().await;
+        h.until("user_speech_end").await;
+        h.session
+            .input
+            .send(Input::Final {
+                turn: 1,
+                text: "first request".into(),
+            })
+            .await
+            .unwrap();
+        h.complete(1).await;
+        assert!(h.sink.pcm.lock().unwrap().iter().all(|s| *s == 111));
+        assert!(!h.sink.pcm.lock().unwrap().is_empty());
+        {
+            let requests = h.fixture.requests.lock().unwrap();
+            let request = requests
+                .iter()
+                .find(|r| r.get("messages").is_some())
+                .unwrap();
+            assert_eq!(request["max_tokens"], 180);
+            assert_eq!(
+                request["temperature"],
+                if streaming { Value::Null } else { json!(0.35) }
+            );
+        }
+        h.close().await;
     }
-    h.close().await;
 }
 #[tokio::test]
 async fn changed_final_cancels_prepared_audio_and_generates_from_authoritative_text() {
-    let mut h = Harness::new(false).await;
-    h.voice().await;
-    h.session
-        .input
-        .send(Input::Partial("first request".into()))
-        .await
-        .unwrap();
-    h.until("tts_first_pcm").await;
-    h.end().await;
-    h.until("user_speech_end").await;
-    h.session
-        .input
-        .send(Input::Final {
-            turn: 1,
-            text: "second topic entirely".into(),
+    for streaming in [false, true] {
+        let mut h = Harness::configured(false, |c| {
+            if streaming {
+                configured_human(c);
+                c.transfer_streaming_replies = true;
+                c.llm_provider = "deepseek".into();
+                c.llm_enable_thinking = false;
+            }
         })
-        .await
-        .unwrap();
-    h.complete(1).await;
-    assert!(h.sink.pcm.lock().unwrap().iter().all(|s| *s == 222));
-    assert!(h.trace.events().iter().any(|e| e.event == "attempt_cancel"));
-    h.close().await;
+        .await;
+        h.voice().await;
+        h.session
+            .input
+            .send(Input::Partial("first request".into()))
+            .await
+            .unwrap();
+        h.until("tts_first_pcm").await;
+        h.end().await;
+        h.until("user_speech_end").await;
+        h.session
+            .input
+            .send(Input::Final {
+                turn: 1,
+                text: "second topic entirely".into(),
+            })
+            .await
+            .unwrap();
+        h.complete(1).await;
+        assert!(h.sink.pcm.lock().unwrap().iter().all(|s| *s == 222));
+        assert!(h.trace.events().iter().any(|e| e.event == "attempt_cancel"));
+        h.close().await;
+    }
 }
 #[tokio::test]
 async fn model_speech_gate_waits_for_final_retains_input_and_can_resume() {
@@ -600,67 +653,77 @@ async fn unsupported_tools_never_execute() {
 
 #[tokio::test]
 async fn confirmed_barge_in_cancels_output_but_short_noise_does_not() {
-    let mut h = Harness::new(false).await;
-    h.voice().await;
-    h.end().await;
-    h.until("user_speech_end").await;
-    h.session
-        .input
-        .send(Input::Final {
-            turn: 1,
-            text: "first request".into(),
-        })
-        .await
-        .unwrap();
-    h.until("audio_first_enqueued").await;
-    h.session.pcm(vec![1000; 320]).await.unwrap();
-    h.session.pcm(vec![0; 320]).await.unwrap();
-    tokio::time::sleep(Duration::from_millis(5)).await;
-    assert!(!h
-        .trace
-        .events()
-        .iter()
-        .any(|e| e.event == "attempt_cancel" && e.data["reason"] == "user_barge_in"));
-    h.voice().await;
-    tokio::time::timeout(Duration::from_secs(2), async {
-        loop {
-            if h.trace
-                .events()
-                .iter()
-                .any(|e| e.event == "attempt_cancel" && e.data["reason"] == "user_barge_in")
-            {
-                break;
+    for streaming in [false, true] {
+        let mut h = Harness::configured(false, |c| {
+            if streaming {
+                configured_human(c);
+                c.transfer_streaming_replies = true;
+                c.llm_provider = "deepseek".into();
+                c.llm_enable_thinking = false;
             }
-            tokio::time::sleep(Duration::from_millis(1)).await;
-        }
-    })
-    .await
-    .unwrap();
-    let captured = h.sink.pcm.lock().unwrap().len();
-    tokio::time::sleep(Duration::from_millis(150)).await;
-    assert_eq!(h.sink.pcm.lock().unwrap().len(), captured);
-    h.end().await;
-    h.session
-        .input
-        .send(Input::Final {
-            turn: 1,
-            text: "stale prior final".into(),
+        })
+        .await;
+        h.voice().await;
+        h.end().await;
+        h.until("user_speech_end").await;
+        h.session
+            .input
+            .send(Input::Final {
+                turn: 1,
+                text: "first request".into(),
+            })
+            .await
+            .unwrap();
+        h.until("audio_first_enqueued").await;
+        h.session.pcm(vec![1000; 320]).await.unwrap();
+        h.session.pcm(vec![0; 320]).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        assert!(!h
+            .trace
+            .events()
+            .iter()
+            .any(|e| e.event == "attempt_cancel" && e.data["reason"] == "user_barge_in"));
+        h.voice().await;
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if h.trace
+                    .events()
+                    .iter()
+                    .any(|e| e.event == "attempt_cancel" && e.data["reason"] == "user_barge_in")
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
         })
         .await
         .unwrap();
-    h.session
-        .input
-        .send(Input::Final {
-            turn: 2,
-            text: "second request".into(),
-        })
-        .await
-        .unwrap();
-    h.complete(2).await;
-    assert!(h.sink.pcm.lock().unwrap()[captured..]
-        .iter()
-        .all(|s| *s == 222));
-    h.close().await;
+        let captured = h.sink.pcm.lock().unwrap().len();
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        assert_eq!(h.sink.pcm.lock().unwrap().len(), captured);
+        h.end().await;
+        h.session
+            .input
+            .send(Input::Final {
+                turn: 1,
+                text: "stale prior final".into(),
+            })
+            .await
+            .unwrap();
+        h.session
+            .input
+            .send(Input::Final {
+                turn: 2,
+                text: "second request".into(),
+            })
+            .await
+            .unwrap();
+        h.complete(2).await;
+        assert!(h.sink.pcm.lock().unwrap()[captured..]
+            .iter()
+            .all(|s| *s == 222));
+        h.close().await;
+    }
 }
 
 #[tokio::test]
@@ -4295,50 +4358,65 @@ async fn human_transfer_suppresses_model_preamble_drains_cue_and_requires_no_sec
 }
 #[tokio::test]
 async fn interruption_during_connection_cue_never_requests_a_bridge() {
-    let mut h = Harness::configured(true, configured_human).await;
-    h.session
-        .input
-        .send(Input::Text("human request".into()))
-        .await
-        .unwrap();
-    h.until("tts_request_start").await;
-    h.voice().await;
-    h.end().await;
-    h.session
-        .input
-        .send(Input::Final {
-            turn: 2,
-            text: "second request".into(),
+    for streaming in [false, true] {
+        let mut h = Harness::configured(true, |c| {
+            configured_human(c);
+            c.transfer_streaming_replies = streaming;
+            c.llm_provider = "deepseek".into();
+            c.llm_enable_thinking = false;
         })
-        .await
-        .unwrap();
-    h.complete(2).await;
-    assert!(!h
-        .trace
-        .events()
-        .iter()
-        .any(|event| event.event == "human_transfer_requested"));
-    h.close().await;
+        .await;
+        h.session
+            .input
+            .send(Input::Text("human request".into()))
+            .await
+            .unwrap();
+        h.until("tts_request_start").await;
+        h.voice().await;
+        h.end().await;
+        h.session
+            .input
+            .send(Input::Final {
+                turn: 2,
+                text: "second request".into(),
+            })
+            .await
+            .unwrap();
+        h.complete(2).await;
+        assert!(!h
+            .trace
+            .events()
+            .iter()
+            .any(|event| event.event == "human_transfer_requested"));
+        h.close().await;
+    }
 }
 #[tokio::test]
 async fn speculative_human_tool_waits_for_final_and_changed_final_prevents_transfer() {
-    assert!(super::text::valid_final("human request please after checking all of my questions about your current account fees and support opening hours today","human request refused after checking all of my questions about your current account fees and support opening hours today"));
-    let mut h = Harness::configured(true, configured_human).await;
-    h.voice().await;
-    h.session
+    for streaming in [false, true] {
+        assert!(super::text::valid_final("human request please after checking all of my questions about your current account fees and support opening hours today","human request refused after checking all of my questions about your current account fees and support opening hours today"));
+        let mut h = Harness::configured(true, |c| {
+            configured_human(c);
+            c.transfer_streaming_replies = streaming;
+            c.llm_provider = "deepseek".into();
+            c.llm_enable_thinking = false;
+        })
+        .await;
+        h.voice().await;
+        h.session
         .input
         .send(Input::Partial("human request please after checking all of my questions about your current account fees and support opening hours today".into()))
         .await
         .unwrap();
-    h.until("speculation_start").await;
-    tokio::time::sleep(Duration::from_millis(40)).await;
-    assert!(!h
-        .trace
-        .events()
-        .iter()
-        .any(|event| event.event == "human_transfer_requested"));
-    h.end().await;
-    h.session
+        h.until("speculation_start").await;
+        tokio::time::sleep(Duration::from_millis(40)).await;
+        assert!(!h
+            .trace
+            .events()
+            .iter()
+            .any(|event| event.event == "human_transfer_requested"));
+        h.end().await;
+        h.session
         .input
         .send(Input::Final {
             turn: 1,
@@ -4346,19 +4424,20 @@ async fn speculative_human_tool_waits_for_final_and_changed_final_prevents_trans
         })
         .await
         .unwrap();
-    h.complete(1).await;
-    assert!(!h
-        .trace
-        .events()
-        .iter()
-        .any(|event| event.event == "human_transfer_requested"));
-    assert!(h
-        .trace
-        .events()
-        .iter()
-        .any(|event| event.event == "attempt_cancel"
-            && event.data["reason"] == "final_transcript_changed"));
-    h.close().await;
+        h.complete(1).await;
+        assert!(!h
+            .trace
+            .events()
+            .iter()
+            .any(|event| event.event == "human_transfer_requested"));
+        assert!(h
+            .trace
+            .events()
+            .iter()
+            .any(|event| event.event == "attempt_cancel"
+                && event.data["reason"] == "final_transcript_changed"));
+        h.close().await;
+    }
 }
 #[tokio::test]
 async fn caller_interruption_cancels_pending_sdk_dial_and_retains_cleanup_acknowledgement() {
@@ -4416,81 +4495,96 @@ async fn caller_interruption_cancels_pending_sdk_dial_and_retains_cleanup_acknow
 }
 #[tokio::test]
 async fn late_answered_connection_is_removed_after_its_caller_turn_is_interrupted() {
-    let mut h = Harness::configured(true, configured_human).await;
-    h.session
-        .input
-        .send(Input::Text("human request".into()))
-        .await
-        .unwrap();
-    let (_, reply, cleanup) = transfer_request(&mut h).await;
-    let (client, fake, server) = super::transfer::tests::setup().await;
-    let connection = client
-        .connect_notified("room-a", "session-a", None, cleanup)
-        .await
-        .unwrap();
-    h.voice().await;
-    h.until("human_transfer_cancelled").await;
-    assert!(reply.send(Ok(connection)).is_err());
-    assert!(client.drain_cleanup().await);
-    h.until("human_transfer_cleanup").await;
-    h.end().await;
-    h.session
-        .input
-        .send(Input::Final {
-            turn: 2,
-            text: "second request".into(),
+    for streaming in [false, true] {
+        let mut h = Harness::configured(true, |c| {
+            configured_human(c);
+            c.transfer_streaming_replies = streaming;
+            c.llm_provider = "deepseek".into();
+            c.llm_enable_thinking = false;
         })
-        .await
-        .unwrap();
-    h.complete(2).await;
-    assert_eq!(fake.removed.lock().unwrap().len(), 1);
-    assert!(
-        !h.trace
+        .await;
+        h.session
+            .input
+            .send(Input::Text("human request".into()))
+            .await
+            .unwrap();
+        let (_, reply, cleanup) = transfer_request(&mut h).await;
+        let (client, fake, server) = super::transfer::tests::setup().await;
+        let connection = client
+            .connect_notified("room-a", "session-a", None, cleanup)
+            .await
+            .unwrap();
+        h.voice().await;
+        h.until("human_transfer_cancelled").await;
+        assert!(reply.send(Ok(connection)).is_err());
+        assert!(client.drain_cleanup().await);
+        h.until("human_transfer_cleanup").await;
+        h.end().await;
+        h.session
+            .input
+            .send(Input::Final {
+                turn: 2,
+                text: "second request".into(),
+            })
+            .await
+            .unwrap();
+        h.complete(2).await;
+        assert_eq!(fake.removed.lock().unwrap().len(), 1);
+        assert!(!h
+            .trace
             .events()
             .iter()
             .any(|event| event.event == "human_transfer_result"
-                && event.data["status"] == "connected")
-    );
-    h.close().await;
-    server.abort();
+                && event.data["status"] == "connected"));
+        h.close().await;
+        server.abort();
+    }
 }
 #[tokio::test]
 async fn unchanged_speculative_human_request_reuses_its_model_plan_after_final() {
-    let mut h = Harness::configured(true, configured_human).await;
-    h.voice().await;
-    h.session
-        .input
-        .send(Input::Partial("human request please".into()))
-        .await
-        .unwrap();
-    h.until("speculation_start").await;
-    tokio::time::sleep(Duration::from_millis(40)).await;
-    assert!(h.sink.pcm.lock().unwrap().is_empty());
-    h.end().await;
-    h.session
-        .input
-        .send(Input::Final {
-            turn: 1,
-            text: "Human request please.".into(),
+    for streaming in [false, true] {
+        let mut h = Harness::configured(true, |c| {
+            configured_human(c);
+            c.transfer_streaming_replies = streaming;
+            c.llm_provider = "deepseek".into();
+            c.llm_enable_thinking = false;
         })
-        .await
-        .unwrap();
-    let (_, reply, cleanup) = transfer_request(&mut h).await;
-    assert_eq!(
-        h.fixture
-            .requests
-            .lock()
-            .unwrap()
-            .iter()
-            .filter(|request| request["messages"].is_array())
-            .count(),
-        1
-    );
-    let _ = cleanup.send(true);
-    let _ = reply.send(Err(json!({"status":"failed","cleanup_confirmed":true})));
-    h.until("human_transfer_result").await;
-    h.complete(1).await;
-    h.close().await;
+        .await;
+        h.voice().await;
+        h.session
+            .input
+            .send(Input::Partial("human request please".into()))
+            .await
+            .unwrap();
+        h.until("speculation_start").await;
+        tokio::time::sleep(Duration::from_millis(40)).await;
+        assert!(h.sink.pcm.lock().unwrap().is_empty());
+        h.end().await;
+        h.session
+            .input
+            .send(Input::Final {
+                turn: 1,
+                text: "Human request please.".into(),
+            })
+            .await
+            .unwrap();
+        let (_, reply, cleanup) = transfer_request(&mut h).await;
+        assert_eq!(
+            h.fixture
+                .requests
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|request| request["messages"].is_array())
+                .count(),
+            if streaming { 2 } else { 1 }
+        );
+        let _ = cleanup.send(true);
+        let _ = reply.send(Err(json!({"status":"failed","cleanup_confirmed":true})));
+        h.until("human_transfer_result").await;
+        h.complete(1).await;
+        h.close().await;
+    }
 }
 #[tokio::test]
 async fn ordinary_speech_with_configured_transfer_is_retained_when_no_transfer_is_selected() {
