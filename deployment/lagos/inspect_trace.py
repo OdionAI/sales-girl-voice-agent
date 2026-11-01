@@ -38,17 +38,23 @@ if job == "RECENT":
             continue
         counts = collections.Counter()
         errors = []
+        timings = []
+        timing_names = {"user_audio_end_candidate", "user_speech_start", "user_speech_end", "stt_final", "llm_request_start", "llm_first_token", "llm_text_released", "tts_request_start", "tts_first_pcm", "tts_request_complete", "audio_first_enqueued", "attempt_cancel", "speculation_start", "speculation_authorized", "turn_complete", "engagement_spoken", "speech_gate_changed", "llm_provider_request_complete"}
+        timing_fields = {"reason", "provider_ttft_ms", "duration_ms", "audio_seconds", "bytes", "chunks", "text_chars", "enabled", "request_id"}
         with path.open() as stream:
             for line in stream:
                 try: item = json.loads(line)
                 except ValueError: continue
                 event = item.get("event", "")
                 counts[event] += 1
+                if event in timing_names:
+                    data = item.get("data", {})
+                    timings.append({key: item[key] for key in ("event", "at_us", "turn", "attempt") if key in item} | {"data": {key: value for key, value in data.items() if key in timing_fields}})
                 if event in {"error", "engagement_failed", "tts_error", "session_failed"}:
                     message = str(item.get("data", {}).get("error", ""))
                     message = re.sub(r"https?://[^\s]+", "[endpoint]", message)
                     errors.append({"event": event, "error": message[:240]})
-        print(json.dumps({"job_id": path.stem, "modified": path.stat().st_mtime, "counts": dict(counts), "errors": errors}))
+        print(json.dumps({"job_id": path.stem, "modified": path.stat().st_mtime, "counts": dict(counts), "errors": errors, "timings": timings[-300:]}))
     raise SystemExit(0)
 if not re.fullmatch(r"AJ_[A-Za-z0-9_-]{6,80}", job):
     raise SystemExit("Invalid diagnostic job ID")
