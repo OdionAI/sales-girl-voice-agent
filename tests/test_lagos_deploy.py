@@ -72,15 +72,17 @@ class LagosReleaseTests(unittest.TestCase):
             previous = {'Id': 'old-container', 'Image': 'old-image',
                         'Config': {'Env': base_env}, 'Mounts': [{'Source': '/data'}]}
             current = {**previous, 'Id': 'new-container', 'Image': 'new-image',
-                       'Config': {'Env': list(expected_env)}}
+                       'Config': {'Env': list(expected_env) + ['IMAGE_DEFAULT=from-image']}}
             if drift:
-                current['Config']['Env'] = list(expected_env) + ['UNEXPECTED=change']
+                current['Config']['Env'].append('UNEXPECTED=change')
             with patch.object(release, 'RELEASE_ROOT', root), \
                  patch.object(release, 'inspect_voice', return_value=(previous, [root / 'compose.yml'])), \
                  patch.object(release, 'run') as run, \
                  patch.object(release, 'native_admission_updates', return_value={}), \
                  patch.object(release, 'wait_healthy', side_effect=[current, previous]), \
-                 patch.object(release.subprocess, 'check_output', return_value='new-image\n'):
+                 patch.object(release.subprocess, 'check_output', side_effect=lambda args, **kw:
+                              json.dumps(['IMAGE_DEFAULT=from-image'])
+                              if args[-1] == '{{json .Config.Env}}' else 'new-image\n'):
                 if drift:
                     with self.assertRaisesRegex(RuntimeError, 'environment or mounts'):
                         release.deploy(target, revision, enabled, AGENT_ID,
