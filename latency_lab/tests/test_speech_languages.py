@@ -58,6 +58,15 @@ class SpeechLanguageTests(unittest.IsolatedAsyncioTestCase):
                     self.assertIsInstance(pipeline.stt, SBPNClient)
                     self.assertIn(f"CALL LANGUAGE: {profile['name']} ({code})", pipeline.system_prompt)
                     self.assertEqual(pipeline.opening_greeting_text(), profile["opening"])
+                    if code == "yo":
+                        pipeline.agent_context = AgentRuntimeContext(
+                            name="Baloko", tts_language_hint="Yoruba",
+                            instructions="SPOKEN_OPENING: Ẹ káàbọ̀ sí MoMo PSB Helpdesk. Orúkọ mi ni Baloko.",
+                        )
+                        self.assertEqual(
+                            pipeline.opening_greeting_text(),
+                            "Ẹ káàbọ̀ sí MoMo PSB Helpdesk. Orúkọ mi ni Baloko.",
+                        )
                     pipeline.stt.append = AsyncMock()
                     pipeline.stt.recover = AsyncMock()
                     await pipeline.audio(b"\0\0" * 16000)
