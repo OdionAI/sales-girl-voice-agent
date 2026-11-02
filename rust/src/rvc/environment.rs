@@ -289,7 +289,7 @@ pub fn from_lookup(get: impl Fn(&str) -> Option<String>) -> Result<OperatorConfi
     Ok(config)
 }
 fn ids(raw: &str) -> Vec<String> {
-    raw.split(',')
+    raw.split(|character: char| character == ',' || character.is_whitespace())
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(str::to_string)
@@ -349,6 +349,46 @@ mod tests {
         .into_iter()
         .map(|(k, v)| (k.into(), v.into()))
         .collect()
+    }
+    #[test]
+    fn production_space_delimited_stt_scope_keeps_balogun_qwen_enabled() {
+        let mut env = fixture();
+        let endpoint = "https://qwen.example.test/v1/chat/completions";
+        let balogun = super::super::number_capture::BALOGUN_AGENT_ID;
+        let compact = balogun.replace('-', "");
+        env.insert("RVC_LAB_STT_CHAT_URL".into(), endpoint.into());
+        env.insert("RVC_LAB_STT_CHAT_MODEL".into(), "Qwen3-ASR".into());
+        env.insert(
+            "RVC_LAB_STT_CHAT_SCOPE".into(),
+            format!("{balogun} {compact} existing-agent,existing-business"),
+        );
+        env.insert(
+            "RVC_LAB_BALOGUN_NUMBER_CAPTURE_ENABLED".into(),
+            "true".into(),
+        );
+
+        let mut config = from_lookup(|key| env.get(key).cloned()).unwrap().voice;
+        assert_eq!(
+            config.stt_chat_scope,
+            vec![
+                balogun.to_string(),
+                compact,
+                "existing-agent".into(),
+                "existing-business".into()
+            ]
+        );
+        config.tts_language = "Yoruba".into();
+        config.agent_context = super::super::profiles::AgentContext {
+            loaded: true,
+            agent_id: balogun.into(),
+            tts_language_hint: "Yoruba".into(),
+            ..Default::default()
+        };
+
+        super::super::profiles::apply_stt_scope(&mut config);
+
+        assert_eq!(config.stt_chat_url, endpoint);
+        assert!(super::super::number_capture::enabled(&config));
     }
     #[test]
     fn existing_deployment_services_credentials_and_flags_survive() {
