@@ -89,3 +89,8 @@ required-features = ["rvc"]
 name = "rvc-transfer-review"
 path = "src/bin/rvc_transfer_review.rs"
 required-features = ["rvc"]
+
+[[bin]]
+name = "rvc-dual-asr-review"
+path = "src/bin/rvc_dual_asr_review.rs"
+required-features = ["rvc", "local-call"]

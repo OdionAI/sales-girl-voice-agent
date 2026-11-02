@@ -134,6 +134,10 @@ enum Internal {
         owner: u64,
         result: Result<super::transfer::Connection, Value>,
     },
+    ParallelNumberTranscript {
+        turn: u64,
+        result: Result<String, String>,
+    },
     ReliableEvent {
         body: Value,
         receipt: oneshot::Sender<Result<(), String>>,
@@ -175,6 +179,11 @@ enum Internal {
         query: String,
         result: super::platform::KnowledgeResult,
         request_context: Option<super::actions::RequestContext>,
+    },
+    SecondaryReadReady {
+        attempt: u64,
+        call: super::actions::Call,
+        result: Value,
     },
     FinalAfterGrace {
         turn: u64,
@@ -237,6 +246,9 @@ struct Attempt {
     transfer_offered: bool,
     transfer_call: Option<super::actions::Call>,
     knowledge_offered: bool,
+    secondary_read_offered: bool,
+    secondary_proposal_offered: bool,
+    waiting_secondary: bool,
     directory_tools: Vec<String>,
     was_speculative: bool,
     audible_prefix: Option<String>,
@@ -309,8 +321,15 @@ pub struct Session {
     pub input: mpsc::Sender<Input>,
     pub usage: super::usage::Collector,
     store: Option<Arc<super::conversation::Store>>,
+    #[cfg(feature = "local-call")]
+    secondary_review: super::secondary_asr::Cache,
 }
 impl Session {
+    /// Explicit local review only. Never sent over the room data channel.
+    #[cfg(feature = "local-call")]
+    pub fn secondary_review_reference(&self) -> Value {
+        self.secondary_review.reference()
+    }
     pub async fn pcm(&self, pcm: Vec<i16>) -> Result<(), String> {
         if pcm.is_empty() || pcm.len() > 16000 {
             return Err("invalid microphone frame".into());
@@ -361,6 +380,12 @@ struct Coordinator {
     speech_ms: f64,
     silence_ms: f64,
     pcm: Vec<i16>,
+    secondary_recorder: super::secondary_asr::Recorder,
+    secondary_cache: super::secondary_asr::Cache,
+    secondary_tasks: Vec<JoinHandle<()>>,
+    missing_sbpn_turn: Option<u64>,
+    secondary_number_final: Option<(u64, String)>,
+    number_proposal_rounds: usize,
     preconfirm: Option<String>,
     flush_revision: u64,
     flushed_turn: Option<u64>,
@@ -435,8 +460,12 @@ pub fn start_with_services(
     with_asr: bool,
     services: Option<super::platform::Services>,
 ) -> (Session, mpsc::Receiver<Output>, JoinHandle<()>) {
+    let secondary_cache = super::secondary_asr::Cache::default();
     let mut scoped = (*c).clone();
     super::profiles::apply_stt_scope(&mut scoped);
+    if scoped.agent_context.agent_id == super::number_capture::BALOGUN_AGENT_ID {
+        trace.emit("parallel_qwen_asr_configured",0,0,json!({"enabled":super::number_capture::enabled(&scoped),"feature_enabled":scoped.balogun_number_capture_enabled,"endpoint_configured":!scoped.stt_chat_url.is_empty(),"window_end_silence_ms":1000,"window_max_seconds":30}));
+    }
     let c = Arc::new(scoped);
     let (input, mut rx) = mpsc::channel(64);
     let (output, out) = mpsc::channel(128);
@@ -585,6 +614,12 @@ pub fn start_with_services(
         speech_ms: 0.0,
         silence_ms: 0.0,
         pcm: Vec::new(),
+        secondary_recorder: super::secondary_asr::Recorder::default(),
+        secondary_cache: secondary_cache.clone(),
+        secondary_tasks: Vec::new(),
+        missing_sbpn_turn: None,
+        secondary_number_final: None,
+        number_proposal_rounds: 0,
         preconfirm: None,
         flush_revision: 0,
         flushed_turn: None,
@@ -679,6 +714,8 @@ pub fn start_with_services(
             input,
             usage,
             store,
+            #[cfg(feature = "local-call")]
+            secondary_review: secondary_cache,
         },
         out,
         task,
@@ -686,6 +723,9 @@ pub fn start_with_services(
 }
 impl Drop for Coordinator {
     fn drop(&mut self) {
+        for task in &self.secondary_tasks {
+            task.abort();
+        }
         if let Some(demo) = &self.demo {
             demo.close();
         }
@@ -716,6 +756,29 @@ impl Drop for Coordinator {
     }
 }
 impl Coordinator {
+    fn model_primary(&self, turn: u64, text: &str) -> String {
+        if super::number_capture::enabled(&self.c) {
+            super::python_json_unicode(
+                &json!({"primary_transcript":{"source":if self.secondary_cache.owns(turn){"SBPN"}else{"caller_text"},"text":text}}),
+            )
+        } else {
+            text.into()
+        }
+    }
+    fn transcribe_secondary(&mut self, audio: super::secondary_asr::Audio) {
+        self.secondary_cache.recording(audio.meta.clone());
+        self.trace.emit("parallel_qwen_asr_submitted",audio.meta.last_turn,audio.meta.id,json!({"samples":audio.pcm.len(),"first_turn":audio.meta.first_turn,"last_turn":audio.meta.last_turn,"hints_active":true}));
+        let p = self.p.clone();
+        let events = self.events.clone();
+        let id = audio.meta.id;
+        self.secondary_tasks.retain(|t| !t.is_finished());
+        self.secondary_tasks.push(tokio::spawn(async move {
+            let result = p.parallel_number_transcribe(&audio.pcm).await;
+            let _ = events
+                .send(Internal::ParallelNumberTranscript { turn: id, result })
+                .await;
+        }));
+    }
     fn device_can_start(&self) -> bool {
         self.transfer_pending.is_none()
             && !self.transfer_unknown
@@ -1228,6 +1291,10 @@ impl Coordinator {
         }));
     }
     fn maybe_idle_close(&mut self) {
+        if let Some(audio) = self.secondary_recorder.due() {
+            self.transcribe_secondary(audio);
+        }
+
         if !self.c.inactivity_pilot_enabled
             || self.call_ending
             || self
@@ -1449,6 +1516,9 @@ impl Coordinator {
         self.state = State::Idle;
     }
     async fn shutdown(&mut self) {
+        for task in &self.secondary_tasks {
+            task.abort();
+        }
         if let Some(flow) = &self.passkey {
             flow.close();
         }
@@ -1502,6 +1572,18 @@ impl Coordinator {
         // Loudness alone is not enough when RNNoise reports a speech
         // probability: loud non-speech (TV/music/room noise) must not count.
         let speaking = counts_as_speech(level, self.noise_filter.last_speech_prob(), &self.c);
+        if super::number_capture::enabled(&self.c) {
+            let owner =
+                matches!(self.state, State::Speaking | State::Speculating).then_some(self.turn);
+            let (meta, audio) = self.secondary_recorder.append(&pcm, speaking, owner);
+            if let Some(meta) = meta {
+                self.trace.emit(if meta.first_turn==meta.last_turn {"parallel_qwen_audio_window_started"}else{"parallel_qwen_audio_window_extended"},meta.last_turn,meta.id,json!({"first_turn":meta.first_turn,"last_turn":meta.last_turn,"samples":meta.samples}));
+                self.secondary_cache.recording(meta);
+            }
+            if let Some(audio) = audio {
+                self.transcribe_secondary(audio);
+            }
+        }
         // Keep first speech-candidate frames and utterance-ending silence, but
         // never grow the provider's cumulative request with idle/muted audio.
         if let Some(asr) = &self.asr {
@@ -1564,6 +1646,8 @@ impl Coordinator {
                     self.next_idle = tokio::time::Instant::now()
                         + Duration::from_secs_f64(self.c.engagement_idle_seconds);
                     self.turn += 1;
+                    self.secondary_number_final = None;
+                    self.number_proposal_rounds = 0;
                     self.idle_close_at = None;
                     self.flush_suspended = false;
                     self.last_partial.clear();
@@ -1647,7 +1731,8 @@ impl Coordinator {
                     bank.utterance(&self.pcm);
                 }
                 if let Some(asr) = &self.asr {
-                    let _ = asr.commit(self.turn, std::mem::take(&mut self.pcm)).await;
+                    let committed = std::mem::take(&mut self.pcm);
+                    let _ = asr.commit(self.turn, committed).await;
                 }
                 let (tx, turn) = (self.events.clone(), self.turn);
                 let timeout = Duration::from_secs_f64(
@@ -1774,6 +1859,23 @@ impl Coordinator {
             self.trace.emit("stt_final_rejected", turn, 0, json!({}));
             return;
         }
+        if super::number_capture::enabled(&self.c)
+            && self.secondary_cache.pending(turn)
+            && (super::secondary_asr::number_bearing(&text) || self.missing_sbpn_turn == Some(turn))
+        {
+            if !text.is_empty() && self.missing_sbpn_turn != Some(turn) {
+                self.memory
+                    .user(turn, &self.model_primary(turn, &text), !self.speech_enabled);
+            }
+            self.secondary_number_final = Some((turn, text));
+            self.trace.emit(
+                "secondary_number_reply_waiting",
+                turn,
+                0,
+                json!({"reason":"completed_longer_qwen_window_required"}),
+            );
+            return;
+        }
         if text.is_empty() {
             // An empty authoritative final (a noise blip / too-short clip) must
             // return to listening immediately instead of sitting in
@@ -1791,20 +1893,30 @@ impl Coordinator {
         if let Some(t) = self.stable.take() {
             t.abort();
         }
-        self.invalidate_background();
-        self.idle_checks = 0;
         self.new_messages.push(text.clone());
         if self.new_messages.len() > 8 {
             self.new_messages.remove(0);
         }
         self.final_text = text.clone();
         self.idle_close_at = None;
-        self.memory.user(turn, &text, !self.speech_enabled);
+        self.memory
+            .user(turn, &self.model_primary(turn, &text), !self.speech_enabled);
         if let Some(store) = &self.store {
-            store.message("user", &text, format!("turn-{turn}"), false);
+            if self.missing_sbpn_turn != Some(turn) {
+                store.message("user", &text, format!("turn-{turn}"), false);
+            }
         }
-        self.trace.emit("stt_final", turn, 0, json!({"text":text}));
-        let _ = self.output.send(Output::Final(text.clone())).await;
+        if self.missing_sbpn_turn != Some(turn) {
+            self.trace.emit("stt_final", turn, 0, json!({"text":text}));
+            let _ = self.output.send(Output::Final(text.clone())).await;
+        } else {
+            self.trace.emit(
+                "stt_final_unavailable",
+                turn,
+                0,
+                json!({"secondary_numeric_path":true}),
+            );
+        }
         let grace = super::profiles::reply_grace_seconds(&self.c);
         if grace > 0.0 {
             self.transition(State::Releasing, "caller_final_retained_pending_response");
@@ -1860,6 +1972,8 @@ impl Coordinator {
             task.abort();
         }
         self.turn += 1;
+        self.secondary_number_final = None;
+        self.number_proposal_rounds = 0;
         self.idle_close_at = None;
         self.flush_suspended = false;
         self.final_history = self.memory.context_with_reasoning(
@@ -1942,6 +2056,14 @@ impl Coordinator {
     }
     async fn unavailable(&mut self, turn: u64) {
         if self.turn == turn && self.state == State::AwaitingFinal {
+            if super::number_capture::enabled(&self.c)
+                && self.secondary_cache.owns(turn)
+                && self.missing_sbpn_turn != Some(turn)
+            {
+                self.missing_sbpn_turn = Some(turn);
+                Box::pin(self.final_text(turn,"[Primary SBPN transcription unavailable for this caller-owned utterance. Use secondary data only for digits; otherwise ask for repetition.]".into())).await;
+                return;
+            }
             self.cancel("final_unavailable").await;
             if let Some(asr) = &self.asr {
                 asr.recover().await;
@@ -2271,8 +2393,14 @@ impl Coordinator {
         if let Some(bank) = &self.banking {
             system.push_str(&bank.prompt());
         }
+        if super::number_capture::enabled(&self.c) {
+            system.push_str(super::number_capture::PROMPT_RULES);
+        }
         if super::transfer::enabled(&self.c.agent_context) {
             system.push_str(super::transfer::RULES);
+            if super::number_capture::enabled(&self.c) {
+                system.push_str(super::number_capture::YORUBA_TRANSFER_RULES);
+            }
         }
         if self.directory.is_some() {
             system.push_str(super::directory::data()["rules"].as_str().unwrap_or(""));
@@ -2320,7 +2448,26 @@ impl Coordinator {
             messages.push(json!({"role":"user","content":format!("Current application task state (reference, not caller confirmation):\n{}",super::python_json(&json!({"quiet_preference":if self.speech_enabled{"none"}else{"until_user"},"speech_enabled":self.speech_enabled,"awaiting_device_approval":self.passkey.as_ref().is_some_and(|flow|flow.busy()),"prepared_preview_not_executed":self.banking.as_ref().and_then(|bank|bank.prepared()),"pending_action":self.pending_action.as_ref().map(|p|json!({"name":p.call.name,"details":p.call.arguments,"question":p.question})),"operation":self.operation.as_ref().map(|op|json!({"name":op.call.name,"pending":op.result.is_none(),"result":op.result}))})))}));
         }
         if !tool_result_followup {
-            messages.push(json!({"role":"user","content":text}));
+            if super::number_capture::enabled(&self.c) {
+                let ready = self
+                    .secondary_cache
+                    .reference()
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .filter(|r| r["status"] == "complete")
+                    .count();
+                if ready > 0 {
+                    self.trace.emit(
+                        "parallel_qwen_asr_attached_to_llm",
+                        self.turn,
+                        0,
+                        json!({"windows":ready,"scope":"user_reference_data"}),
+                    );
+                }
+                messages.push(json!({"role":"user","content":format!("Application secondary-ASR availability (reference only, not caller speech or confirmation): {}",self.secondary_cache.reference())}));
+            }
+            messages.push(json!({"role":"user","content":self.model_primary(self.turn,&text)}));
         }
         let mut tools = if self.c.engagement_enabled {
             vec![self.c.speech_gate_tool.clone()]
@@ -2425,6 +2572,24 @@ impl Coordinator {
                 messages[0]["content"] = json!(prompt);
             }
         }
+        let secondary_read_offered = super::number_capture::enabled(&self.c)
+            && direct.is_none()
+            && !followup
+            && self.speech_enabled;
+        if secondary_read_offered {
+            tools.push(super::secondary_asr::definition());
+        }
+        let secondary_proposal_offered =
+            super::number_capture::enabled(&self.c) && direct.is_none() && self.speech_enabled;
+        if secondary_proposal_offered {
+            tools.push(super::secondary_asr::proposal_definition());
+        }
+        if self.missing_sbpn_turn == Some(self.turn) {
+            tools.retain(|t| {
+                t["function"]["name"] == super::secondary_asr::READ_TOOL
+                    || t["function"]["name"] == super::secondary_asr::PROPOSE_TOOL
+            });
+        }
         let (tx, auth) = watch::channel(authorized);
         let (p, playout, events, turn, speech) = (
             self.p.clone(),
@@ -2493,6 +2658,9 @@ impl Coordinator {
             transfer_offered,
             transfer_call: None,
             knowledge_offered,
+            secondary_read_offered,
+            secondary_proposal_offered,
+            waiting_secondary: false,
             directory_tools,
             was_speculative: !authorized,
             audible_prefix: None,
@@ -2537,6 +2705,132 @@ impl Coordinator {
             return;
         };
         let request_context = a.model_context.clone();
+        if self.missing_sbpn_turn == Some(self.turn)
+            && name != super::secondary_asr::READ_TOOL
+            && name != super::secondary_asr::PROPOSE_TOOL
+        {
+            self.fail("primary ASR unavailable; only secondary transcript read is allowed".into())
+                .await;
+            return;
+        }
+        if name == super::secondary_asr::PROPOSE_TOOL && a.secondary_proposal_offered {
+            let owner = a.owner;
+            let attempt = a.id;
+            let candidate = args["digits"].as_str().unwrap_or("");
+            let valid = args.as_object().is_some_and(|o| o.len() == 1)
+                && candidate.bytes().all(|b| b.is_ascii_digit())
+                && (7..=15).contains(&candidate.len());
+            if valid && self.secondary_cache.pending(owner) {
+                let call = super::actions::Call {
+                    id: call_id,
+                    name,
+                    arguments: args,
+                    context: request_context,
+                };
+                let cache = self.secondary_cache.clone();
+                let events = self.events.clone();
+                a.waiting_secondary = true;
+                a.task = Some(tokio::spawn(async move {
+                    let result = cache.read(owner).await;
+                    let _ = events
+                        .send(Internal::SecondaryReadReady {
+                            attempt,
+                            call,
+                            result,
+                        })
+                        .await;
+                }));
+                self.transition(State::Releasing, "secondary_number_context_pending");
+                return;
+            }
+            let observed = if self.secondary_cache.owns(owner) {
+                self.secondary_cache.observed_digits(owner)
+            } else {
+                super::secondary_asr::digit_runs(&self.final_text)
+            };
+            let grounded = valid && observed.iter().any(|n| n == candidate);
+            let candidate = candidate.to_string();
+            let call = super::actions::Call {
+                id: call_id,
+                name,
+                arguments: args,
+                context: request_context,
+            };
+            self.number_proposal_rounds += 1;
+            if !grounded {
+                self.trace.emit(
+                    "secondary_number_candidate_rejected",
+                    owner,
+                    attempt,
+                    json!({"candidate_length":candidate.len(),"grounded":false}),
+                );
+                self.memory.tool(owner,call.request_message(),json!({"role":"tool","tool_call_id":call.id,"content":super::python_json_unicode(&json!({"status":"candidate_does_not_match_completed_qwen","observed_digit_runs":observed}))}));
+                if self.number_proposal_rounds >= 2 {
+                    self.begin_direct(
+                        self.final_text.clone(),
+                        true,
+                        Some(DirectSpeech::Verbatim(
+                            "Jọ̀wọ́, tún díjíìtì náà sọ ní èdè Gẹ̀ẹ́sì, kọ̀ọ̀kan lọ́tọ̀.".into(),
+                        )),
+                    )
+                    .await;
+                } else {
+                    self.tool_result_followup = true;
+                    self.begin(self.final_text.clone(), true, None).await;
+                }
+                return;
+            }
+            self.memory.tool(owner,call.request_message(),json!({"role":"tool","tool_call_id":call.id,"content":super::python_json_unicode(&json!({"status":"awaiting_caller_confirmation","digits":candidate}))}));
+            self.trace.emit(
+                "secondary_number_candidate_selected",
+                owner,
+                attempt,
+                json!({"candidate_length":candidate.len(),"grounded":true}),
+            );
+            let readback = super::number_capture::readback(&candidate).unwrap();
+            self.begin_direct(
+                self.final_text.clone(),
+                true,
+                Some(DirectSpeech::Verbatim(readback)),
+            )
+            .await;
+            return;
+        }
+        if name == super::secondary_asr::READ_TOOL
+            && a.secondary_read_offered
+            && args.as_object().is_some_and(|o| o.is_empty())
+        {
+            let call = super::actions::Call {
+                id: call_id,
+                name,
+                arguments: args,
+                context: request_context,
+            };
+            let cache = self.secondary_cache.clone();
+            let events = self.events.clone();
+            let attempt = a.id;
+            let owner = a.owner;
+            a.waiting_secondary = true;
+            a.task = Some(tokio::spawn(async move {
+                let result = cache.read(owner).await;
+                let _ = events
+                    .send(Internal::SecondaryReadReady {
+                        attempt,
+                        call,
+                        result,
+                    })
+                    .await;
+            }));
+            self.trace.emit(
+                "secondary_number_transcript_read",
+                owner,
+                attempt,
+                json!({}),
+            );
+            self.transition(State::Releasing, "secondary_number_transcript_pending");
+            return;
+        }
+
         if a.directory_tools.contains(&name) && self.speech_enabled {
             let call = super::actions::Call {
                 context: request_context.clone(),
@@ -2695,12 +2989,23 @@ impl Coordinator {
                 arguments: json!({"reason_summary":reason}),
             };
             self.pending_action = None;
-            self.begin_facts(
-                self.final_text.clone(),
-                true,
-                Some("All right, I'll connect you now.".into()),
-            )
-            .await;
+            if super::number_capture::enabled(&self.c) {
+                self.begin_direct(
+                    self.final_text.clone(),
+                    true,
+                    Some(DirectSpeech::Verbatim(
+                        "Ó dáa, màá so yín pọ̀ mọ́ aṣojú báyìí.".into(),
+                    )),
+                )
+                .await;
+            } else {
+                self.begin_facts(
+                    self.final_text.clone(),
+                    true,
+                    Some("All right, I'll connect you now.".into()),
+                )
+                .await;
+            }
             if let Some(attempt) = &mut self.attempt {
                 attempt.transfer_call = Some(call);
             }
@@ -2726,15 +3031,21 @@ impl Coordinator {
             && self.speech_enabled
             && args.as_object().is_some_and(|o| o.is_empty())
         {
-            self.call_ending = true;
-            self.trace
-                .emit("end_call_authorized", a.owner, a.id, json!({}));
-            if a.task.is_none() {
-                let farewell = if a.answer.trim().is_empty() {
+            let owner = a.owner;
+            let attempt_id = a.id;
+            let farewell = if a.task.is_none() {
+                Some(if a.answer.trim().is_empty() {
                     "Thank you for sharing that with me. Take care.".into()
                 } else {
                     a.answer.trim().to_string()
-                };
+                })
+            } else {
+                None
+            };
+            self.call_ending = true;
+            self.trace
+                .emit("end_call_authorized", owner, attempt_id, json!({}));
+            if let Some(farewell) = farewell {
                 self.begin_facts(self.final_text.clone(), true, Some(farewell))
                     .await;
             }
@@ -2910,6 +3221,60 @@ impl Coordinator {
                     }
                 }
             }
+            Internal::ParallelNumberTranscript { turn, result } => {
+                self.trace.emit(
+                    if result.is_ok() {
+                        "parallel_qwen_asr_complete"
+                    } else {
+                        "parallel_qwen_asr_failed"
+                    },
+                    0,
+                    turn,
+                    match &result {
+                        Ok(t) => json!({"characters":t.chars().count()}),
+                        Err(e) => json!({"reason":e}),
+                    },
+                );
+                self.secondary_cache.complete(turn, result);
+                if self
+                    .secondary_number_final
+                    .as_ref()
+                    .is_some_and(|(owner, _)| {
+                        *owner == self.turn && !self.secondary_cache.pending(*owner)
+                    })
+                {
+                    let (owner, text) = self.secondary_number_final.take().unwrap();
+                    self.cancel("secondary_number_context_ready").await;
+                    self.state = State::AwaitingFinal;
+                    self.final_text(owner, text).await;
+                }
+            }
+            Internal::SecondaryReadReady {
+                attempt,
+                call,
+                result,
+            } => {
+                let Some(a) = self
+                    .attempt
+                    .as_mut()
+                    .filter(|a| a.id == attempt && a.owner == self.turn && a.waiting_secondary)
+                else {
+                    return;
+                };
+                a.task = None;
+                a.waiting_secondary = false;
+                if call.name == super::secondary_asr::PROPOSE_TOOL {
+                    a.model_context = call.context.clone();
+                    a.pending_tool = Some((call.id, call.name, call.arguments));
+                    self.apply_tool().await;
+                    return;
+                }
+                let owner = a.owner;
+                self.memory.tool(owner,call.request_message(),json!({"role":"tool","tool_call_id":call.id,"content":super::python_json_unicode(&result)}));
+                self.trace.emit("parallel_qwen_asr_attached_to_llm",owner,attempt,json!({"status":result["status"],"windows":result["windows"].as_array().map_or(0,Vec::len)}));
+                self.tool_result_followup = true;
+                self.begin(self.final_text.clone(), true, None).await;
+            }
             Internal::TransferCleaned { attempt, confirmed } => {
                 let Some(watch) = self
                     .transfer_watcher
@@ -2984,7 +3349,21 @@ impl Coordinator {
                 } else {
                     self.transfer_unknown = receipt["status"] == "unknown";
                     if self.speech_enabled {
-                        self.begin_facts(self.final_text.clone(),true,Some(if self.transfer_unknown{"I couldn't confirm whether that connection completed. I won't try again automatically. I'm still here to help."}else{"I'm sorry, I couldn't connect you just now. I'm still here to help, or you can try the customer care number."}.into())).await;
+                        if super::number_capture::enabled(&self.c) {
+                            let message = if self.transfer_unknown {
+                                "Mi ò lè fi dájú pé ìpè náà so yín pọ̀. Mi ò ní tún gbìyànjú fúnra mi. Mo ṣì wà níbí láti ràn yín lọ́wọ́."
+                            } else {
+                                "Ẹ má bínú, mi ò lè so yín pọ̀ mọ́ aṣojú báyìí. Ṣé mo tún lè ràn yín lọ́wọ́?"
+                            };
+                            self.begin_direct(
+                                self.final_text.clone(),
+                                true,
+                                Some(DirectSpeech::Verbatim(message.into())),
+                            )
+                            .await;
+                        } else {
+                            self.begin_facts(self.final_text.clone(),true,Some(if self.transfer_unknown{"I couldn't confirm whether that connection completed. I won't try again automatically. I'm still here to help."}else{"I'm sorry, I couldn't connect you just now. I'm still here to help, or you can try the customer care number."}.into())).await;
+                        }
                     }
                 }
             }
@@ -3612,6 +3991,7 @@ impl Coordinator {
                                     Some(op.id) == a.waiting_operation
                                         && super::directory::is_tool(&op.call.name)
                                 })))
+                        && !a.waiting_secondary
                         && !a.waiting_device_start
                         && (!a.waiting_demo || a.demo_progress.is_some())
                 }) {

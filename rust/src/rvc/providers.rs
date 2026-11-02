@@ -13,6 +13,8 @@ use std::{
     },
     time::Duration,
 };
+static NUMBER_CAPTURE_REQUESTS: std::sync::LazyLock<Arc<tokio::sync::Semaphore>> =
+    std::sync::LazyLock::new(|| Arc::new(tokio::sync::Semaphore::new(8)));
 use tokio::sync::mpsc;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 #[derive(Clone, Debug)]
@@ -848,6 +850,63 @@ impl Providers {
             &self.config.tts_language,
         ))
     }
+
+    /// Parallel Qwen transcript for each Balogun caller utterance.
+    pub(crate) async fn parallel_number_transcribe(&self, pcm: &[i16]) -> Result<String, String> {
+        if pcm.is_empty() || pcm.len() > (16_000 * 60) {
+            return Err("parallel ASR audio outside limits".into());
+        }
+        let permit = NUMBER_CAPTURE_REQUESTS
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| "parallel Qwen ASR at capacity")?;
+        let c = &self.config;
+        if !super::number_capture::enabled(c) {
+            return Err("Balogun parallel Qwen ASR not configured".into());
+        }
+        let mut messages = vec![];
+        if !c.stt_context.is_empty() {
+            messages.push(json!({"role":"system","content":c.stt_context}));
+        }
+        messages.push(json!({"role":"system","content":"Transcribe the caller's complete utterance verbatim. Preserve all spoken words, every digit and leading zero in order. You may write digits or exact spoken English/Yoruba digit words. In a clear phone-number digit sequence, a spoken letter O or oh can mean zero; write it as 0 only in that context. Do not infer a digit from an isolated O or unrelated word. Do not translate, complete, guess, explain, summarize, omit or add words. If any part is unclear, mark only that part as unclear and preserve the rest."}));
+        messages.push(json!({"role":"user","content":[{"type":"input_audio","input_audio":{"data":STANDARD.encode(wav(pcm)),"format":"wav"}}]}));
+        let timeout = Duration::from_secs_f64(c.stt_batch_timeout_seconds.clamp(1.0, 15.0));
+        let request = async {
+            let response = self
+                .client
+                .post(&c.stt_chat_url)
+                .json(&json!({"model":c.stt_chat_model,"messages":messages,"max_tokens":1024,"temperature":0.0}))
+                .send()
+                .await
+                .map_err(|_| "parallel Qwen ASR connection failed")?
+                .error_for_status()
+                .map_err(|_| "parallel Qwen ASR HTTP error")?;
+            self.usage.stt_submitted(pcm.len() * 2);
+            let payload: Value = response
+                .json()
+                .await
+                .map_err(|_| "parallel Qwen ASR JSON error")?;
+            Ok::<Value, &'static str>(payload)
+        };
+        let payload = tokio::time::timeout(timeout, request)
+            .await
+            .map_err(|_| "parallel Qwen ASR timed out")??;
+        if payload["choices"][0]["finish_reason"] == "length" {
+            return Err("parallel Qwen ASR transcript truncated".into());
+        }
+        let text = super::text::clean_transcript_for_language(
+            payload["choices"][0]["message"]["content"]
+                .as_str()
+                .unwrap_or(""),
+            "Yoruba",
+        );
+        drop(permit);
+        if text.is_empty() || super::text::is_asr_context_echo(&text, &c.stt_context) {
+            return Err("parallel Qwen ASR empty or copied hint context".into());
+        }
+        Ok(text)
+    }
+
     /// A separate request receives the full caller-owned utterance. Its done
     /// event is authoritative only after this explicit final commit; streaming
     /// partials from the speculative socket can never enter this path.

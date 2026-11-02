@@ -29,7 +29,8 @@ BASE_ROUTE = {
 class LagosReleaseTests(unittest.TestCase):
     def exercise_release(self, *, enabled=False, old_value=None, drift=False,
                          reply_grace_ms='0', reply_grace_agent_ids='',
-                         llm_provider='qwen', deepseek_api_key=''):
+                         llm_provider='qwen', deepseek_api_key='',
+                         number_capture_enabled=False):
         with TemporaryDirectory() as directory:
             root = Path(directory)
             revision = 'a' * 40
@@ -51,6 +52,7 @@ class LagosReleaseTests(unittest.TestCase):
             updates = dict(release.LAGOS_ASR_ENV)
             updates.update(release.reply_grace_env(reply_grace_ms, reply_grace_agent_ids))
             updates.update(release.inactivity_pilot_env())
+            updates[release.BALOGUN_NUMBER_CAPTURE_KEY] = str(number_capture_enabled).lower()
             updates['RVC_LAB_LLM_PROVIDER'] = llm_provider
             updates['RVC_LAB_DEEPSEEK_API_KEY'] = deepseek_api_key if llm_provider == 'deepseek' else ''
             if llm_provider == 'deepseek':
@@ -87,7 +89,8 @@ class LagosReleaseTests(unittest.TestCase):
                     with self.assertRaisesRegex(RuntimeError, 'environment or mounts'):
                         release.deploy(target, revision, enabled, AGENT_ID,
                                        reply_grace_ms, reply_grace_agent_ids,
-                                       llm_provider, 'deepseek-flash', 'high', deepseek_api_key)
+                                       llm_provider, 'deepseek-flash', 'high', deepseek_api_key,
+                                       balogun_number_capture_enabled=number_capture_enabled)
                     self.assertFalse((target / 'DEPLOYED').exists())
                     rollback = json.loads((target / 'voice-rollback.json').read_text())
                     rollback_env = {key: previous_env.get(key) for key in updates}
@@ -105,7 +108,8 @@ class LagosReleaseTests(unittest.TestCase):
                 else:
                     release.deploy(target, revision, enabled, AGENT_ID,
                                    reply_grace_ms, reply_grace_agent_ids,
-                                   llm_provider, 'deepseek-flash', 'high', deepseek_api_key)
+                                   llm_provider, 'deepseek-flash', 'high', deepseek_api_key,
+                                   balogun_number_capture_enabled=number_capture_enabled)
                     self.assertTrue((target / 'DEPLOYED').exists())
                 override = json.loads((target / 'voice-ci.json').read_text())['services']['voice']
                 self.assertEqual(override.get('environment', {}), previous_env | updates)
@@ -137,6 +141,8 @@ class LagosReleaseTests(unittest.TestCase):
                 self.assertEqual(
                     set(updates['RVC_LAB_STT_CHAT_SCOPE'].split()),
                     {
+                        '3801e455-224a-4872-b406-95a4db6b8ffa',
+                        '3801e455224a4872b40695a4db6b8ffa',
                         'a0c8cda2-3b46-4ee0-898c-48f9a4d3a444',
                         '00f99439-59d9-42a2-9c3a-db06422ea6cf',
                         'ccc440c5-452d-4690-abc0-61758c11cebd',
@@ -183,6 +189,10 @@ class LagosReleaseTests(unittest.TestCase):
 
     def test_opt_in_updates_existing_flag(self):
         self.exercise_release(enabled=True, old_value='false')
+
+    def test_balogun_number_capture_is_off_by_default_and_explicitly_opt_in(self):
+        self.exercise_release(number_capture_enabled=False)
+        self.exercise_release(number_capture_enabled=True)
 
     def test_agent_scoped_reply_grace_can_be_released(self):
         self.exercise_release(reply_grace_ms='500', reply_grace_agent_ids=AGENT_ID)
