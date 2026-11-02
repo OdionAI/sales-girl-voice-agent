@@ -1252,7 +1252,10 @@ async fn completed_hypothesis_prepares_immediately_but_waits_for_independent_fin
     .await;
     h.until("session_ready").await;
     h.voice().await;
-    h.end().await;
+    // Trigger the optional flush, then observe preparation before queuing
+    // Commit. Queuing all end-silence frames at once instead races the 80 ms
+    // final-handoff grace and can legitimately skip speculation on CI.
+    h.session.pcm(vec![0; 320]).await.unwrap();
     h.until("tts_first_pcm").await;
     assert!(h
         .trace
@@ -1261,6 +1264,8 @@ async fn completed_hypothesis_prepares_immediately_but_waits_for_independent_fin
         .any(|e| e.event == "stt_complete_hypothesis"));
     assert!(!h.trace.events().iter().any(|e| e.event == "stt_final"));
     assert!(h.sink.pcm.lock().unwrap().is_empty());
+    h.end().await;
+    h.until("asr_final_request").await;
     state.final_release.notify_one();
     h.complete(1).await;
     assert!(h
@@ -1282,12 +1287,22 @@ async fn completed_hypothesis_mismatch_never_releases_prepared_wrong_audio() {
     .await;
     h.until("session_ready").await;
     h.voice().await;
-    h.end().await;
+    // Trigger the optional flush, then observe preparation before queuing
+    // Commit. Queuing all end-silence frames at once instead races the 80 ms
+    // final-handoff grace and can legitimately skip speculation on CI.
+    h.session.pcm(vec![0; 320]).await.unwrap();
     h.until("tts_first_pcm").await;
     assert!(h.sink.pcm.lock().unwrap().is_empty());
+    h.end().await;
+    h.until("asr_final_request").await;
     state.final_release.notify_one();
     h.complete(1).await;
-    assert!(h.sink.pcm.lock().unwrap().iter().all(|s| *s == 111));
+    let played = h.sink.pcm.lock().unwrap().clone();
+    assert!(
+        !played.is_empty(),
+        "the corrected final must release its reply"
+    );
+    assert!(played.iter().all(|s| *s == 111));
     assert!(h
         .trace
         .events()

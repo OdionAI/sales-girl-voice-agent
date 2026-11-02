@@ -92,3 +92,21 @@ ordinary speculative replies while Qwen is pending, missing/failed ASR recovery,
 leading-zero grounding, incorrect-candidate rejection and human-transfer
 cancellation. Production remains on its inspected revision until a reviewed
 release through the normal pipeline.
+
+## CI follow-up
+
+The first Linux native run passed 275 tests but failed
+`completed_hypothesis_mismatch_never_releases_prepared_wrong_audio` while
+waiting for speculative TTS. Its trace showed `stt_speculative_flush_timeout`
+and an authoritative ASR final request; no completed hypothesis or model attempt
+had started. The test queued the final commit immediately after starting the
+optional flush, so the production 80 ms final-handoff grace could legitimately
+expire on the runner. The final fixture was intentionally held, so there could
+be no TTS to satisfy the test.
+
+Both completed-hypothesis validation tests now send one silence frame, observe
+prepared TTS, then send the remaining silence and release the independent final.
+This exercises the intended match/mismatch branches without racing optional
+flush cancellation. The mismatch assertion also requires nonempty corrected
+audio. No runtime timeout or safety assertion was relaxed. The separate bounded
+flush-timeout and final-handoff timing tests remain unchanged.
