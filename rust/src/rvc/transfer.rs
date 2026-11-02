@@ -106,13 +106,32 @@ pub(crate) async fn generate_guarded(
     let suppress = directory_routing || events
         .iter()
         .any(|event| matches!(event,LlmEvent::Tool{name,..}if name==TOOL||super::directory::is_tool(name)));
-    p.trace.emit(if directory{"llm_directory_guard_decision"}else{"llm_transfer_guard_decision"},turn,attempt,json!({"suppressed":suppress,"buffered_events":events.len(),"text_buffer_ms":first.map(|started|(started.elapsed().as_secs_f64()*1_000_000.0).round()/1000.0)}));
+    let generated_text = events
+        .iter()
+        .filter_map(|event| match event {
+            LlmEvent::Text(text) => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<String>();
+    let balogun_announcement_without_tool = !suppress
+        && super::number_capture::enabled(&p.config)
+        && super::number_capture::announces_human_transfer(&generated_text);
+    p.trace.emit(if directory{"llm_directory_guard_decision"}else{"llm_transfer_guard_decision"},turn,attempt,json!({"suppressed":suppress||balogun_announcement_without_tool,"buffered_events":events.len(),"text_buffer_ms":first.map(|started|(started.elapsed().as_secs_f64()*1_000_000.0).round()/1000.0),"balogun_transfer_announcement_without_tool":balogun_announcement_without_tool}));
     for event in events {
-        if !suppress || matches!(event, LlmEvent::Tool { .. } | LlmEvent::Context(_)) {
+        if !suppress && !balogun_announcement_without_tool
+            || matches!(event, LlmEvent::Tool { .. } | LlmEvent::Context(_))
+        {
             out.send(event)
                 .await
                 .map_err(|_| "transfer generation cancelled")?;
         }
+    }
+    if balogun_announcement_without_tool {
+        out.send(LlmEvent::Text(
+            "Mi ò tíì pe aṣojú. Mo ṣì wà láti ràn yín lọ́wọ́.".into(),
+        ))
+        .await
+        .map_err(|_| "transfer generation cancelled")?;
     }
     Ok(())
 }
