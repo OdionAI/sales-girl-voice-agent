@@ -3842,7 +3842,11 @@ fn native_llm_payloads_match_unchanged_python_across_provider_modes() {
                 ..Default::default()
             },
         );
-        assert_eq!(actual, case["expected"], "{case}");
+        // The Python parity fixture retains its 180-token default; native
+        // customer replies intentionally use the new 400-token ceiling.
+        let mut expected = case["expected"].clone();
+        expected["max_tokens"] = json!(400);
+        assert_eq!(actual, expected, "{case}");
     }
 }
 #[tokio::test]
