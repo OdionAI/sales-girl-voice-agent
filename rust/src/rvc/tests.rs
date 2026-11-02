@@ -611,7 +611,7 @@ async fn speculative_tts_is_held_until_owned_final_and_wrong_final_is_rejected()
                 .iter()
                 .find(|r| r.get("messages").is_some())
                 .unwrap();
-            assert_eq!(request["max_tokens"], 180);
+            assert_eq!(request["max_tokens"], 400);
             assert_eq!(
                 request["temperature"],
                 if streaming { Value::Null } else { json!(0.35) }
