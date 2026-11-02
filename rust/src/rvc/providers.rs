@@ -869,7 +869,7 @@ impl Providers {
         if !c.stt_context.is_empty() {
             messages.push(json!({"role":"system","content":c.stt_context}));
         }
-        messages.push(json!({"role":"system","content":"Transcribe only the caller's spoken phone-number answer from this audio. Preserve every digit and leading zero in order. You may write digits or the exact spoken English/Yoruba digit words. Do not translate, complete, guess, normalize, explain, or add words that were not spoken. If unclear, return only the words that are audible."}));
+        messages.push(json!({"role":"system","content":"Transcribe only the caller's spoken phone-number answer from this audio. Preserve every digit and leading zero in order. You may write digits or the exact spoken English/Yoruba digit words. In a clear phone-number digit sequence, a spoken letter O or oh can mean zero; write it as 0 only in that context. Do not infer a digit from an isolated O or an unrelated word. Do not translate, complete, guess, explain, or add words that were not spoken. If unclear, return only the words that are audible."}));
         messages.push(json!({"role":"user","content":[{"type":"input_audio","input_audio":{"data":STANDARD.encode(wav(pcm)),"format":"wav"}}]}));
         let timeout = Duration::from_secs_f64(c.stt_batch_timeout_seconds.clamp(1.0, 15.0));
         let request = async {

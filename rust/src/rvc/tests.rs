@@ -4877,7 +4877,7 @@ async fn balogun_transfer_announcement_is_replaced_when_the_model_omits_aicc_too
         .await
         .unwrap();
     h.complete(1).await;
-    let requests = h.fixture.requests.lock().unwrap();
+    let requests = h.fixture.requests.lock().unwrap().clone();
     assert!(!requests
         .iter()
         .any(|request| request["input"] == "Màá so yín pọ̀ mọ́ aṣojú báyìí."));

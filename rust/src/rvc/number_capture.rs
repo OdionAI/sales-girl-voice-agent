@@ -16,8 +16,8 @@ pub(crate) const PREROLL_SAMPLES: usize = 32_000;
 pub(crate) const PROMPT_RULES: &str = r###"
 BALOGUN CUSTOMER SUPPORT FLOW:
 Your job is simple: understand the issue, answer briefly from attached knowledge, create a support ticket when needed, or connect the caller to a human when requested. Use one or two short Yoruba sentences and ask one question at a time.
-Ask for a phone number only for a complaint about a transaction, and only when the affected transaction number is needed. Do not ask for a phone number for general questions, account setup, app navigation, data-purchase instructions, or a human-transfer request. For a transaction number, call collect_transaction_phone_number instead of asking for it in free-form speech; the application will ask in Yoruba and capture the answer. Never call that tool for a non-transaction issue. Do not ask for the same number again after confirmation unless the caller explicitly says a different number applies or starts a distinct transaction issue. Do not use or put an unconfirmed candidate in a ticket.
-The application transcribes the bounded number-answer audio separately. Short SBPN fragments are not a complete number; do not guess, combine fragments yourself, or ask again while capture is pending. Read every candidate digit in Yoruba and ask whether you heard it correctly. Use the number only after a clear confirmation. On a correction, replace the candidate and confirm the new number; never append correction digits to the old candidate. Keep the caller's number out of unnecessary explanations.
+Ask for a phone number only for a complaint about a transaction, and only when the affected transaction number is needed. Do not ask for a phone number for general questions, account setup, app navigation, data-purchase instructions, or a human-transfer request. For a transaction number, call collect_transaction_phone_number instead of asking for it in free-form speech; the application will ask in Yoruba for the caller to say the digits in English, one at a time, and capture the answer. Never call that tool for a non-transaction issue. Do not ask for the same number again after confirmation unless the caller explicitly says a different number applies or starts a distinct transaction issue. Do not use or put an unconfirmed candidate in a ticket.
+The application transcribes the bounded number-answer audio separately. In a clear spoken digit sequence, Nigerian callers may say the letter O or oh for zero, including O eight O and O seven O. Do not interpret an isolated O as a number. Short SBPN fragments are not a complete number; do not guess, combine fragments yourself, or ask again while capture is pending. Read every candidate digit in Yoruba and ask whether you heard it correctly. Use the number only after a clear confirmation. On a correction, replace the candidate and confirm the new number; never append correction digits to the old candidate. Keep the caller's number out of unnecessary explanations.
 "###;
 
 pub(crate) const YORUBA_TRANSFER_RULES: &str = r###"
@@ -217,6 +217,18 @@ fn digit_word(token: &str) -> Option<char> {
     }
 }
 
+fn explicit_digit_token(token: &str) -> bool {
+    (!token.is_empty() && token.bytes().all(|b| b.is_ascii_digit())) || digit_word(token).is_some()
+}
+
+fn contextual_spoken_o(tokens: &[String], index: usize) -> bool {
+    tokens[index] == "o"
+        && (index > 0 && explicit_digit_token(&tokens[index - 1])
+            || tokens
+                .get(index + 1)
+                .is_some_and(|token| explicit_digit_token(token)))
+}
+
 fn connector(token: &str) -> bool {
     matches!(
         token,
@@ -247,13 +259,13 @@ pub(crate) fn parse_digits(transcript: &str) -> Option<String> {
     let mut digits = String::new();
     let mut started = false;
     let mut ended = false;
-    for token in &tokens {
+    for (index, token) in tokens.iter().enumerate() {
         if !ended && token.bytes().all(|b| b.is_ascii_digit()) && !token.is_empty() {
             started = true;
             digits.push_str(token);
-        } else if !ended && token.len() == 1 && token.as_bytes()[0].is_ascii_digit() {
+        } else if !ended && contextual_spoken_o(&tokens, index) {
             started = true;
-            digits.push_str(token);
+            digits.push('0');
         } else if !ended && digit_word(token).is_some() {
             started = true;
             digits.push(digit_word(token).unwrap());
@@ -275,14 +287,15 @@ pub(crate) fn is_digit_fragment(transcript: &str) -> bool {
         .map(str::to_owned)
         .collect();
     let mut has_digit = false;
-    for token in tokens {
+    for (index, token) in tokens.iter().enumerate() {
         if (!token.is_empty() && token.bytes().all(|b| b.is_ascii_digit()))
-            || digit_word(&token).is_some()
+            || digit_word(token).is_some()
+            || contextual_spoken_o(&tokens, index)
         {
             has_digit = true;
-        } else if human_transfer_word(&token) {
+        } else if human_transfer_word(token) {
             return false;
-        } else if !connector(&token) && !ambiguous_asr_number_word(&token) {
+        } else if !connector(token) && !ambiguous_asr_number_word(token) {
             return false;
         }
     }
@@ -317,7 +330,7 @@ pub(crate) fn readback(digits: &str) -> Option<String> {
             b'7' => "méje",
             b'8' => "mẹ́jọ",
             b'9' => "mẹ́sàn-án",
-            _ => return None,
+            _ => unreachable!("readback only accepts ASCII digits"),
         })
         .collect::<Vec<_>>();
     Some(format!("Mo gbọ́: {}. Ṣé mo gbọ́ ọ́ dáadáa?", words.join(" ")))
@@ -357,6 +370,17 @@ mod tests {
             parse_digits("zero eight zero one two three four five six seven eight"),
             Some("08012345678".into())
         );
+        assert_eq!(
+            parse_digits("O eight O one two three four five six seven eight"),
+            Some("08012345678".into())
+        );
+        assert_eq!(
+            parse_digits("O seven O one two three four five six seven eight"),
+            Some("07012345678".into())
+        );
+        assert_eq!(parse_digits("O O O"), None);
+        assert_eq!(parse_digits("O"), None);
+        assert!(!is_digit_fragment("O"));
     }
 
     #[test]

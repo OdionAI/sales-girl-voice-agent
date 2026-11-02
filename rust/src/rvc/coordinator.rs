@@ -747,7 +747,7 @@ impl Coordinator {
             speech_seen: !pcm.is_empty(),
             pcm,
             silence_samples: 0,
-            started: tokio::time::Instant::now(),
+            started: std::time::Instant::now(),
         };
         id
     }
@@ -852,7 +852,7 @@ impl Coordinator {
                 self.final_text.clone(),
                 true,
                 Some(DirectSpeech::Verbatim(
-                    "Mi ò lè gbọ́ nọ́mbà náà dáadáa. Jọ̀wọ́, tún un sọ díẹ̀díẹ̀.".into(),
+                    "Mi ò lè gbọ́ nọ́mbà náà dáadáa. Jọ̀wọ́, tún un sọ ní èdè Gẹ̀ẹ́sì, díjíìtì kọ̀ọ̀kan lọ́tọ̀.".into(),
                 )),
             )
             .await;
@@ -2040,7 +2040,7 @@ impl Coordinator {
                     Some(DirectSpeech::Verbatim(if replacement_volunteered {
                         "Mo gbọ́ pé ẹ ṣàtúnṣe nọ́mbà náà. Jẹ́ kí n ṣàyẹ̀wò rẹ̀.".into()
                     } else {
-                        "Jọ̀wọ́, tún nọ́mbà fóònù tó tọ́ sọ.".into()
+                        "Jọ̀wọ́, tún nọ́mbà fóònù tó tọ́ sọ ní èdè Gẹ̀ẹ́sì, díjíìtì kọ̀ọ̀kan lọ́tọ̀.".into()
                     })),
                 )
                 .await;
@@ -2872,7 +2872,7 @@ impl Coordinator {
                 self.final_text.clone(),
                 true,
                 Some(DirectSpeech::Verbatim(
-                    "Jọ̀wọ́, sọ nọ́mbà fóònù tó ní í ṣe pẹ̀lú ìṣòro ìṣòwò náà.".into(),
+                    "Jọ̀wọ́, sọ nọ́mbà fóònù tó ní í ṣe pẹ̀lú ìṣòro ìṣòwò náà ní èdè Gẹ̀ẹ́sì, díjíìtì kọ̀ọ̀kan lọ́tọ̀.".into(),
                 )),
             )
             .await;
@@ -3079,16 +3079,22 @@ impl Coordinator {
             && self.speech_enabled
             && args.as_object().is_some_and(|o| o.is_empty())
         {
-            self.cancel_number_capture();
-            self.call_ending = true;
-            self.trace
-                .emit("end_call_authorized", a.owner, a.id, json!({}));
-            if a.task.is_none() {
-                let farewell = if a.answer.trim().is_empty() {
+            let owner = a.owner;
+            let attempt_id = a.id;
+            let farewell = if a.task.is_none() {
+                Some(if a.answer.trim().is_empty() {
                     "Thank you for sharing that with me. Take care.".into()
                 } else {
                     a.answer.trim().to_string()
-                };
+                })
+            } else {
+                None
+            };
+            self.cancel_number_capture();
+            self.call_ending = true;
+            self.trace
+                .emit("end_call_authorized", owner, attempt_id, json!({}));
+            if let Some(farewell) = farewell {
                 self.begin_facts(self.final_text.clone(), true, Some(farewell))
                     .await;
             }

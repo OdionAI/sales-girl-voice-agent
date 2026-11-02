@@ -40,7 +40,9 @@ RVC coordinator behind `RVC_LAB_BALOGUN_NUMBER_CAPTURE_ENABLED` (default
 `false`). When enabled for Balogun's exact agent ID and Yoruba profile, a local
 tool call starts a bounded caller-audio window; ordinary Yoruba finals remain
 SBPN, and the worker sends one complete window to hinted Qwen after the caller
-pauses. The candidate is read digit by digit in Yoruba and remains unavailable
+pauses. The worker asks in Yoruba for digits spoken in English, and accepts
+spoken O or oh as zero only beside explicit digits. The candidate is read digit
+by digit in Yoruba and remains unavailable
 until the caller confirms it. The same scoped prompt adds Yoruba examples for
 human-transfer intent and the transfer tool cancels an active number window.
 The feature and its Lagos workflow variable are present on the task branch only;
