@@ -372,14 +372,14 @@ mod resolved_surface_tests {
         c.transport = "sip".into();
         c.tts_language = "Yoruba".into();
         let context = AgentContext {
-            name: "Baloko".into(),
-            instructions: "SPOKEN_OPENING: Ẹ káàbọ̀ sí MoMo PSB Helpdesk. Orúkọ mi ni Baloko."
+            name: "Balogun".into(),
+            instructions: "SPOKEN_OPENING: Ẹ káàbọ̀ sí MoMo PSB Helpdesk. Orúkọ mi ni Balogun."
                 .into(),
             ..Default::default()
         };
         assert_eq!(
             opening_text(&c, &context),
-            "Ẹ káàbọ̀ sí MoMo PSB Helpdesk. Orúkọ mi ni Baloko."
+            "Ẹ káàbọ̀ sí MoMo PSB Helpdesk. Orúkọ mi ni Balogun."
         );
         assert_eq!(
             opening_text(&c, &AgentContext::default()),
