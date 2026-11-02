@@ -134,6 +134,10 @@ enum Internal {
         owner: u64,
         result: Result<super::transfer::Connection, Value>,
     },
+    NumberCaptureResult {
+        id: u64,
+        result: Result<String, String>,
+    },
     ReliableEvent {
         body: Value,
         receipt: oneshot::Sender<Result<(), String>>,
@@ -235,6 +239,7 @@ struct Attempt {
     end_call_requested: bool,
     end_call_offered: bool,
     transfer_offered: bool,
+    number_capture_offered: bool,
     transfer_call: Option<super::actions::Call>,
     knowledge_offered: bool,
     directory_tools: Vec<String>,
@@ -361,6 +366,11 @@ struct Coordinator {
     speech_ms: f64,
     silence_ms: f64,
     pcm: Vec<i16>,
+    number_capture: super::number_capture::State,
+    number_capture_next: u64,
+    number_capture_task: Option<JoinHandle<()>>,
+    number_capture_failures: usize,
+    number_pre_roll: VecDeque<i16>,
     preconfirm: Option<String>,
     flush_revision: u64,
     flushed_turn: Option<u64>,
@@ -585,6 +595,11 @@ pub fn start_with_services(
         speech_ms: 0.0,
         silence_ms: 0.0,
         pcm: Vec::new(),
+        number_capture: super::number_capture::State::default(),
+        number_capture_next: 0,
+        number_capture_task: None,
+        number_capture_failures: 0,
+        number_pre_roll: VecDeque::new(),
         preconfirm: None,
         flush_revision: 0,
         flushed_turn: None,
@@ -716,6 +731,134 @@ impl Drop for Coordinator {
     }
 }
 impl Coordinator {
+    fn start_number_capture(&mut self, volunteered: bool) -> u64 {
+        if let Some(task) = self.number_capture_task.take() {
+            task.abort();
+        }
+        self.number_capture_next = self.number_capture_next.saturating_add(1).max(1);
+        let id = self.number_capture_next;
+        let pcm = if volunteered {
+            self.number_pre_roll.iter().copied().collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+        self.number_capture = super::number_capture::State::Collecting {
+            id,
+            speech_seen: !pcm.is_empty(),
+            pcm,
+            silence_samples: 0,
+            started: tokio::time::Instant::now(),
+        };
+        id
+    }
+
+    fn cancel_number_capture(&mut self) {
+        let pending = self.number_capture.is_collecting() || self.number_capture.is_transcribing();
+        if let Some(task) = self.number_capture_task.take() {
+            task.abort();
+        }
+        if pending
+            || matches!(
+                self.number_capture,
+                super::number_capture::State::AwaitingConfirmation { .. }
+            )
+        {
+            self.number_capture = super::number_capture::State::Ready;
+            self.trace
+                .emit("number_capture_cancelled", self.turn, 0, json!({}));
+        }
+    }
+
+    fn run_number_capture_asr(&mut self, id: u64, pcm: Vec<i16>) {
+        let providers = self.p.clone();
+        let events = self.events.clone();
+        let samples = pcm.len();
+        self.trace.emit(
+            "number_capture_asr_started",
+            self.turn,
+            0,
+            json!({"source":"qwen_chat","duration_ms":samples as f64 / 16.0,"samples":samples,"hints_active":!self.c.stt_context.trim().is_empty()}),
+        );
+        self.number_capture_task = Some(tokio::spawn(async move {
+            let result = providers.number_capture_transcribe(&pcm).await;
+            let _ = events
+                .send(Internal::NumberCaptureResult { id, result })
+                .await;
+        }));
+    }
+
+    async fn number_capture_result(&mut self, id: u64, result: Result<String, String>) {
+        if !matches!(self.number_capture, super::number_capture::State::Transcribing { id: active } if active == id)
+        {
+            self.trace
+                .emit("number_capture_asr_stale", self.turn, 0, json!({}));
+            return;
+        }
+        self.number_capture_task = None;
+        match result
+            .ok()
+            .and_then(|text| super::number_capture::parse_digits(&text))
+        {
+            Some(digits) => {
+                self.number_capture_failures = 0;
+                let utterance = super::number_capture::readback(&digits);
+                if let Some(utterance) = utterance {
+                    self.number_capture =
+                        super::number_capture::State::AwaitingConfirmation { digits };
+                    self.trace.emit(
+                        "number_capture_candidate_ready",
+                        self.turn,
+                        0,
+                        json!({"status":"awaiting_confirmation","candidate_length":self.number_capture.pending_digits().map(str::len).unwrap_or(0)}),
+                    );
+                    self.begin_direct(
+                        self.final_text.clone(),
+                        true,
+                        Some(DirectSpeech::Verbatim(utterance)),
+                    )
+                    .await;
+                    return;
+                }
+            }
+            None => {}
+        }
+        self.number_capture_failures = self.number_capture_failures.saturating_add(1);
+        if self.number_capture_failures >= 2 {
+            self.number_capture = super::number_capture::State::Ready;
+            self.trace.emit(
+                "number_capture_asr_unusable",
+                self.turn,
+                0,
+                json!({"status":"offer_human","attempt":self.number_capture_failures}),
+            );
+            self.begin_direct(
+                self.final_text.clone(),
+                true,
+                Some(DirectSpeech::Verbatim(
+                    "Mi ò lè gba nọ́mbà náà dáadáa. Ṣé ẹ fẹ́ kí n so yín pọ̀ mọ́ aṣojú oníbàárà?"
+                        .into(),
+                )),
+            )
+            .await;
+        } else {
+            self.start_number_capture(false);
+            self.trace.emit(
+                "number_capture_asr_unusable",
+                self.turn,
+                0,
+                json!({"status":"retry_requested","attempt":self.number_capture_failures}),
+            );
+            self.begin_direct(
+                self.final_text.clone(),
+                true,
+                Some(DirectSpeech::Verbatim(
+                    "Mi ò lè gbọ́ nọ́mbà náà dáadáa. Jọ̀wọ́, tún un sọ díẹ̀díẹ̀.".into(),
+                )),
+            )
+            .await;
+        }
+    }
+
     fn device_can_start(&self) -> bool {
         self.transfer_pending.is_none()
             && !self.transfer_unknown
@@ -1064,6 +1207,27 @@ impl Coordinator {
         }
     }
     fn maintenance(&mut self) {
+        let expired = match &self.number_capture {
+            super::number_capture::State::Collecting {
+                id, pcm, started, ..
+            } if started.elapsed()
+                >= Duration::from_secs(super::number_capture::WINDOW_SECONDS as u64) =>
+            {
+                Some((*id, pcm.clone()))
+            }
+            _ => None,
+        };
+        if let Some((id, pcm)) = expired {
+            self.number_capture = super::number_capture::State::Transcribing { id };
+            if pcm.is_empty() {
+                let _ = self.events.try_send(Internal::NumberCaptureResult {
+                    id,
+                    result: Err("number capture timed out without caller speech".into()),
+                });
+            } else {
+                self.run_number_capture_asr(id, pcm);
+            }
+        }
         if let Some(flow) = &self.passkey {
             if let Some(result) = flow.expire() {
                 self.device_notice = Some(result);
@@ -1287,6 +1451,7 @@ impl Coordinator {
             return;
         }
         self.call_ending = true;
+        self.cancel_number_capture();
         self.idle_close_at = None;
         self.invalidate_background();
         self.trace.emit(
@@ -1437,6 +1602,7 @@ impl Coordinator {
     }
     async fn fail(&mut self, error: String) {
         self.call_ending = false;
+        self.cancel_number_capture();
         self.cancel("failure").await;
         self.trace
             .emit("error", self.turn, 0, json!({"error":error}));
@@ -1449,6 +1615,7 @@ impl Coordinator {
         self.state = State::Idle;
     }
     async fn shutdown(&mut self) {
+        self.cancel_number_capture();
         if let Some(flow) = &self.passkey {
             flow.close();
         }
@@ -1502,6 +1669,18 @@ impl Coordinator {
         // Loudness alone is not enough when RNNoise reports a speech
         // probability: loud non-speech (TV/music/room noise) must not count.
         let speaking = counts_as_speech(level, self.noise_filter.last_speech_prob(), &self.c);
+        if super::number_capture::enabled(&self.c) {
+            self.number_pre_roll.extend(pcm.iter().copied());
+            while self.number_pre_roll.len() > super::number_capture::PREROLL_SAMPLES {
+                self.number_pre_roll.pop_front();
+            }
+            if speaking && self.number_capture.is_transcribing() {
+                self.cancel_number_capture();
+            }
+            if let Some((id, window)) = self.number_capture.append_audio(&pcm, speaking) {
+                self.run_number_capture_asr(id, window);
+            }
+        }
         // Keep first speech-candidate frames and utterance-ending silence, but
         // never grow the provider's cumulative request with idle/muted audio.
         if let Some(asr) = &self.asr {
@@ -1790,6 +1969,103 @@ impl Coordinator {
         }
         if let Some(t) = self.stable.take() {
             t.abort();
+        }
+        let capture_active =
+            self.number_capture.is_collecting() || self.number_capture.is_transcribing();
+        if super::number_capture::enabled(&self.c)
+            && capture_active
+            && super::number_capture::is_digit_fragment(&text)
+        {
+            if let Some(t) = self.final_timeout.take() {
+                t.abort();
+            }
+            self.invalidate_background();
+            self.final_text = text.clone();
+            self.idle_close_at = None;
+            self.memory.user(turn, "Caller supplied an unverified transaction-number audio fragment; ignore this fragment and wait for the application's bounded Qwen capture result.", !self.speech_enabled);
+            self.memory.finish(turn, false);
+            if let Some(store) = &self.store {
+                store.message("user", &text, format!("turn-{turn}"), false);
+            }
+            self.trace.emit(
+                "number_capture_sbpn_fragment",
+                turn,
+                0,
+                json!({"text_chars":text.chars().count()}),
+            );
+            let _ = self.output.send(Output::Final(text)).await;
+            self.transition(State::Idle, "number_capture_sbpn_fragment");
+            let _ = self.output.send(Output::Complete { turn }).await;
+            return;
+        }
+        if super::number_capture::enabled(&self.c)
+            && matches!(
+                self.number_capture,
+                super::number_capture::State::AwaitingConfirmation { .. }
+            )
+        {
+            if super::number_capture::confirmation(&text) == Some(true) {
+                if let super::number_capture::State::AwaitingConfirmation { digits } =
+                    std::mem::replace(
+                        &mut self.number_capture,
+                        super::number_capture::State::Ready,
+                    )
+                {
+                    let length = digits.len();
+                    self.number_capture = super::number_capture::State::Confirmed { digits };
+                    self.trace.emit(
+                        "number_capture_confirmed",
+                        turn,
+                        0,
+                        json!({"candidate_length":length}),
+                    );
+                }
+            } else if super::number_capture::confirmation(&text) == Some(false) {
+                let replacement_volunteered =
+                    super::number_capture::is_correction_number_fragment(&text);
+                self.final_text = text.clone();
+                self.idle_close_at = None;
+                self.memory.user(turn, &text, !self.speech_enabled);
+                if let Some(store) = &self.store {
+                    store.message("user", &text, format!("turn-{turn}"), false);
+                }
+                self.trace
+                    .emit("number_capture_candidate_rejected", turn, 0, json!({}));
+                self.start_number_capture(replacement_volunteered);
+                self.begin_direct(
+                    text,
+                    true,
+                    Some(DirectSpeech::Verbatim(if replacement_volunteered {
+                        "Mo gbọ́ pé ẹ ṣàtúnṣe nọ́mbà náà. Jẹ́ kí n ṣàyẹ̀wò rẹ̀.".into()
+                    } else {
+                        "Jọ̀wọ́, tún nọ́mbà fóònù tó tọ́ sọ.".into()
+                    })),
+                )
+                .await;
+                return;
+            } else if super::number_capture::is_digit_fragment(&text) {
+                // A corrected number volunteered while confirming starts a
+                // replacement window; it never appends to the old candidate.
+                self.start_number_capture(true);
+                self.final_timeout.take().map(|task| task.abort());
+                self.invalidate_background();
+                self.final_text = text.clone();
+                self.memory.user(turn, "Caller supplied a replacement transaction-number audio fragment; wait for the application's new bounded Qwen capture result.", !self.speech_enabled);
+                self.memory.finish(turn, false);
+                if let Some(store) = &self.store {
+                    store.message("user", &text, format!("turn-{turn}"), false);
+                }
+                self.trace.emit(
+                    "number_capture_correction_window",
+                    turn,
+                    0,
+                    json!({"text_chars":text.chars().count()}),
+                );
+                let _ = self.output.send(Output::Final(text)).await;
+                self.transition(State::Idle, "number_capture_correction_window");
+                let _ = self.output.send(Output::Complete { turn }).await;
+                return;
+            }
         }
         self.invalidate_background();
         self.idle_checks = 0;
@@ -2271,8 +2547,18 @@ impl Coordinator {
         if let Some(bank) = &self.banking {
             system.push_str(&bank.prompt());
         }
+        if super::number_capture::enabled(&self.c) {
+            system.push_str(super::number_capture::PROMPT_RULES);
+            if let Some(summary) = self.number_capture.prompt_summary() {
+                system.push_str("\nCURRENT NUMBER-CAPTURE STATE (application data): ");
+                system.push_str(&summary);
+            }
+        }
         if super::transfer::enabled(&self.c.agent_context) {
             system.push_str(super::transfer::RULES);
+            if super::number_capture::enabled(&self.c) {
+                system.push_str(super::number_capture::YORUBA_TRANSFER_RULES);
+            }
         }
         if self.directory.is_some() {
             system.push_str(super::directory::data()["rules"].as_str().unwrap_or(""));
@@ -2377,8 +2663,22 @@ impl Coordinator {
             && !self.transfer_unknown
             && self.transfer_cleanup.is_none()
             && super::transfer::enabled(&self.c.agent_context);
+        let number_capture_offered = direct.is_none()
+            && !followup
+            && confirmation.is_none()
+            && self.speech_enabled
+            && self.turn > 0
+            && self.turn < (1 << 63)
+            && !self.transfer_unknown
+            && self.transfer_cleanup.is_none()
+            && self.services.is_some()
+            && super::number_capture::enabled(&self.c)
+            && self.number_capture.can_offer_tool();
         if transfer_offered {
             tools.push(super::transfer::definition());
+        }
+        if number_capture_offered {
+            tools.push(super::number_capture::definition());
         }
         let directory_tools = if self.directory.is_some()
             && direct.is_none()
@@ -2491,6 +2791,7 @@ impl Coordinator {
             end_call_requested: false,
             end_call_offered,
             transfer_offered,
+            number_capture_offered,
             transfer_call: None,
             knowledge_offered,
             directory_tools,
@@ -2537,6 +2838,44 @@ impl Coordinator {
             return;
         };
         let request_context = a.model_context.clone();
+        if name == super::number_capture::TOOL {
+            let valid = args.as_object().is_some_and(|object| {
+                object.len() == 1
+                    && object
+                        .get("volunteered_number")
+                        .is_some_and(Value::is_boolean)
+            });
+            if !a.number_capture_offered || !valid || !super::number_capture::enabled(&self.c) {
+                self.begin_facts(
+                    self.final_text.clone(),
+                    true,
+                    Some(
+                        "Mi ò lè gba nọ́mbà náà ní báyìí. Jọ̀wọ́, bá mi sọ̀rọ̀ nípa ìṣòro ìṣòwò náà."
+                            .into(),
+                    ),
+                )
+                .await;
+                return;
+            }
+            let volunteered = args["volunteered_number"].as_bool().unwrap_or(false);
+            self.number_capture_failures = 0;
+            self.start_number_capture(volunteered);
+            self.trace.emit(
+                "number_capture_started",
+                self.turn,
+                0,
+                json!({"pre_roll":volunteered,"window_seconds":super::number_capture::WINDOW_SECONDS}),
+            );
+            self.begin_direct(
+                self.final_text.clone(),
+                true,
+                Some(DirectSpeech::Verbatim(
+                    "Jọ̀wọ́, sọ nọ́mbà fóònù tó ní í ṣe pẹ̀lú ìṣòro ìṣòwò náà.".into(),
+                )),
+            )
+            .await;
+            return;
+        }
         if a.directory_tools.contains(&name) && self.speech_enabled {
             let call = super::actions::Call {
                 context: request_context.clone(),
@@ -2694,13 +3033,25 @@ impl Coordinator {
                 name,
                 arguments: json!({"reason_summary":reason}),
             };
+            self.cancel_number_capture();
             self.pending_action = None;
-            self.begin_facts(
-                self.final_text.clone(),
-                true,
-                Some("All right, I'll connect you now.".into()),
-            )
-            .await;
+            if super::number_capture::enabled(&self.c) {
+                self.begin_direct(
+                    self.final_text.clone(),
+                    true,
+                    Some(DirectSpeech::Verbatim(
+                        "Ó dáa, màá so yín pọ̀ mọ́ aṣojú báyìí.".into(),
+                    )),
+                )
+                .await;
+            } else {
+                self.begin_facts(
+                    self.final_text.clone(),
+                    true,
+                    Some("All right, I'll connect you now.".into()),
+                )
+                .await;
+            }
             if let Some(attempt) = &mut self.attempt {
                 attempt.transfer_call = Some(call);
             }
@@ -2726,6 +3077,7 @@ impl Coordinator {
             && self.speech_enabled
             && args.as_object().is_some_and(|o| o.is_empty())
         {
+            self.cancel_number_capture();
             self.call_ending = true;
             self.trace
                 .emit("end_call_authorized", a.owner, a.id, json!({}));
@@ -2910,6 +3262,9 @@ impl Coordinator {
                     }
                 }
             }
+            Internal::NumberCaptureResult { id, result } => {
+                self.number_capture_result(id, result).await;
+            }
             Internal::TransferCleaned { attempt, confirmed } => {
                 let Some(watch) = self
                     .transfer_watcher
@@ -2968,6 +3323,7 @@ impl Coordinator {
                     json!({"status":receipt["status"]}),
                 );
                 if let Some(connection) = established {
+                    self.cancel_number_capture();
                     self.call_ending = true;
                     self.idle_close_at = None;
                     if let Some(flow) = &self.passkey {
@@ -2984,7 +3340,21 @@ impl Coordinator {
                 } else {
                     self.transfer_unknown = receipt["status"] == "unknown";
                     if self.speech_enabled {
-                        self.begin_facts(self.final_text.clone(),true,Some(if self.transfer_unknown{"I couldn't confirm whether that connection completed. I won't try again automatically. I'm still here to help."}else{"I'm sorry, I couldn't connect you just now. I'm still here to help, or you can try the customer care number."}.into())).await;
+                        if super::number_capture::enabled(&self.c) {
+                            let message = if self.transfer_unknown {
+                                "Mi ò lè fi dájú pé ìpè náà so yín pọ̀. Mi ò ní tún gbìyànjú fúnra mi. Mo ṣì wà níbí láti ràn yín lọ́wọ́."
+                            } else {
+                                "Ẹ má bínú, mi ò lè so yín pọ̀ mọ́ aṣojú báyìí. Ṣé mo tún lè ràn yín lọ́wọ́?"
+                            };
+                            self.begin_direct(
+                                self.final_text.clone(),
+                                true,
+                                Some(DirectSpeech::Verbatim(message.into())),
+                            )
+                            .await;
+                        } else {
+                            self.begin_facts(self.final_text.clone(),true,Some(if self.transfer_unknown{"I couldn't confirm whether that connection completed. I won't try again automatically. I'm still here to help."}else{"I'm sorry, I couldn't connect you just now. I'm still here to help, or you can try the customer care number."}.into())).await;
+                        }
                     }
                 }
             }

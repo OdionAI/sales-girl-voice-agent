@@ -193,6 +193,27 @@ async fn llm(State(s): State<Arc<Fixture>>, Json(body): Json<Value>) -> Response
         json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":"lookup","function":{"name":"knowledge_lookup","arguments":"{\"query\":\"bank policy\"}"}}]}}]})
     } else if text.contains("ticket request") {
         json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":"ticket-call","function":{"name":"create_ticket","arguments":"{\"title\":\"Customer issue\",\"description\":\"Please investigate.\",\"priority\":\"normal\"}"}}]}}]})
+    } else if system.contains("BALOGUN CUSTOMER SUPPORT FLOW")
+        && text.contains("start transaction number capture")
+    {
+        json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":"number-capture-call","function":{"name":"collect_transaction_phone_number","arguments":"{\"volunteered_number\":false}"}}]}}]})
+    } else if system.contains("YORUBA HUMAN-TRANSFER INTENT")
+        && text.contains("Má so mí pọ̀ mọ́ ẹnikẹ́ni")
+    {
+        json!({"choices":[{"delta":{"content":"Ó dáa, màá tẹ̀síwájú láti ràn yín lọ́wọ́."}}]})
+    } else if system.contains("YORUBA HUMAN-TRANSFER INTENT")
+        && body["tools"].as_array().is_some_and(|tools| {
+            tools
+                .iter()
+                .any(|tool| tool["function"]["name"] == "transfer_to_aicc")
+        })
+        && text.contains("Mo fẹ́ bá ènìyàn sọ̀rọ̀")
+    {
+        json!({"choices":[{"delta":{"content":"FALSE TRANSFER PREAMBLE","tool_calls":[{"index":0,"id":"yoruba-human-call","function":{"name":"transfer_to_aicc","arguments":"{\"reason_summary\":\"Caller requested a human representative.\"}"}}]}}]})
+    } else if system.contains("YORUBA HUMAN-TRANSFER INTENT")
+        && text.contains("transfer announcement no tool")
+    {
+        json!({"choices":[{"delta":{"content":"Màá so yín pọ̀ mọ́ aṣojú báyìí."}}]})
     } else if text.contains("human request refused") {
         json!({"choices":[{"delta":{"content":"Understood. I will keep helping you."}}]})
     } else if text.contains("human request")
@@ -789,6 +810,8 @@ struct AsrFixture {
     ignore_flush: std::sync::atomic::AtomicBool,
     hold_final: std::sync::atomic::AtomicBool,
     final_release: tokio::sync::Notify,
+    chat_response: Mutex<Option<String>>,
+    final_body: Mutex<Option<Value>>,
 }
 async fn asr_ws(
     State(s): State<Arc<AsrFixture>>,
@@ -873,6 +896,7 @@ async fn asr_final(State(s): State<Arc<AsrFixture>>, Json(body): Json<Value>) ->
         !s.open.load(Ordering::SeqCst),
         "realtime must be quiesced before shared-engine HTTP final"
     );
+    *s.final_body.lock().unwrap() = Some(body.clone());
     s.handoff.store(true, Ordering::SeqCst);
     if s.fail.load(Ordering::SeqCst) {
         return axum::http::StatusCode::BAD_GATEWAY.into_response();
@@ -894,8 +918,67 @@ async fn asr_final(State(s): State<Arc<AsrFixture>>, Json(body): Json<Value>) ->
     if s.hold_final.load(Ordering::SeqCst) {
         s.final_release.notified().await;
     }
-    Json(json!({"choices":[{"message":{"content":"language English<asr_text>first request"}}]}))
-        .into_response()
+    let transcript = s
+        .chat_response
+        .lock()
+        .unwrap()
+        .clone()
+        .unwrap_or_else(|| "language English<asr_text>first request".into());
+    Json(json!({"choices":[{"message":{"content":transcript}}]})).into_response()
+}
+
+#[tokio::test]
+async fn balogun_number_capture_sends_one_hinted_full_wav_to_qwen_chat() {
+    use base64::{engine::general_purpose::STANDARD, Engine};
+    let state = Arc::new(AsrFixture::default());
+    *state.chat_response.lock().unwrap() =
+        Some("zero eight zero one two three four five six seven eight".into());
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let app = Router::new()
+        .route("/number", post(asr_final))
+        .with_state(state.clone());
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let mut config: Config =
+        serde_json::from_str(include_str!("../../fixtures/reference-config.json")).unwrap();
+    config.tts_language = "Yoruba".into();
+    config.stt_chat_url = format!("http://{address}/number");
+    config.stt_chat_model = "Qwen3-ASR".into();
+    config.stt_context = "Prefer individual digits, including leading zeroes.".into();
+    config.balogun_number_capture_enabled = true;
+    config.agent_context.loaded = true;
+    config.agent_context.agent_id = super::number_capture::BALOGUN_AGENT_ID.into();
+    let providers = providers::Providers::new(Arc::new(config), Trace::default()).unwrap();
+    let audio = vec![321i16; 12_345];
+    let transcript = providers.number_capture_transcribe(&audio).await.unwrap();
+    assert_eq!(
+        transcript,
+        "zero eight zero one two three four five six seven eight"
+    );
+    let request = state
+        .final_samples
+        .load(std::sync::atomic::Ordering::SeqCst);
+    assert_eq!(request, audio.len());
+    let body = state.final_body.lock().unwrap().clone().unwrap();
+    assert_eq!(body["model"], "Qwen3-ASR");
+    assert!(body["messages"].as_array().unwrap().iter().any(|m| {
+        m["role"] == "system"
+            && m["content"] == "Prefer individual digits, including leading zeroes."
+    }));
+    assert!(body["messages"].as_array().unwrap().iter().any(|m| {
+        m["role"] == "system"
+            && m["content"]
+                .as_str()
+                .is_some_and(|s| s.contains("Do not translate, complete, guess"))
+    }));
+    let encoded = body["messages"].as_array().unwrap().last().unwrap()["content"][0]["input_audio"]
+        ["data"]
+        .as_str()
+        .unwrap();
+    let wav = STANDARD.decode(encoded).unwrap();
+    assert_eq!(&wav[..4], b"RIFF");
+    assert_eq!((wav.len() - 44) / 2, audio.len());
+    server.abort();
 }
 
 #[tokio::test]
@@ -4665,6 +4748,223 @@ async fn unknown_human_connection_cleanup_is_honest_and_not_redialed() {
             .iter()
             .any(|tool| tool["function"]["name"] == "transfer_to_aicc"));
     }
+    h.close().await;
+    server.abort();
+}
+
+fn configured_balogun_capture(c: &mut Config) {
+    configured_human(c);
+    c.tts_language = "Yoruba".into();
+    c.agent_context.tts_language_hint = "Yoruba".into();
+    c.agent_context.agent_id = super::number_capture::BALOGUN_AGENT_ID.into();
+    c.balogun_number_capture_enabled = true;
+    c.stt_chat_url = "http://127.0.0.1:1/asr".into();
+    c.stt_chat_model = "Qwen3-ASR".into();
+    c.stt_context = "Prefer caller-spoken digits.".into();
+}
+
+#[tokio::test]
+async fn balogun_yoruba_human_request_calls_aicc_and_suppresses_model_announcement() {
+    let mut h = Harness::configured_platform(true, configured_balogun_capture, None, true).await;
+    h.session
+        .input
+        .send(Input::Text("Mo fẹ́ bá ènìyàn sọ̀rọ̀".into()))
+        .await
+        .unwrap();
+    let (_, reply, cleanup) = transfer_request(&mut h).await;
+    assert!(h
+        .trace
+        .events()
+        .iter()
+        .any(|event| event.event == "human_transfer_requested"));
+    assert!(h
+        .trace
+        .events()
+        .iter()
+        .any(|event| event.event == "llm_transfer_guard_decision"
+            && event.data["suppressed"] == true));
+    let requests = h.fixture.requests.lock().unwrap().clone();
+    assert!(requests.iter().any(
+        |request| request["tools"].as_array().is_some_and(|tools| tools
+            .iter()
+            .any(|tool| tool["function"]["name"] == "transfer_to_aicc"))
+    ));
+    assert!(!requests
+        .iter()
+        .any(|request| request["input"] == "FALSE TRANSFER PREAMBLE"));
+    let (client, _, server) = super::transfer::tests::setup().await;
+    let connection = client
+        .connect_notified("room-a", "session-a", None, cleanup)
+        .await
+        .unwrap();
+    assert!(reply.send(Ok(connection)).is_ok());
+    h.until("human_transfer_result").await;
+    h.close().await;
+    server.abort();
+}
+
+#[tokio::test]
+async fn balogun_number_capture_requires_tool_trigger_and_ordinary_question_never_calls_qwen() {
+    let mut ordinary =
+        Harness::configured_platform(true, configured_balogun_capture, None, true).await;
+    ordinary
+        .session
+        .input
+        .send(Input::Text("ordinary question".into()))
+        .await
+        .unwrap();
+    ordinary.complete(1).await;
+    let request = ordinary.fixture.requests.lock().unwrap()[0].clone();
+    assert!(request["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|tool| { tool["function"]["name"] == "collect_transaction_phone_number" }));
+    assert!(!ordinary
+        .trace
+        .events()
+        .iter()
+        .any(|event| event.event.starts_with("number_capture_")));
+    ordinary.close().await;
+
+    let mut capture =
+        Harness::configured_platform(true, configured_balogun_capture, None, true).await;
+    capture
+        .session
+        .input
+        .send(Input::Text("start transaction number capture".into()))
+        .await
+        .unwrap();
+    capture.until("number_capture_started").await;
+    assert!(!capture
+        .trace
+        .events()
+        .iter()
+        .any(|event| event.event == "number_capture_asr_started"));
+    capture.close().await;
+}
+
+#[tokio::test]
+async fn balogun_yoruba_transfer_refusal_does_not_call_aicc_or_announce_handoff() {
+    let mut h = Harness::configured_platform(true, configured_balogun_capture, None, true).await;
+    h.session
+        .input
+        .send(Input::Text("Má so mí pọ̀ mọ́ ẹnikẹ́ni".into()))
+        .await
+        .unwrap();
+    h.complete(1).await;
+    assert!(!h
+        .trace
+        .events()
+        .iter()
+        .any(|event| event.event == "human_transfer_requested"));
+    assert!(h
+        .fixture
+        .requests
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|request| request["input"] == "Ó dáa, màá tẹ̀síwájú láti ràn yín lọ́wọ́."));
+    h.close().await;
+}
+
+#[tokio::test]
+async fn balogun_transfer_announcement_is_replaced_when_the_model_omits_aicc_tool() {
+    let mut h = Harness::configured_platform(true, configured_balogun_capture, None, true).await;
+    h.session
+        .input
+        .send(Input::Text("transfer announcement no tool".into()))
+        .await
+        .unwrap();
+    h.complete(1).await;
+    let requests = h.fixture.requests.lock().unwrap();
+    assert!(!requests
+        .iter()
+        .any(|request| request["input"] == "Màá so yín pọ̀ mọ́ aṣojú báyìí."));
+    assert!(requests.iter().any(|request| {
+        request["input"] == "Mi ò tíì pe aṣojú. Mo ṣì wà láti ràn yín lọ́wọ́."
+    }));
+    assert!(!h
+        .trace
+        .events()
+        .iter()
+        .any(|event| event.event == "human_transfer_requested"));
+    h.close().await;
+}
+
+#[tokio::test]
+async fn balogun_human_handoff_cancels_number_capture_before_transfer() {
+    let mut h = Harness::configured_platform(true, configured_balogun_capture, None, true).await;
+    h.session
+        .input
+        .send(Input::Text("start transaction number capture".into()))
+        .await
+        .unwrap();
+    h.until("number_capture_started").await;
+    h.complete(1).await;
+    h.session
+        .input
+        .send(Input::Text("Mo fẹ́ bá ènìyàn sọ̀rọ̀".into()))
+        .await
+        .unwrap();
+    let (_, reply, cleanup) = transfer_request(&mut h).await;
+    let events = h.trace.events();
+    assert!(events
+        .iter()
+        .any(|event| event.event == "number_capture_cancelled"));
+    assert!(events
+        .iter()
+        .any(|event| event.event == "human_transfer_requested"));
+    let (client, _, server) = super::transfer::tests::setup().await;
+    let connection = client
+        .connect_notified("room-a", "session-a", None, cleanup)
+        .await
+        .unwrap();
+    assert!(reply.send(Ok(connection)).is_ok());
+    h.until("human_transfer_result").await;
+    h.close().await;
+    server.abort();
+}
+
+#[tokio::test]
+async fn balogun_unknown_transfer_is_explained_in_yoruba_without_retry() {
+    use std::sync::atomic::Ordering;
+    let mut h = Harness::configured_platform(true, configured_balogun_capture, None, true).await;
+    h.session
+        .input
+        .send(Input::Text("Mo fẹ́ bá ènìyàn sọ̀rọ̀".into()))
+        .await
+        .unwrap();
+    let (_, reply, cleanup) = transfer_request(&mut h).await;
+    let (client, fake, server) = super::transfer::tests::setup().await;
+    fake.mode.store(4, Ordering::SeqCst);
+    let result = client
+        .connect_notified("room-a", "session-a", None, cleanup)
+        .await;
+    assert!(reply.send(result).is_ok());
+    h.until("human_transfer_result").await;
+    h.complete(1).await;
+    assert!(h.fixture.requests.lock().unwrap().iter().any(|request| {
+        request["input"].as_str().is_some_and(|text| {
+            text.contains("Mi ò lè fi dájú pé ìpè náà so yín pọ̀")
+                && text.contains("Mi ò ní tún gbìyànjú")
+        })
+    }));
+    h.session
+        .input
+        .send(Input::Text("Mo fẹ́ bá ènìyàn sọ̀rọ̀ lẹ́ẹ̀kan sí i".into()))
+        .await
+        .unwrap();
+    h.complete(2).await;
+    assert_eq!(
+        h.trace
+            .events()
+            .iter()
+            .filter(|event| event.event == "human_transfer_requested")
+            .count(),
+        1
+    );
+    assert_eq!(fake.requests.lock().unwrap().len(), 1);
     h.close().await;
     server.abort();
 }

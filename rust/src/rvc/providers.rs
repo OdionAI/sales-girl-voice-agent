@@ -13,6 +13,8 @@ use std::{
     },
     time::Duration,
 };
+static NUMBER_CAPTURE_REQUESTS: std::sync::LazyLock<Arc<tokio::sync::Semaphore>> =
+    std::sync::LazyLock::new(|| Arc::new(tokio::sync::Semaphore::new(8)));
 use tokio::sync::mpsc;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 #[derive(Clone, Debug)]
@@ -847,6 +849,60 @@ impl Providers {
                 .unwrap_or(""),
             &self.config.tts_language,
         ))
+    }
+
+    /// One explicit Qwen request for a bounded Balogun number-answer window.
+    /// Ordinary Yoruba final_http remains SBPN-authoritative.
+    pub(crate) async fn number_capture_transcribe(&self, pcm: &[i16]) -> Result<String, String> {
+        if pcm.is_empty() || pcm.len() > super::number_capture::MAX_SAMPLES {
+            return Err("number capture audio outside limits".into());
+        }
+        let permit = NUMBER_CAPTURE_REQUESTS
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| "number capture ASR at capacity")?;
+        let c = &self.config;
+        if !super::number_capture::enabled(c) {
+            return Err("Balogun number capture not configured".into());
+        }
+        let mut messages = vec![];
+        if !c.stt_context.is_empty() {
+            messages.push(json!({"role":"system","content":c.stt_context}));
+        }
+        messages.push(json!({"role":"system","content":"Transcribe only the caller's spoken phone-number answer from this audio. Preserve every digit and leading zero in order. You may write digits or the exact spoken English/Yoruba digit words. Do not translate, complete, guess, normalize, explain, or add words that were not spoken. If unclear, return only the words that are audible."}));
+        messages.push(json!({"role":"user","content":[{"type":"input_audio","input_audio":{"data":STANDARD.encode(wav(pcm)),"format":"wav"}}]}));
+        let timeout = Duration::from_secs_f64(c.stt_batch_timeout_seconds.clamp(1.0, 15.0));
+        let request = async {
+            let response = self
+                .client
+                .post(&c.stt_chat_url)
+                .json(&json!({"model":c.stt_chat_model,"messages":messages,"max_tokens":128,"temperature":0.0}))
+                .send()
+                .await
+                .map_err(|_| "number capture ASR connection failed")?
+                .error_for_status()
+                .map_err(|_| "number capture ASR HTTP error")?;
+            self.usage.stt_submitted(pcm.len() * 2);
+            let payload: Value = response
+                .json()
+                .await
+                .map_err(|_| "number capture ASR JSON error")?;
+            Ok::<Value, &'static str>(payload)
+        };
+        let payload = tokio::time::timeout(timeout, request)
+            .await
+            .map_err(|_| "number capture ASR timed out")??;
+        let text = super::text::clean_transcript_for_language(
+            payload["choices"][0]["message"]["content"]
+                .as_str()
+                .unwrap_or(""),
+            "Yoruba",
+        );
+        drop(permit);
+        if text.is_empty() || super::text::is_asr_context_echo(&text, &c.stt_context) {
+            return Err("number capture ASR empty or copied hint context".into());
+        }
+        Ok(text)
     }
     /// A separate request receives the full caller-owned utterance. Its done
     /// event is authoritative only after this explicit final commit; streaming

@@ -35,6 +35,18 @@ variables restores immediate replies after the normal Lagos voice release.
 This does not recover an empty ASR transcript. See
 [`latency_lab/README.md`](latency_lab/README.md) for the exact behavior.
 
+Balogun's Yoruba transaction-number capture is implemented in the native Rust
+RVC coordinator behind `RVC_LAB_BALOGUN_NUMBER_CAPTURE_ENABLED` (default
+`false`). When enabled for Balogun's exact agent ID and Yoruba profile, a local
+tool call starts a bounded caller-audio window; ordinary Yoruba finals remain
+SBPN, and the worker sends one complete window to hinted Qwen after the caller
+pauses. The candidate is read digit by digit in Yoruba and remains unavailable
+until the caller confirms it. The same scoped prompt adds Yoruba examples for
+human-transfer intent and the transfer tool cancels an active number window.
+The feature and its Lagos workflow variable are present on the task branch only;
+the live worker remains unchanged until an approved release explicitly enables
+the flag. The Hausa agent is outside this feature scope.
+
 ## Core interactions
 
 This worker talks to:
