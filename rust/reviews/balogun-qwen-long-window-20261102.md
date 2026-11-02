@@ -59,7 +59,10 @@ was changed. Inputs were synthetic speech and non-customer numbers.
   `00987654321`; readback began “odo odo mẹ́sàn-án”. It was not appended to
   the earlier number.
 - The combined complaint/paused-number/correction run completed 3 Qwen requests
-  with 0 failures and selected/read back both exact candidates.
+  with 0 failures and selected/read back both exact candidates. Qwen requests
+  took approximately 489, 634 and 763 ms after window submission. Number
+  replies intentionally include the 1-second quiet window plus ASR/model/TTS
+  time; this is an accuracy tradeoff, not a claim of lower digit-readback latency.
 
 An earlier provider run exposed an ungrounded free-form Yoruba readback that
 changed zeros to ones. The structured selection and deterministic native
@@ -74,8 +77,17 @@ Raw transcripts, credentials and provider traces are kept outside the repository
 
 ## Validation
 
-Final native suite, Clippy and deployment-contract results are recorded in the
-review PR. Regression coverage includes long windows, out-of-order results,
+Local validation completed on the final runtime implementation:
+
+- All-feature release native library suite, serial: **276 passed, 0 failed,
+  1 ignored** (317.66 seconds).
+- All-feature release Clippy for library and binaries with `-D warnings`: passed.
+- Release worker build with production `rvc` features (without `local-call`): passed.
+- Lagos deployment contracts: **19 passed**.
+- Cargo formatting and Git whitespace checks: passed.
+- Local UI health endpoint passed; the Rust worker registered with local LiveKit.
+
+Regression coverage includes long windows, out-of-order results,
 ordinary speculative replies while Qwen is pending, missing/failed ASR recovery,
 leading-zero grounding, incorrect-candidate rejection and human-transfer
 cancellation. Production remains on its inspected revision until a reviewed
