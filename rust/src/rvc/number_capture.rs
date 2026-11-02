@@ -105,10 +105,14 @@ impl State {
         if speaking {
             speech_seen = true;
             silence_samples = 0;
-            let room = MAX_SAMPLES.saturating_sub(window.len());
-            window.extend_from_slice(&audio[..audio.len().min(room)]);
         } else if speech_seen {
             silence_samples = silence_samples.saturating_add(audio.len());
+        }
+        // Preserve the short pauses between digits and SBPN finals. They are
+        // part of the single audio answer sent to Qwen, up to the hard cap.
+        if speech_seen {
+            let room = MAX_SAMPLES.saturating_sub(window.len());
+            window.extend_from_slice(&audio[..audio.len().min(room)]);
         }
         if window.len() >= MAX_SAMPLES
             || (speech_seen && silence_samples >= POST_SPEECH_SILENCE_SAMPLES)
@@ -322,8 +326,16 @@ pub(crate) fn readback(digits: &str) -> Option<String> {
 pub(crate) fn confirmation(transcript: &str) -> Option<bool> {
     let folded = fold_yoruba(transcript);
     match folded.as_str() {
-        "yes" | "yeah" | "correct" | "that is correct" | "thats correct" | "beeni" | "bee ni"
-        | "bẹẹni" => Some(true),
+        "yes"
+        | "yeah"
+        | "correct"
+        | "that is correct"
+        | "thats correct"
+        | "beeni"
+        | "bee ni"
+        | "beeni nomba naa ni"
+        | "beeni o to"
+        | "yes that is the number" => Some(true),
         "no" | "nope" | "wrong" | "not correct" | "rara" | "beeko" | "bee ko" | "ki i se" => {
             Some(false)
         }
@@ -388,8 +400,9 @@ mod tests {
 
     #[test]
     fn reads_every_digit_in_yoruba_and_confirmation_requires_clear_answer() {
-        assert_eq!(readback("08012345678").as_deref(), Some("Mo gbọ́: odo ọ̀kan mẹ́jọ odo ọ̀kan méjì mẹ́ta mẹ́rin márùn-ún mẹ́fà méje mẹ́jọ. Ṣé mo gbọ́ ọ́ dáadáa?"));
+        assert_eq!(readback("08012345678").as_deref(), Some("Mo gbọ́: odo mẹ́jọ odo ọ̀kan méjì mẹ́ta mẹ́rin márùn-ún mẹ́fà méje mẹ́jọ. Ṣé mo gbọ́ ọ́ dáadáa?"));
         assert_eq!(confirmation("Bẹ́ẹ̀ni"), Some(true));
+        assert_eq!(confirmation("Bẹ́ẹ̀ni, nọ́mbà náà ni"), Some(true));
         assert_eq!(confirmation("Rárá"), Some(false));
         assert_eq!(confirmation("maybe"), None);
     }
@@ -476,7 +489,7 @@ mod tests {
         assert!(state.append_audio(&vec![0; 15_999], false).is_none());
         let (id, window) = state.append_audio(&vec![0; 1], false).unwrap();
         assert_eq!(id, 9);
-        assert_eq!(window.len(), 8_000);
+        assert_eq!(window.len(), 27_200);
         assert!(matches!(state, State::Transcribing { id: 9 }));
     }
 

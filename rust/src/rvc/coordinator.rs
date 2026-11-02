@@ -2020,7 +2020,9 @@ impl Coordinator {
                         json!({"candidate_length":length}),
                     );
                 }
-            } else if super::number_capture::confirmation(&text) == Some(false) {
+            } else if super::number_capture::confirmation(&text) == Some(false)
+                || super::number_capture::is_correction_number_fragment(&text)
+            {
                 let replacement_volunteered =
                     super::number_capture::is_correction_number_fragment(&text);
                 self.final_text = text.clone();
