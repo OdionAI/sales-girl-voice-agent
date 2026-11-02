@@ -92,6 +92,10 @@ remain outside this behavior. A branch setting or source-code default does
 not change the live Compose environment; review and release are required
 before calls use it.
 
+The runtime STT chat scope accepts IDs separated by commas or whitespace. The
+Lagos environment uses a space-delimited list; both dashed and compact Balogun
+IDs must remain present so the per-agent profile keeps Qwen configured.
+
 ## GitHub release
 The same `main` workflow now releases the Wema voice-auth sidecar before the
 voice worker. The sidecar source is `agent/voice_auth.py`,
