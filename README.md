@@ -38,16 +38,15 @@ This does not recover an empty ASR transcript. See
 Balogun's Yoruba transaction-number capture is implemented in the native Rust
 RVC coordinator behind `RVC_LAB_BALOGUN_NUMBER_CAPTURE_ENABLED` (default
 `false`). When enabled for Balogun's exact agent ID and Yoruba profile, a local
-tool call starts a bounded caller-audio window; ordinary Yoruba finals remain
-SBPN, and the worker sends one complete window to hinted Qwen after the caller
-pauses. The worker asks in Yoruba for digits spoken in English, and accepts
-spoken O or oh as zero only beside explicit digits. The candidate is read digit
-by digit in Yoruba and remains unavailable
-until the caller confirms it. The same scoped prompt adds Yoruba examples for
-human-transfer intent and the transfer tool cancels an active number window.
-The feature and its Lagos workflow variable are present on the task branch only;
-the live worker remains unchanged until an approved release explicitly enables
-the flag. The Hausa agent is outside this feature scope.
+ordinary Yoruba finals remain SBPN, and each utterance is also sent to hinted
+Qwen in parallel. The coordinator waits for both transcripts before passing
+the turn to the LLM and labels Qwen's output as secondary caller-speech text.
+The LLM is instructed to prefer Qwen for digits and SBPN for Yoruba meaning;
+spoken O/oh is accepted as zero only in a clear digit sequence. The LLM repeats
+the full number in Yoruba for confirmation before using it. Number capture no
+longer depends on a model tool call. The same scoped prompt adds Yoruba examples
+for human-transfer intent. This remains Balogun-only; the Hausa agent is outside
+this feature scope.
 
 ## Core interactions
 

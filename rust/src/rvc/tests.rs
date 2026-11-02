@@ -4819,7 +4819,7 @@ async fn balogun_number_capture_requires_tool_trigger_and_ordinary_question_neve
         .as_array()
         .unwrap()
         .iter()
-        .any(|tool| { tool["function"]["name"] == "collect_transaction_phone_number" }));
+        .all(|tool| { tool["function"]["name"] != "collect_transaction_phone_number" }));
     assert!(!ordinary
         .trace
         .events()
@@ -4835,7 +4835,12 @@ async fn balogun_number_capture_requires_tool_trigger_and_ordinary_question_neve
         .send(Input::Text("start transaction number capture".into()))
         .await
         .unwrap();
-    capture.until("number_capture_started").await;
+    capture.complete(1).await;
+    assert!(!capture
+        .trace
+        .events()
+        .iter()
+        .any(|event| event.event == "number_capture_started"));
     assert!(!capture
         .trace
         .events()
@@ -4893,14 +4898,13 @@ async fn balogun_transfer_announcement_is_replaced_when_the_model_omits_aicc_too
 }
 
 #[tokio::test]
-async fn balogun_human_handoff_cancels_number_capture_before_transfer() {
+async fn balogun_human_handoff_does_not_depend_on_number_capture_tool() {
     let mut h = Harness::configured_platform(true, configured_balogun_capture, None, true).await;
     h.session
         .input
         .send(Input::Text("start transaction number capture".into()))
         .await
         .unwrap();
-    h.until("number_capture_started").await;
     h.complete(1).await;
     h.session
         .input
@@ -4909,7 +4913,7 @@ async fn balogun_human_handoff_cancels_number_capture_before_transfer() {
         .unwrap();
     let (_, reply, cleanup) = transfer_request(&mut h).await;
     let events = h.trace.events();
-    assert!(events
+    assert!(!events
         .iter()
         .any(|event| event.event == "number_capture_cancelled"));
     assert!(events

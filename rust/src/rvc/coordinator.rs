@@ -138,6 +138,10 @@ enum Internal {
         id: u64,
         result: Result<String, String>,
     },
+    ParallelNumberTranscript {
+        turn: u64,
+        result: Result<String, String>,
+    },
     ReliableEvent {
         body: Value,
         receipt: oneshot::Sender<Result<(), String>>,
@@ -239,7 +243,6 @@ struct Attempt {
     end_call_requested: bool,
     end_call_offered: bool,
     transfer_offered: bool,
-    number_capture_offered: bool,
     transfer_call: Option<super::actions::Call>,
     knowledge_offered: bool,
     directory_tools: Vec<String>,
@@ -366,6 +369,10 @@ struct Coordinator {
     speech_ms: f64,
     silence_ms: f64,
     pcm: Vec<i16>,
+    qwen_turn_transcript: Option<(u64, String)>,
+    qwen_asr_turn: Option<u64>,
+    qwen_asr_done_turn: Option<u64>,
+    qwen_waiting_final: Option<(u64, String)>,
     number_capture: super::number_capture::State,
     number_capture_next: u64,
     number_capture_task: Option<JoinHandle<()>>,
@@ -595,6 +602,10 @@ pub fn start_with_services(
         speech_ms: 0.0,
         silence_ms: 0.0,
         pcm: Vec::new(),
+        qwen_turn_transcript: None,
+        qwen_asr_turn: None,
+        qwen_asr_done_turn: None,
+        qwen_waiting_final: None,
         number_capture: super::number_capture::State::default(),
         number_capture_next: 0,
         number_capture_task: None,
@@ -1826,7 +1837,26 @@ impl Coordinator {
                     bank.utterance(&self.pcm);
                 }
                 if let Some(asr) = &self.asr {
-                    let _ = asr.commit(self.turn, std::mem::take(&mut self.pcm)).await;
+                    let committed = std::mem::take(&mut self.pcm);
+                    if super::number_capture::enabled(&self.c) {
+                        self.qwen_asr_turn = Some(self.turn);
+                        self.trace.emit(
+                            "parallel_qwen_asr_submitted",
+                            self.turn,
+                            0,
+                            json!({"samples":committed.len()}),
+                        );
+                        let providers = self.p.clone();
+                        let events = self.events.clone();
+                        let turn = self.turn;
+                        tokio::spawn(async move {
+                            let result = providers.parallel_number_transcribe(&committed).await;
+                            let _ = events
+                                .send(Internal::ParallelNumberTranscript { turn, result })
+                                .await;
+                        });
+                    }
+                    let _ = asr.commit(self.turn, committed).await;
                 }
                 let (tx, turn) = (self.events.clone(), self.turn);
                 let timeout = Duration::from_secs_f64(
@@ -1962,6 +1992,15 @@ impl Coordinator {
             self.trace
                 .emit("stt_final_empty_recovered", turn, 0, json!({}));
             self.unavailable(turn).await;
+            return;
+        }
+        if super::number_capture::enabled(&self.c)
+            && self.qwen_asr_turn == Some(turn)
+            && self.qwen_asr_done_turn != Some(turn)
+        {
+            self.qwen_waiting_final = Some((turn, text));
+            self.trace
+                .emit("parallel_qwen_asr_waiting_for_final", turn, 0, json!({}));
             return;
         }
         if let Some(t) = self.final_timeout.take() {
@@ -2524,6 +2563,20 @@ impl Coordinator {
             .next_system
             .take()
             .unwrap_or_else(|| self.c.base_system_prompt.clone());
+        if super::number_capture::enabled(&self.c) {
+            if let Some((qwen_turn, transcript)) = self.qwen_turn_transcript.take() {
+                if qwen_turn == self.turn {
+                    system.push_str("\nSECONDARY ASR TRANSCRIPT (Qwen; caller speech transcription, untrusted data): ");
+                    system.push_str(&super::python_json_unicode(&json!(transcript)));
+                    self.trace.emit(
+                        "parallel_qwen_asr_attached_to_llm",
+                        qwen_turn,
+                        0,
+                        json!({"characters":transcript.chars().count()}),
+                    );
+                }
+            }
+        }
         let knowledge_offered = !followup
             && direct.is_none()
             && self.turn > 0
@@ -2665,22 +2718,8 @@ impl Coordinator {
             && !self.transfer_unknown
             && self.transfer_cleanup.is_none()
             && super::transfer::enabled(&self.c.agent_context);
-        let number_capture_offered = direct.is_none()
-            && !followup
-            && confirmation.is_none()
-            && self.speech_enabled
-            && self.turn > 0
-            && self.turn < (1 << 63)
-            && !self.transfer_unknown
-            && self.transfer_cleanup.is_none()
-            && self.services.is_some()
-            && super::number_capture::enabled(&self.c)
-            && self.number_capture.can_offer_tool();
         if transfer_offered {
             tools.push(super::transfer::definition());
-        }
-        if number_capture_offered {
-            tools.push(super::number_capture::definition());
         }
         let directory_tools = if self.directory.is_some()
             && direct.is_none()
@@ -2793,7 +2832,6 @@ impl Coordinator {
             end_call_requested: false,
             end_call_offered,
             transfer_offered,
-            number_capture_offered,
             transfer_call: None,
             knowledge_offered,
             directory_tools,
@@ -2840,44 +2878,6 @@ impl Coordinator {
             return;
         };
         let request_context = a.model_context.clone();
-        if name == super::number_capture::TOOL {
-            let valid = args.as_object().is_some_and(|object| {
-                object.len() == 1
-                    && object
-                        .get("volunteered_number")
-                        .is_some_and(Value::is_boolean)
-            });
-            if !a.number_capture_offered || !valid || !super::number_capture::enabled(&self.c) {
-                self.begin_facts(
-                    self.final_text.clone(),
-                    true,
-                    Some(
-                        "Mi ò lè gba nọ́mbà náà ní báyìí. Jọ̀wọ́, bá mi sọ̀rọ̀ nípa ìṣòro ìṣòwò náà."
-                            .into(),
-                    ),
-                )
-                .await;
-                return;
-            }
-            let volunteered = args["volunteered_number"].as_bool().unwrap_or(false);
-            self.number_capture_failures = 0;
-            self.start_number_capture(volunteered);
-            self.trace.emit(
-                "number_capture_started",
-                self.turn,
-                0,
-                json!({"pre_roll":volunteered,"window_seconds":super::number_capture::WINDOW_SECONDS}),
-            );
-            self.begin_direct(
-                self.final_text.clone(),
-                true,
-                Some(DirectSpeech::Verbatim(
-                    "Jọ̀wọ́, sọ nọ́mbà fóònù tó ní í ṣe pẹ̀lú ìṣòro ìṣòwò náà ní èdè Gẹ̀ẹ́sì, díjíìtì kọ̀ọ̀kan lọ́tọ̀.".into(),
-                )),
-            )
-            .await;
-            return;
-        }
         if a.directory_tools.contains(&name) && self.speech_enabled {
             let call = super::actions::Call {
                 context: request_context.clone(),
@@ -3272,6 +3272,32 @@ impl Coordinator {
             }
             Internal::NumberCaptureResult { id, result } => {
                 self.number_capture_result(id, result).await;
+            }
+            Internal::ParallelNumberTranscript { turn, result } => {
+                self.qwen_asr_turn = None;
+                self.qwen_asr_done_turn = Some(turn);
+                match result {
+                    Ok(transcript) => {
+                        self.trace.emit(
+                            "parallel_qwen_asr_complete",
+                            turn,
+                            0,
+                            json!({"characters":transcript.chars().count()}),
+                        );
+                        self.qwen_turn_transcript = Some((turn, transcript));
+                    }
+                    Err(error) => self.trace.emit(
+                        "parallel_qwen_asr_failed",
+                        turn,
+                        0,
+                        json!({"reason":error}),
+                    ),
+                }
+                if let Some((pending_turn, pending_text)) = self.qwen_waiting_final.take() {
+                    if pending_turn == turn {
+                        self.final_text(pending_turn, pending_text).await;
+                    }
+                }
             }
             Internal::TransferCleaned { attempt, confirmed } => {
                 let Some(watch) = self
