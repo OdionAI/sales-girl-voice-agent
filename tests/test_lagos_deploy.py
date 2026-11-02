@@ -141,6 +141,8 @@ class LagosReleaseTests(unittest.TestCase):
                 self.assertEqual(
                     set(updates['RVC_LAB_STT_CHAT_SCOPE'].split()),
                     {
+                        '3801e455-224a-4872-b406-95a4db6b8ffa',
+                        '3801e455224a4872b40695a4db6b8ffa',
                         'a0c8cda2-3b46-4ee0-898c-48f9a4d3a444',
                         '00f99439-59d9-42a2-9c3a-db06422ea6cf',
                         'ccc440c5-452d-4690-abc0-61758c11cebd',
