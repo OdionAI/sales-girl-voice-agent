@@ -29,6 +29,17 @@ pub fn resolve_tts_seed(config: &Config) -> String {
     }
 }
 pub fn opening_text(config: &Config, context: &AgentContext) -> String {
+    for line in context.instructions.lines() {
+        if let Some((label, text)) = line.split_once(':') {
+            let text = text.trim();
+            if label.trim().eq_ignore_ascii_case("SPOKEN_OPENING")
+                && !text.is_empty()
+                && text.chars().count() <= 500
+            {
+                return text.into();
+            }
+        }
+    }
     let language = super::languages::code(&config.tts_language);
     if language == "pcm" {
         return if context.name.trim().is_empty() {
@@ -42,17 +53,6 @@ pub fn opening_text(config: &Config, context: &AgentContext) -> String {
     }
     if let Some(opening) = super::languages::data()["profiles"][language]["opening"].as_str() {
         return opening.into();
-    }
-    for line in context.instructions.lines() {
-        if let Some((label, text)) = line.split_once(':') {
-            let text = text.trim();
-            if label.trim().eq_ignore_ascii_case("SPOKEN_OPENING")
-                && !text.is_empty()
-                && text.chars().count() <= 500
-            {
-                return text.into();
-            }
-        }
     }
     if !config.opening_greeting_text.trim().is_empty() {
         return config.opening_greeting_text.trim().into();
@@ -365,6 +365,26 @@ mod resolved_surface_tests {
     use super::*;
     fn config() -> Config {
         serde_json::from_str(include_str!("../../fixtures/reference-config.json")).unwrap()
+    }
+    #[test]
+    fn sip_yoruba_agent_uses_one_explicit_named_opening() {
+        let mut c = config();
+        c.transport = "sip".into();
+        c.tts_language = "Yoruba".into();
+        let context = AgentContext {
+            name: "Baloko".into(),
+            instructions: "SPOKEN_OPENING: Ẹ káàbọ̀ sí MoMo PSB Helpdesk. Orúkọ mi ni Baloko."
+                .into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            opening_text(&c, &context),
+            "Ẹ káàbọ̀ sí MoMo PSB Helpdesk. Orúkọ mi ni Baloko."
+        );
+        assert_eq!(
+            opening_text(&c, &AgentContext::default()),
+            "Ẹ káàbọ̀. Báwo ni mo ṣe lè ràn yín lọ́wọ́ lónìí?"
+        );
     }
     #[test]
     fn resolved_browser_and_sip_profiles_retain_sdk_reply_grace_and_scope_private_hints() {
