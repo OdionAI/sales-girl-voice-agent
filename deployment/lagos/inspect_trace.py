@@ -14,6 +14,7 @@ if job == "BALOGUN":
     containers = json.loads(subprocess.check_output(["docker", "inspect", *ids], text=True))
     voice = next(c for c in containers if c["Config"].get("Labels", {}).get("com.docker.compose.service") == "voice")
     env = dict(item.split("=", 1) for item in voice["Config"]["Env"] if "=" in item)
+    print(json.dumps({"live_revision":voice["Config"].get("Labels",{}).get("org.opencontainers.image.revision"),"number_capture_enabled":env.get("RVC_LAB_BALOGUN_NUMBER_CAPTURE_ENABLED"),"stt_chat_model":env.get("RVC_LAB_STT_CHAT_MODEL"),"chat_endpoint_configured":bool(env.get("RVC_LAB_STT_CHAT_URL")),"balogun_in_chat_scope":"3801e455-224a-4872-b406-95a4db6b8ffa" in env.get("RVC_LAB_STT_CHAT_SCOPE", ""),"stt_context_chars":len(env.get("RVC_LAB_STT_CONTEXT", ""))}))
     base = env.get("AGENT_CONFIG_API_BASE_URL") or env.get("AGENT_CONFIG_SERVICE_BASE_URL")
     token = env.get("AGENT_CONFIG_SERVICE_TOKEN") or env.get("CONVERSATION_SERVICE_TOKEN")
     parsed = urllib.parse.urlsplit(base)
@@ -48,10 +49,15 @@ if job == "BALOGUN":
         traces = Path("/opt/attentive/releases/recovery-20261009/.private/traces/traces")
         for trace in sorted(traces.glob("AJ_*.jsonl"), key=lambda p:p.stat().st_mtime, reverse=True)[:6]:
             sid = None
+            event_counts = collections.Counter()
+            paired_events = []
             if trace.stat().st_size > 16*1024*1024: continue
             for line in trace.open():
                 try: event = json.loads(line)
                 except ValueError: continue
+                event_counts[event.get("event", "")] += 1
+                if str(event.get("event", "")).startswith("parallel_qwen_asr_"):
+                    paired_events.append({"event":event["event"],"turn":event.get("turn"),"at_us":event.get("at_us"),"data":{k:v for k,v in event.get("data",{}).items() if k in {"samples","characters","reason"}}})
                 if event.get("event") == "conversation_persist_started":
                     sid = event.get("data", {}).get("session_id")
             if not sid or not re.fullmatch(r"[a-fA-F0-9-]{36}", sid): continue
@@ -60,6 +66,10 @@ if job == "BALOGUN":
                 matched = detail.get("agent_id") == "3801e455-224a-4872-b406-95a4db6b8ffa"
                 out = {"job_id":trace.stem,"balogun":matched,"status":detail.get("session",{}).get("status")}
                 if matched:
+                    out["session_id"] = sid
+                    out["session_times"] = {k:v for k,v in detail.get("session",{}).items() if k in {"started_at","ended_at","created_at","recording_status","recording_error"}}
+                    out["event_counts"] = dict(event_counts)
+                    out["parallel_qwen_events"] = paired_events
                     cid = detail.get("session",{}).get("conversation_id", "")
                     if re.fullmatch(r"[a-fA-F0-9-]{36}", cid):
                         context = read("/v1/conversations/"+cid+"/context?session_id="+sid+"&limit=50")
