@@ -25,6 +25,7 @@ struct Fixture {
     idle_silent: std::sync::atomic::AtomicBool,
     idle_invalid: std::sync::atomic::AtomicBool,
     tts_fail: std::sync::atomic::AtomicBool,
+    wrong_number_once: std::sync::atomic::AtomicBool,
     hold_knowledge: std::sync::atomic::AtomicBool,
     knowledge_started: tokio::sync::Notify,
     knowledge_release: tokio::sync::Notify,
@@ -53,6 +54,10 @@ async fn llm(State(s): State<Arc<Fixture>>, Json(body): Json<Value>) -> Response
         .as_str()
         .unwrap()
         .to_string();
+    let text = serde_json::from_str::<Value>(&text)
+        .ok()
+        .and_then(|v| v["primary_transcript"]["text"].as_str().map(str::to_owned))
+        .unwrap_or(text);
     let system = body["messages"][0]["content"].as_str().unwrap_or("");
     let directory_request = body["messages"]
         .as_array()
@@ -134,7 +139,40 @@ async fn llm(State(s): State<Arc<Fixture>>, Json(body): Json<Value>) -> Response
         ]
         .iter()
         .any(|keyword| text.contains(keyword));
-    let item = if ordinary_route {
+    let secondary_result = body["messages"]
+        .as_array()
+        .unwrap()
+        .last()
+        .filter(|m| m["role"] == "tool")
+        .and_then(|m| m["content"].as_str())
+        .and_then(|v| serde_json::from_str::<Value>(v).ok())
+        .filter(|v| v["source"] == "Qwen");
+    let proposal_feedback = body["messages"]
+        .as_array()
+        .unwrap()
+        .last()
+        .filter(|m| m["role"] == "tool")
+        .and_then(|m| m["content"].as_str())
+        .and_then(|v| serde_json::from_str::<Value>(v).ok())
+        .filter(|v| v["status"] == "candidate_does_not_match_completed_qwen");
+    let item = if let Some(feedback) = proposal_feedback {
+        let digits = feedback["observed_digit_runs"][0].as_str().unwrap_or("");
+        json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":"corrected-proposal","function":{"name":"propose_transaction_phone_number","arguments":json!({"digits":digits}).to_string()}}]}}]})
+    } else if let Some(result) = secondary_result {
+        if result["status"] == "ok" {
+            json!({"choices":[{"delta":{"content":"FALSE NUMBER PREAMBLE","tool_calls":[{"index":0,"id":"phone-proposal","function":{"name":"propose_transaction_phone_number","arguments":json!({"digits":if s.wrong_number_once.swap(false,std::sync::atomic::Ordering::SeqCst){"110123456789"}else{"00123456789"}}).to_string()}}]}}]})
+        } else {
+            json!({"choices":[{"delta":{"content":"Jọ̀wọ́, tún díjíìtì náà sọ ní èdè Gẹ̀ẹ́sì."}}]})
+        }
+    } else if (text.contains("read secondary number")
+        || text.starts_with("[Primary SBPN transcription unavailable"))
+        && body["tools"].as_array().is_some_and(|t| {
+            t.iter()
+                .any(|t| t["function"]["name"] == "get_secondary_number_transcript")
+        })
+    {
+        json!({"choices":[{"delta":{"content":"FALSE NUMBER PREAMBLE","tool_calls":[{"index":0,"id":"secondary-read","function":{"name":"get_secondary_number_transcript","arguments":"{}"}}]}}]})
+    } else if ordinary_route {
         json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":"ordinary-route","function":{"name":"rvc_answer_normally","arguments":"{}"}}]}}]})
     } else if let Some(content) = background {
         json!({"choices":[{"delta":{"content":content}}]})
@@ -195,6 +233,11 @@ async fn llm(State(s): State<Arc<Fixture>>, Json(body): Json<Value>) -> Response
         json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":"ticket-call","function":{"name":"create_ticket","arguments":"{\"title\":\"Customer issue\",\"description\":\"Please investigate.\",\"priority\":\"normal\"}"}}]}}]})
     } else if system.contains("BALOGUN CUSTOMER SUPPORT FLOW")
         && text.contains("start transaction number capture")
+        && body["tools"].as_array().is_some_and(|tools| {
+            tools
+                .iter()
+                .any(|t| t["function"]["name"] == "collect_transaction_phone_number")
+        })
     {
         json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":"number-capture-call","function":{"name":"collect_transaction_phone_number","arguments":"{\"volunteered_number\":false}"}}]}}]})
     } else if system.contains("YORUBA HUMAN-TRANSFER INTENT")
@@ -278,9 +321,14 @@ async fn tts(State(s): State<Arc<Fixture>>, Json(body): Json<Value>) -> Response
     if s.tts_fail.load(std::sync::atomic::Ordering::SeqCst) {
         return axum::http::StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
-    assert_eq!(body["x_vector_only_mode"], false);
-    assert_eq!(body["voice"], "helen-mavino-0030");
-    assert_eq!(body["seed"], "3536072912");
+    if body["voice"] == "balogun" {
+        assert_eq!(body["model"], "coqui-yoruba-vits");
+        assert!(body.get("x_vector_only_mode").is_none());
+    } else {
+        assert_eq!(body["x_vector_only_mode"], false);
+        assert_eq!(body["voice"], "helen-mavino-0030");
+        assert_eq!(body["seed"], "3536072912");
+    }
     let sample = if body["input"].as_str().unwrap().contains("Second") {
         222i16
     } else {
@@ -291,7 +339,12 @@ async fn tts(State(s): State<Arc<Fixture>>, Json(body): Json<Value>) -> Response
     let chunks: Vec<Result<Vec<u8>, Infallible>> =
         pcm.chunks(999).map(|c| Ok(c.to_vec())).collect();
     (
-        [("x-sample-rate", "24000")],
+        [
+            ("x-sample-rate", "24000"),
+            ("content-type", "audio/pcm"),
+            ("x-audio-sample-rate", "24000"),
+            ("x-audio-channels", "1"),
+        ],
         Body::from_stream(futures_util::stream::iter(chunks)),
     )
         .into_response()
@@ -364,6 +417,8 @@ impl Harness {
                 Router::new()
                     .route("/ws", axum::routing::get(asr_ws))
                     .route("/final", post(asr_final))
+                    .route("/parallel", post(secondary_asr_fixture))
+                    .route("/sbpn", post(sbpn_asr_fixture))
                     .with_state(state.clone()),
             );
         }
@@ -383,6 +438,11 @@ impl Harness {
             c.stt_warmup_ms = 0.0;
         }
         configure(&mut c);
+        if asr.is_some() && c.balogun_number_capture_enabled {
+            c.stt_chat_url = format!("http://{address}/parallel");
+            c.stt_batch_url = format!("http://{address}/sbpn");
+            c.stt_ws_url = String::new();
+        }
         if directory::enabled(&c.agent_context, directory::LOOKUP) {
             c.directory.endpoint = format!("http://{address}/directory");
             c.directory.token = "local-directory-fixture".into();
@@ -812,6 +872,56 @@ struct AsrFixture {
     final_release: tokio::sync::Notify,
     chat_response: Mutex<Option<String>>,
     final_body: Mutex<Option<Value>>,
+    secondary_requests: Mutex<Vec<Value>>,
+    secondary_response: Mutex<Option<String>>,
+    secondary_hold: std::sync::atomic::AtomicBool,
+    secondary_fail: std::sync::atomic::AtomicBool,
+    secondary_truncated: std::sync::atomic::AtomicBool,
+    secondary_started: tokio::sync::Notify,
+    secondary_release: tokio::sync::Notify,
+    sbpn_response: Mutex<Option<String>>,
+}
+async fn secondary_asr_fixture(
+    State(s): State<Arc<AsrFixture>>,
+    Json(body): Json<Value>,
+) -> Response {
+    use std::sync::atomic::Ordering;
+    s.secondary_requests.lock().unwrap().push(body);
+    s.secondary_started.notify_one();
+    if s.secondary_hold.load(Ordering::SeqCst) {
+        s.secondary_release.notified().await;
+    }
+    if s.secondary_fail.load(Ordering::SeqCst) {
+        return axum::http::StatusCode::SERVICE_UNAVAILABLE.into_response();
+    }
+    let text = s
+        .secondary_response
+        .lock()
+        .unwrap()
+        .clone()
+        .unwrap_or_else(|| "zero zero one two three four five six seven eight nine".into());
+    Json(json!({"choices":[{"message":{"content":text},"finish_reason":if s.secondary_truncated.load(Ordering::SeqCst){"length"}else{"stop"}}]})).into_response()
+}
+async fn sbpn_asr_fixture(
+    State(s): State<Arc<AsrFixture>>,
+    mut form: axum::extract::Multipart,
+) -> Response {
+    let mut audio = false;
+    while let Some(field) = form.next_field().await.unwrap() {
+        if field.name() == Some("file") {
+            let bytes = field.bytes().await.unwrap();
+            assert!(bytes.starts_with(b"RIFF"));
+            audio = true;
+        }
+    }
+    assert!(audio);
+    let text = s
+        .sbpn_response
+        .lock()
+        .unwrap()
+        .clone()
+        .unwrap_or_else(|| "first request".into());
+    Json(json!({"text":text})).into_response()
 }
 async fn asr_ws(
     State(s): State<Arc<AsrFixture>>,
@@ -950,7 +1060,7 @@ async fn balogun_number_capture_sends_one_hinted_full_wav_to_qwen_chat() {
     config.agent_context.agent_id = super::number_capture::BALOGUN_AGENT_ID.into();
     let providers = providers::Providers::new(Arc::new(config), Trace::default()).unwrap();
     let audio = vec![321i16; 12_345];
-    let transcript = providers.number_capture_transcribe(&audio).await.unwrap();
+    let transcript = providers.parallel_number_transcribe(&audio).await.unwrap();
     assert_eq!(
         transcript,
         "zero eight zero one two three four five six seven eight"
@@ -4652,16 +4762,28 @@ async fn unchanged_speculative_human_request_reuses_its_model_plan_after_final()
             .await
             .unwrap();
         let (_, reply, cleanup) = transfer_request(&mut h).await;
-        assert_eq!(
-            h.fixture
-                .requests
-                .lock()
-                .unwrap()
-                .iter()
-                .filter(|request| request["messages"].is_array())
-                .count(),
-            if streaming { 2 } else { 1 }
-        );
+        let request_count = h
+            .fixture
+            .requests
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|request| request["messages"].is_array())
+            .count();
+        // The routing decision can cancel the draft before its HTTP request
+        // starts. Both paths must retain the original speculative attempt.
+        assert!((1..=if streaming { 2 } else { 1 }).contains(&request_count));
+        let events = h.trace.events();
+        let speculative = events
+            .iter()
+            .find(|e| e.event == "speculation_start")
+            .unwrap();
+        let requests: Vec<_> = events
+            .iter()
+            .filter(|e| e.event == "llm_request_start")
+            .collect();
+        assert!(!requests.is_empty());
+        assert!(requests.iter().all(|e| e.attempt == speculative.attempt));
         let _ = cleanup.send(true);
         let _ = reply.send(Err(json!({"status":"failed","cleanup_confirmed":true})));
         h.until("human_transfer_result").await;
@@ -4761,6 +4883,8 @@ fn configured_balogun_capture(c: &mut Config) {
     c.stt_chat_url = "http://127.0.0.1:1/asr".into();
     c.stt_chat_model = "Qwen3-ASR".into();
     c.stt_context = "Prefer caller-spoken digits.".into();
+    c.tts_voice = "balogun".into();
+    c.tts_model = "coqui-yoruba-vits".into();
 }
 
 #[tokio::test]
@@ -4804,7 +4928,7 @@ async fn balogun_yoruba_human_request_calls_aicc_and_suppresses_model_announceme
 }
 
 #[tokio::test]
-async fn balogun_number_capture_requires_tool_trigger_and_ordinary_question_never_calls_qwen() {
+async fn typed_balogun_turns_do_not_advertise_or_trigger_number_capture_tool() {
     let mut ordinary =
         Harness::configured_platform(true, configured_balogun_capture, None, true).await;
     ordinary
@@ -4886,9 +5010,12 @@ async fn balogun_transfer_announcement_is_replaced_when_the_model_omits_aicc_too
     assert!(!requests
         .iter()
         .any(|request| request["input"] == "Màá so yín pọ̀ mọ́ aṣojú báyìí."));
-    assert!(requests.iter().any(|request| {
-        request["input"] == "Mi ò tíì pe aṣojú. Mo ṣì wà láti ràn yín lọ́wọ́."
-    }));
+    let spoken = requests
+        .iter()
+        .filter_map(|r| r["input"].as_str())
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert_eq!(spoken, "Mi ò tíì pe aṣojú. Mo ṣì wà láti ràn yín lọ́wọ́.");
     assert!(!h
         .trace
         .events()
@@ -5047,5 +5174,269 @@ async fn owned_utterances_are_not_cut_at_the_old_sixty_second_prototype_limit() 
         .iter()
         .any(|event| event.event == "stt_final"
             && event.data["text"] == "A complete long caller turn."));
+    h.close().await;
+}
+
+#[tokio::test]
+async fn balogun_sbpn_speculation_can_play_while_background_qwen_is_unfinished() {
+    use std::sync::atomic::Ordering;
+    let state = Arc::new(AsrFixture::default());
+    state.secondary_hold.store(true, Ordering::SeqCst);
+    let mut h = Harness::configured_platform(
+        false,
+        configured_balogun_capture,
+        Some(state.clone()),
+        false,
+    )
+    .await;
+    h.voice().await;
+    h.session
+        .input
+        .send(Input::Partial("first request".into()))
+        .await
+        .unwrap();
+    h.until("tts_first_pcm").await;
+    assert!(h.sink.pcm.lock().unwrap().is_empty());
+    h.end().await;
+    h.complete(1).await;
+    assert!(!h.sink.pcm.lock().unwrap().is_empty());
+    assert!(!h
+        .trace
+        .events()
+        .iter()
+        .any(|e| e.event == "parallel_qwen_asr_complete"));
+    let requests = h.fixture.requests.lock().unwrap().clone();
+    assert_eq!(
+        requests.iter().filter(|r| r["messages"].is_array()).count(),
+        1,
+        "normal SBPN speculation remains reusable"
+    );
+    assert!(!h
+        .trace
+        .events()
+        .iter()
+        .any(|e| e.event == "parallel_qwen_asr_waiting_for_final"));
+    h.close().await;
+}
+
+#[tokio::test]
+async fn balogun_reads_completed_longer_qwen_context_as_tool_data_and_retains_it() {
+    use std::sync::atomic::Ordering;
+    let state = Arc::new(AsrFixture::default());
+    state.secondary_hold.store(true, Ordering::SeqCst);
+    *state.sbpn_response.lock().unwrap() = Some("read secondary number".into());
+    let mut h = Harness::configured_platform(
+        false,
+        configured_balogun_capture,
+        Some(state.clone()),
+        false,
+    )
+    .await;
+    h.voice().await;
+    h.end().await;
+    h.until("secondary_number_transcript_read").await;
+    assert!(
+        h.sink.pcm.lock().unwrap().is_empty(),
+        "a read-tool preamble must not be spoken"
+    );
+    for _ in 0..50 {
+        h.session.pcm(vec![0; 320]).await.unwrap();
+    }
+    h.until("parallel_qwen_asr_submitted").await;
+    state.secondary_release.notify_one();
+    h.complete(1).await;
+    let requests = h.fixture.requests.lock().unwrap().clone();
+    let follow = requests
+        .iter()
+        .rev()
+        .find(|r| r["messages"].is_array())
+        .unwrap();
+    let messages = follow["messages"].as_array().unwrap();
+    assert!(!messages[0]["content"]
+        .as_str()
+        .unwrap()
+        .contains("zero zero one two three four"));
+    let tool = messages.iter().find(|m| m["role"] == "tool").unwrap();
+    let data: Value = serde_json::from_str(tool["content"].as_str().unwrap()).unwrap();
+    assert_eq!(
+        data["windows"][0]["transcript"],
+        "zero zero one two three four five six seven eight nine"
+    );
+    assert_eq!(state.secondary_requests.lock().unwrap().len(), 1);
+    assert!(h
+        .trace
+        .events()
+        .iter()
+        .any(|e| e.event == "secondary_number_candidate_selected" && e.data["grounded"] == true));
+    h.session
+        .input
+        .send(Input::Text("second request".into()))
+        .await
+        .unwrap();
+    h.complete(2).await;
+    let all = h.fixture.requests.lock().unwrap().clone();
+    let next = all.iter().rev().find(|r| r["messages"].is_array()).unwrap();
+    assert!(next["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|m| m["role"] == "tool"
+            && m["content"]
+                .as_str()
+                .unwrap_or("")
+                .contains("zero zero one two three")));
+    h.close().await;
+}
+
+#[tokio::test]
+async fn balogun_empty_sbpn_can_read_qwen_and_failure_requests_repetition_without_freezing() {
+    use std::sync::atomic::Ordering;
+    for fail in [false, true] {
+        let state = Arc::new(AsrFixture::default());
+        *state.sbpn_response.lock().unwrap() = Some(String::new());
+        state.secondary_fail.store(fail, Ordering::SeqCst);
+        let mut h =
+            Harness::configured_platform(false, configured_balogun_capture, Some(state), false)
+                .await;
+        h.voice().await;
+        h.end().await;
+        h.until("secondary_number_transcript_read").await;
+        for _ in 0..50 {
+            h.session.pcm(vec![0; 320]).await.unwrap();
+        }
+        h.complete(1).await;
+        assert!(h
+            .trace
+            .events()
+            .iter()
+            .any(|e| e.event == "parallel_qwen_asr_attached_to_llm"));
+        let req = h.fixture.requests.lock().unwrap().clone();
+        let spoken = req
+            .iter()
+            .filter_map(|r| r["input"].as_str())
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert_eq!(spoken.contains("odo odo ọ̀kan"), !fail);
+        if fail {
+            assert!(spoken.contains("tún díjíìtì"));
+        }
+        h.close().await;
+    }
+}
+
+#[tokio::test]
+async fn balogun_human_handoff_interrupts_a_pending_secondary_read_without_waiting_for_qwen() {
+    use std::sync::atomic::Ordering;
+    let state = Arc::new(AsrFixture::default());
+    state.secondary_hold.store(true, Ordering::SeqCst);
+    *state.sbpn_response.lock().unwrap() = Some("read secondary number".into());
+    let mut h = Harness::configured_platform(
+        false,
+        configured_balogun_capture,
+        Some(state.clone()),
+        false,
+    )
+    .await;
+    h.voice().await;
+    h.end().await;
+    h.until("secondary_number_transcript_read").await;
+    *state.sbpn_response.lock().unwrap() = Some("Mo fẹ́ bá ènìyàn sọ̀rọ̀".into());
+    h.voice().await;
+    h.end().await;
+    let (_, reply, cleanup) = transfer_request(&mut h).await;
+    assert!(h
+        .trace
+        .events()
+        .iter()
+        .any(|e| e.event == "attempt_cancel" && e.data["reason"] == "user_barge_in"));
+    state.secondary_release.notify_one();
+    let _ = cleanup.send(true);
+    let _ = reply.send(Err(json!({"status":"failed","cleanup_confirmed":true})));
+    h.until("human_transfer_result").await;
+    h.complete(2).await;
+    assert!(!h
+        .trace
+        .events()
+        .iter()
+        .any(|e| e.event == "parallel_qwen_asr_attached_to_llm" && e.turn == 1));
+    h.close().await;
+}
+
+#[tokio::test]
+async fn balogun_retains_continued_digit_audio_while_primary_final_waits() {
+    use std::sync::atomic::Ordering;
+    let state = Arc::new(AsrFixture::default());
+    state.secondary_hold.store(true, Ordering::SeqCst);
+    *state.sbpn_response.lock().unwrap() = Some("zero".into());
+    let mut h = Harness::configured_platform(
+        false,
+        configured_balogun_capture,
+        Some(state.clone()),
+        false,
+    )
+    .await;
+    h.voice().await;
+    h.end().await;
+    h.until("secondary_number_reply_waiting").await;
+    *state.sbpn_response.lock().unwrap() = Some("eight".into());
+    h.voice().await;
+    h.end().await;
+    for _ in 0..50 {
+        h.session.pcm(vec![0; 320]).await.unwrap();
+    }
+    h.until("parallel_qwen_asr_submitted").await;
+    assert!(h.sink.pcm.lock().unwrap().is_empty());
+    state.secondary_release.notify_one();
+    h.complete(1).await;
+    let events = h.trace.events();
+    let submitted: Vec<_> = events
+        .iter()
+        .filter(|e| e.event == "parallel_qwen_asr_submitted")
+        .collect();
+    assert_eq!(submitted.len(), 1);
+    assert_eq!(submitted[0].data["first_turn"], 1);
+    assert_eq!(submitted[0].data["last_turn"], 1);
+    // Both 240 ms speech segments and the intervening 300 ms pause survive
+    // even though the primary FSM is waiting on the first numeric final.
+    assert!(submitted[0].data["samples"].as_u64().unwrap() >= 12 * 320 * 2 + 15 * 320);
+    let req = h.fixture.requests.lock().unwrap().clone();
+    let last = req.iter().rev().find(|r| r["messages"].is_array()).unwrap();
+    assert!(last["messages"].as_array().unwrap().iter().any(
+        |m| m["role"] == "user" && m["content"].as_str().unwrap_or("").contains("00123456789")
+    ));
+    h.close().await;
+}
+
+#[tokio::test]
+async fn balogun_rejects_a_changed_zero_then_reads_only_the_grounded_candidate() {
+    use std::sync::atomic::Ordering;
+    let state = Arc::new(AsrFixture::default());
+    *state.sbpn_response.lock().unwrap() = Some("read secondary number".into());
+    let mut h =
+        Harness::configured_platform(false, configured_balogun_capture, Some(state), false).await;
+    h.fixture.wrong_number_once.store(true, Ordering::SeqCst);
+    h.voice().await;
+    h.end().await;
+    for _ in 0..50 {
+        h.session.pcm(vec![0; 320]).await.unwrap();
+    }
+    h.until("secondary_number_candidate_selected").await;
+    h.complete(1).await;
+    assert!(h
+        .trace
+        .events()
+        .iter()
+        .any(|e| e.event == "secondary_number_candidate_rejected"));
+    let req = h.fixture.requests.lock().unwrap().clone();
+    let spoken = req
+        .iter()
+        .filter_map(|r| r["input"].as_str())
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert_eq!(
+        spoken,
+        super::number_capture::readback("00123456789").unwrap()
+    );
+    assert!(!spoken.contains("FALSE"));
     h.close().await;
 }

@@ -875,7 +875,7 @@ impl Providers {
             let response = self
                 .client
                 .post(&c.stt_chat_url)
-                .json(&json!({"model":c.stt_chat_model,"messages":messages,"max_tokens":128,"temperature":0.0}))
+                .json(&json!({"model":c.stt_chat_model,"messages":messages,"max_tokens":1024,"temperature":0.0}))
                 .send()
                 .await
                 .map_err(|_| "parallel Qwen ASR connection failed")?
@@ -891,6 +891,9 @@ impl Providers {
         let payload = tokio::time::timeout(timeout, request)
             .await
             .map_err(|_| "parallel Qwen ASR timed out")??;
+        if payload["choices"][0]["finish_reason"] == "length" {
+            return Err("parallel Qwen ASR transcript truncated".into());
+        }
         let text = super::text::clean_transcript_for_language(
             payload["choices"][0]["message"]["content"]
                 .as_str()
@@ -904,9 +907,6 @@ impl Providers {
         Ok(text)
     }
 
-    pub(crate) async fn number_capture_transcribe(&self, pcm: &[i16]) -> Result<String, String> {
-        self.parallel_number_transcribe(pcm).await
-    }
     /// A separate request receives the full caller-owned utterance. Its done
     /// event is authoritative only after this explicit final commit; streaming
     /// partials from the speculative socket can never enter this path.

@@ -74,7 +74,13 @@ pub(crate) async fn generate_guarded(
     {
         return super::transfer_stream::generate(p, messages, tools, turn, attempt, out).await;
     }
-    if !directory && !tools.iter().any(|tool| tool["function"]["name"] == TOOL) {
+    if !directory
+        && !tools.iter().any(|tool| {
+            tool["function"]["name"] == TOOL
+                || (tool["function"]["name"] == super::secondary_asr::READ_TOOL
+                    || tool["function"]["name"] == super::secondary_asr::PROPOSE_TOOL)
+        })
+    {
         return p.llm(messages, tools, quiet, turn, attempt, out).await;
     }
     let (tx, mut rx) = tokio::sync::mpsc::channel(32);
@@ -105,7 +111,7 @@ pub(crate) async fn generate_guarded(
     let (_, (events, first)) = tokio::try_join!(producer, collector)?;
     let suppress = directory_routing || events
         .iter()
-        .any(|event| matches!(event,LlmEvent::Tool{name,..}if name==TOOL||super::directory::is_tool(name)));
+        .any(|event| matches!(event,LlmEvent::Tool{name,..}if name==TOOL||name==super::secondary_asr::READ_TOOL||name==super::secondary_asr::PROPOSE_TOOL||super::directory::is_tool(name)));
     let generated_text = events
         .iter()
         .filter_map(|event| match event {

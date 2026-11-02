@@ -140,8 +140,8 @@ pub fn end_call_enabled(context: &AgentContext) -> bool {
 pub fn apply_stt_scope(config: &mut Config) {
     if super::languages::uses_sbpn(&config.tts_language) {
         // SBPN remains the authoritative ordinary Yoruba transcript. Retain the
-        // scoped Qwen chat endpoint only for Balogun's separately triggered
-        // number-answer capture; final_http still returns SBPN first.
+        // scoped Qwen chat endpoint only for Balogun's background number
+        // windows; primary final_http still returns SBPN first.
         if !super::number_capture::enabled(config) {
             config.stt_chat_url.clear();
             config.stt_context.clear();

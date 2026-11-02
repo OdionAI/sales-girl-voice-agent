@@ -79,13 +79,15 @@ Balogun's Yoruba transaction-number capture is implemented behind the
 `RVC_LAB_BALOGUN_NUMBER_CAPTURE_ENABLED` runtime flag. It defaults to `false`;
 the Lagos workflow reads the repository variable
 `BALOGUN_NUMBER_CAPTURE_ENABLED` and passes `true` only when it is explicitly
-set to the string `true`. The flag enables a local capture action only for
-Balogun's agent ID and Yoruba profile. SBPN remains the ordinary Yoruba ASR;
-the worker sends one bounded answer window to hinted Qwen only after that
-action is called. The worker reads a candidate back in Yoruba and waits for
-caller confirmation before the value can enter the transaction context. The
-same scoped prompt adds Yoruba examples for AICC transfer intent and cancels
-number capture if the caller requests a person. Other agents, including Hausa,
+set to the string `true`. This is scoped to Balogun's exact agent ID and Yoruba
+profile. SBPN remains the conversational ASR and drives speculation. A separate
+caller-only Qwen recorder spans short primary turns, closes after one second of
+silence, and caps each window at 30 seconds. Qwen runs normal batch
+transcription with digit hints; reading its cache does not trigger ASR.
+Ordinary SBPN replies proceed immediately. Number-bearing replies wait for the
+completed window, and the LLM's selected candidate must match an observed Qwen
+digit run before Rust reads it back exactly in Yoruba for confirmation.
+Human transfer and interruption remain available. Other agents, including Hausa,
 remain outside this behavior. A branch setting or source-code default does
 not change the live Compose environment; review and release are required
 before calls use it.

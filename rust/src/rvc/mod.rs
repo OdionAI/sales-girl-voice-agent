@@ -23,6 +23,7 @@ mod prompts;
 pub mod providers;
 pub(crate) mod recording;
 pub mod report;
+mod secondary_asr;
 pub mod sip;
 mod text;
 pub mod transfer;
