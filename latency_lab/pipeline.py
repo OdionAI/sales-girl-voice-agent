@@ -448,14 +448,13 @@ class ConversationPipeline:
                 if 0 < len(candidate) <= 500:
                     greeting = candidate
                     break
-        if greeting:
-            return greeting
-        profile = LANGUAGES.get(language_code(self.config.tts_language))
-        if profile:
-            return profile["opening"]
-        if is_pidgin(self.config.tts_language):
-            name = str(getattr(self.agent_context, "name", "") or "").strip()
-            return f"How you dey? Na {name} dey here. How I fit help you?" if name else "How you dey? How I fit help you?"
+        if not greeting:
+            profile = LANGUAGES.get(language_code(self.config.tts_language))
+            if profile:
+                greeting = profile["opening"]
+            elif is_pidgin(self.config.tts_language):
+                name = str(getattr(self.agent_context, "name", "") or "").strip()
+                greeting = f"How you dey? Na {name} dey here. How I fit help you?" if name else "How you dey? How I fit help you?"
         if not greeting:
             greeting = str(self.config.opening_greeting_text or "").strip()
         agent_name = str(getattr(self.agent_context, "name", "") or "").strip()
