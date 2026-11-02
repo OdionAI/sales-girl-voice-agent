@@ -17,6 +17,9 @@ This service owns the realtime voice runtime:
 - joining LiveKit rooms
 - starting room recording only after the runtime has joined when recording is enabled
 - building runtime instructions/prompts for the active session
+- speaking an agent's `SPOKEN_OPENING` once before the caller's first turn,
+  including for Yoruba, Hausa, and Igbo agents; when absent, the configured
+  language's default opening applies
 - running the stable voice pipeline
 - selecting and invoking tools
 - persisting conversation and session activity
