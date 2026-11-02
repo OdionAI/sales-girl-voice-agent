@@ -434,14 +434,8 @@ class ConversationPipeline:
                 self.attempt = None
 
     def opening_greeting_text(self) -> str:
-        profile = LANGUAGES.get(language_code(self.config.tts_language))
-        if profile:
-            return profile["opening"]
-        if is_pidgin(self.config.tts_language):
-            name = str(getattr(self.agent_context, "name", "") or "").strip()
-            return f"How you dey? Na {name} dey here. How I fit help you?" if name else "How you dey? How I fit help you?"
         # The opening is spoken directly by TTS, before the LLM sees a caller
-        # turn. Allow an agent's own instructions to supply that first line.
+        # turn. An agent's explicit opening must also work for native languages.
         greeting = ""
         instructions = str(getattr(self.agent_context, "instructions", "") or "")
         for line in instructions.splitlines():
@@ -451,6 +445,14 @@ class ConversationPipeline:
                 if 0 < len(candidate) <= 500:
                     greeting = candidate
                     break
+        if greeting:
+            return greeting
+        profile = LANGUAGES.get(language_code(self.config.tts_language))
+        if profile:
+            return profile["opening"]
+        if is_pidgin(self.config.tts_language):
+            name = str(getattr(self.agent_context, "name", "") or "").strip()
+            return f"How you dey? Na {name} dey here. How I fit help you?" if name else "How you dey? How I fit help you?"
         if not greeting:
             greeting = str(self.config.opening_greeting_text or "").strip()
         agent_name = str(getattr(self.agent_context, "name", "") or "").strip()
