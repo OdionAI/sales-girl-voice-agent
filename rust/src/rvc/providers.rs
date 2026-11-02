@@ -39,7 +39,7 @@ impl Default for LlmOptions {
             required: false,
             turn: 0,
             attempt: 0,
-            max_tokens: 180,
+            max_tokens: 400,
             temperature: 0.35,
         }
     }
