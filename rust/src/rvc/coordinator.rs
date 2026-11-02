@@ -1849,8 +1849,9 @@ impl Coordinator {
                         let providers = self.p.clone();
                         let events = self.events.clone();
                         let turn = self.turn;
+                        let qwen_audio = committed.clone();
                         tokio::spawn(async move {
-                            let result = providers.parallel_number_transcribe(&committed).await;
+                            let result = providers.parallel_number_transcribe(&qwen_audio).await;
                             let _ = events
                                 .send(Internal::ParallelNumberTranscript { turn, result })
                                 .await;
