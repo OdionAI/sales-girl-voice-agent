@@ -227,9 +227,11 @@ async fn tts(State(s): State<Arc<Fixture>>, Json(body): Json<Value>) -> Response
     if s.tts_fail.load(std::sync::atomic::Ordering::SeqCst) {
         return axum::http::StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
-    assert_eq!(body["x_vector_only_mode"], false);
-    assert_eq!(body["voice"], "helen-mavino-0030");
-    assert_eq!(body["seed"], "3536072912");
+    if body["model"] != "hausa" {
+        assert_eq!(body["x_vector_only_mode"], false);
+        assert_eq!(body["voice"], "helen-mavino-0030");
+        assert_eq!(body["seed"], "3536072912");
+    }
     let sample = if body["input"].as_str().unwrap().contains("Second") {
         222i16
     } else {
@@ -240,7 +242,12 @@ async fn tts(State(s): State<Arc<Fixture>>, Json(body): Json<Value>) -> Response
     let chunks: Vec<Result<Vec<u8>, Infallible>> =
         pcm.chunks(999).map(|c| Ok(c.to_vec())).collect();
     (
-        [("x-sample-rate", "24000")],
+        [
+            ("x-sample-rate", "24000"),
+            ("x-audio-sample-rate", "24000"),
+            ("x-audio-channels", "1"),
+            ("content-type", "audio/pcm"),
+        ],
         Body::from_stream(futures_util::stream::iter(chunks)),
     )
         .into_response()
@@ -313,6 +320,7 @@ impl Harness {
                 Router::new()
                     .route("/ws", axum::routing::get(asr_ws))
                     .route("/final", post(asr_final))
+                    .route("/sbpn-base", post(sbpn_base_final))
                     .with_state(state.clone()),
             );
         }
@@ -332,6 +340,9 @@ impl Harness {
             c.stt_warmup_ms = 0.0;
         }
         configure(&mut c);
+        if c.stt_model == languages::SBPN_LARGE_MODEL {
+            c.stt_batch_url = format!("http://{address}/sbpn-base");
+        }
         if directory::enabled(&c.agent_context, directory::LOOKUP) {
             c.directory.endpoint = format!("http://{address}/directory");
             c.directory.token = "local-directory-fixture".into();
@@ -741,12 +752,20 @@ async fn asr_ws(
             s.open.store(true, Ordering::SeqCst);
             socket
                 .send(Message::Text(
-                    json!({"type":"session.created"}).to_string().into(),
+                    json!({"type":"session.created","session":{"model":languages::SBPN_LARGE_MODEL}}).to_string().into(),
                 ))
                 .await
                 .unwrap();
             while let Some(Ok(message)) = socket.next().await {
                 match message {
+                    Message::Binary(bytes) => {
+                        s.appended_samples.fetch_add(bytes.len() / 2, Ordering::SeqCst);
+                        if bytes.iter().any(|b| *b != 0) {
+                            let _ = socket.send(Message::Text(json!({
+                                "type":"transcription.delta","text":"first request"
+                            }).to_string().into())).await;
+                        }
+                    }
                     Message::Text(raw) => {
                         let value: Value = serde_json::from_str(&raw).unwrap();
                         if value["type"] == "input_audio_buffer.commit" && value["final"] == true {
@@ -833,6 +852,66 @@ async fn asr_final(State(s): State<Arc<AsrFixture>>, Json(body): Json<Value>) ->
     }
     Json(json!({"choices":[{"message":{"content":"language English<asr_text>first request"}}]}))
         .into_response()
+}
+
+async fn sbpn_base_final(mut form: axum::extract::Multipart) -> Json<Value> {
+    let mut got_audio = false;
+    while let Some(field) = form.next_field().await.unwrap() {
+        if field.name() == Some("file") {
+            let bytes = field.bytes().await.unwrap();
+            assert!(bytes.len() > 44);
+            got_audio = true;
+        }
+    }
+    assert!(got_audio);
+    Json(json!({"text":"alternate complete request"}))
+}
+
+#[tokio::test]
+async fn sbpn_dual_transcript_call_replaces_primary_only_speculation() {
+    let state = Arc::new(AsrFixture::default());
+    *state.flushed_text.lock().unwrap() = Some("first request".into());
+    let mut h = Harness::configured_asr(
+        false,
+        |c| {
+            c.tts_language = "Hausa".into();
+            c.tts_model = "hausa".into();
+            c.tts_voice = "musa".into();
+            c.hausa_twb_voices_enabled = false;
+            c.stt_model = languages::SBPN_LARGE_MODEL.into();
+            c.stable_partial_ms = 10.0;
+        },
+        Some(state),
+    )
+    .await;
+    h.until("session_ready").await;
+    h.voice().await;
+    h.until("speculation_start").await;
+    assert!(h.sink.pcm.lock().unwrap().is_empty());
+    h.end().await;
+    h.complete(1).await;
+    assert!(!h.sink.pcm.lock().unwrap().is_empty());
+    let requests = h.fixture.requests.lock().unwrap().clone();
+    assert!(requests.iter().any(|r| {
+        let Some(raw) = r["messages"]
+            .as_array()
+            .and_then(|m| m.last())
+            .and_then(|m| m["content"].as_str())
+        else {
+            return false;
+        };
+        let Ok(pair) = serde_json::from_str::<Value>(raw) else {
+            return false;
+        };
+        pair["sbpn_large"] == "first request" && pair["sbpn_base"] == "alternate complete request"
+    }));
+    h.until("stt_base_candidate_available").await;
+    assert!(!h
+        .trace
+        .events()
+        .iter()
+        .any(|e| e.event == "speculation_authorized"));
+    h.close().await;
 }
 
 #[tokio::test]
@@ -1292,7 +1371,7 @@ async fn native_asr_adapter_keeps_realtime_non_authoritative_and_serializes_fina
     );
     asr.commit(42, vec![1000; 1600]).await.unwrap();
     assert!(
-        matches!(tokio::time::timeout(Duration::from_secs(3),asr.events.recv()).await.unwrap(),Some(AsrEvent::Final{turn:42,text})if text=="first request")
+        matches!(tokio::time::timeout(Duration::from_secs(3),asr.events.recv()).await.unwrap(),Some(AsrEvent::Final{turn:42,text,base_candidate:None})if text=="first request")
     );
     assert!(state.handoff.load(Ordering::SeqCst));
     asr.task.abort();
@@ -2664,7 +2743,7 @@ async fn whisper_final_fallback_receives_full_owned_audio_and_never_uses_partial
     asr.commit(91, vec![1000; 3200]).await.unwrap();
     let text = tokio::time::timeout(Duration::from_secs(4), async {
         loop {
-            if let Some(AsrEvent::Final { turn, text }) = asr.events.recv().await {
+            if let Some(AsrEvent::Final { turn, text, .. }) = asr.events.recv().await {
                 assert_eq!(turn, 91);
                 break text;
             }

@@ -4,6 +4,7 @@ use super::{profiles::AgentContext, Config};
 use serde_json::Value;
 use std::sync::OnceLock;
 pub const SBPN_MODEL: &str = "ogunlao/SBPN_multilingual_base";
+pub const SBPN_LARGE_MODEL: &str = "ogunlao/SBPN_multilingual_large";
 pub fn data() -> &'static Value {
     static DATA: OnceLock<Value> = OnceLock::new();
     DATA.get_or_init(|| {
@@ -247,6 +248,24 @@ pub fn apply(config: &mut Config, context: &AgentContext, overrides: &Value) -> 
     config.stt_model = SBPN_MODEL.into();
     config.stt_ws_url = gateway(config, text(values, "sbpn_ws_url"))?;
     config.stt_batch_url = gateway(config, text(values, "sbpn_url"))?;
+    if std::env::var("ODION_SBPN_LARGE_TEST").as_deref() == Ok("1") {
+        config.stt_model = SBPN_LARGE_MODEL.into();
+        config.stt_ws_url = match std::env::var("ODION_SBPN_LARGE_TEST_LOCAL_PORT") {
+            Ok(value) => {
+                let port = value
+                    .parse::<u16>()
+                    .ok()
+                    .filter(|port| *port != 0)
+                    .ok_or("invalid SBPN Large local tunnel port")?;
+                format!("ws://127.0.0.1:{port}/v1/realtime")
+            }
+            Err(std::env::VarError::NotPresent) => gateway(
+                config,
+                "ws://102.88.137.124:8080/asr-sbpn-large-test/v1/realtime",
+            )?,
+            Err(_) => return Err("invalid SBPN Large local tunnel port".into()),
+        };
+    }
     config.stt_batch_timeout_seconds = 120.0;
     Ok(())
 }
