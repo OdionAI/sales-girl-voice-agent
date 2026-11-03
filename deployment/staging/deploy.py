@@ -31,6 +31,7 @@ DEFAULT_INACTIVITY_PILOT_AGENT_IDS = '*'
 # Reuse the shared prod Qwen realtime ASR. Chat transcripts remain authoritative
 # and fall back to realtime finals, exactly as in Lagos.
 STAGING_ASR_ENV = {
+    'ODION_SBPN_LARGE_TEST': '1',
     # Staging-only trial: shorten turn endpointing while retaining final ASR validation.
     'RVC_LAB_END_SILENCE_MS': '150',
     'RVC_LAB_STT_PROVIDER': 'self_hosted',
