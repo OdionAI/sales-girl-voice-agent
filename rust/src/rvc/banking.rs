@@ -5,6 +5,7 @@ use super::{
     identity::VerifiedSession,
     profiles::AgentContext,
     providers::wav,
+    Trace,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -80,6 +81,88 @@ fn valid_url(value: &str) -> Result<reqwest::Url, String> {
         return Err("unsupported configured tool URL".into());
     }
     Ok(url)
+}
+fn sensitive_field(name: &str) -> bool {
+    let key: String = name
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect();
+    [
+        "phone",
+        "account",
+        "email",
+        "customerid",
+        "enduserid",
+        "proof",
+        "token",
+        "secret",
+        "password",
+        "credential",
+        "authenticationid",
+        "authorization",
+        "cookie",
+        "apikey",
+        "audio",
+        "assertion",
+        "signature",
+        "challenge",
+    ]
+    .iter()
+    .any(|part| key.contains(part))
+}
+fn diagnostic_value(value: &Value) -> Value {
+    match value {
+        Value::Object(object) => Value::Object(
+            object
+                .iter()
+                .map(|(key, value)| {
+                    (
+                        key.clone(),
+                        if sensitive_field(key) {
+                            json!("[withheld: sensitive field]")
+                        } else {
+                            diagnostic_value(value)
+                        },
+                    )
+                })
+                .collect(),
+        ),
+        Value::Array(values) => Value::Array(values.iter().map(diagnostic_value).collect()),
+        Value::String(text) => json!(safe_text(text)),
+        _ => value.clone(),
+    }
+}
+fn safe_text(value: &str) -> String {
+    static CONTACT: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let text: String = value.chars().take(500).collect();
+    CONTACT
+        .get_or_init(|| {
+            regex::Regex::new(r"(?i)[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}|\+?\d[\d -]{5,}\d")
+                .expect("static contact pattern")
+        })
+        .replace_all(&text, "[withheld: contact value]")
+        .into_owned()
+}
+fn safe_url(value: &str) -> String {
+    reqwest::Url::parse(value)
+        .ok()
+        .map(|url| format!("{}{}", url.origin().ascii_serialization(), url.path()))
+        .unwrap_or_else(|| "<invalid-url>".into())
+}
+fn safe_response_headers(headers: &reqwest::header::HeaderMap) -> Value {
+    let mut result = serde_json::Map::new();
+    for name in [
+        "content-type",
+        "x-request-id",
+        "x-correlation-id",
+        "traceparent",
+    ] {
+        if let Some(value) = headers.get(name).and_then(|value| value.to_str().ok()) {
+            result.insert(name.into(), json!(safe_text(value)));
+        }
+    }
+    Value::Object(result)
 }
 pub(crate) fn is_bank(name: &str) -> bool {
     NAMES.contains(&name)
@@ -174,6 +257,7 @@ struct Inner {
     check: AsyncMutex<()>,
     prepared: Mutex<Prepared>,
     emit: EventSink,
+    trace: Trace,
 }
 struct Tasks(Mutex<Vec<JoinHandle<()>>>);
 impl Drop for Tasks {
@@ -220,6 +304,7 @@ impl Banking {
         identity: VerifiedSession,
         session_id: String,
         emit: EventSink,
+        trace: Trace,
     ) -> Result<Self, String> {
         config.validate()?;
         if context.business_id != identity.business_id()
@@ -249,6 +334,7 @@ impl Banking {
                 check: Default::default(),
                 prepared: Default::default(),
                 emit,
+                trace,
             }),
             tasks: Arc::new(Tasks(Default::default())),
         })
@@ -268,6 +354,16 @@ impl Banking {
     }
     pub(crate) fn enabled(&self, name: &str) -> bool {
         self.inner.records.iter().any(|r| r.raw["name"] == name)
+    }
+    pub(crate) fn names(&self) -> Vec<String> {
+        self.inner
+            .records
+            .iter()
+            .filter_map(|record| record.raw["name"].as_str().map(str::to_owned))
+            .collect()
+    }
+    pub(crate) fn journey_id(&self) -> &str {
+        &self.inner.session_id
     }
     pub(crate) fn prepared(&self) -> Option<Value> {
         self.inner.prepared.lock().ok()?.value.clone()
@@ -437,6 +533,7 @@ impl Banking {
     }
     pub(crate) async fn read_or_prepare(&self, call: Call) -> ActionResult {
         if call.name == "wema_execute_prepared" {
+            self.journey(&call, "banking_preflight_failed", json!({"stage":"execution_policy","reason_code":"execution_requires_separate_confirmation"}));
             return ActionResult::failed(
                 "The latest preview must be confirmed in a separate caller turn.",
             );
@@ -449,6 +546,7 @@ impl Banking {
             .device_required
             .load(std::sync::atomic::Ordering::SeqCst)
         {
+            self.inner.trace.emit("banking_preflight_failed", 0, 0, json!({"journey_id":self.inner.session_id,"stage":"device_approval_gate","reason_code":"device_approval_required"}));
             return ActionResult::failed("This request needs approval in your app.");
         }
         let call = permit.into_call();
@@ -456,8 +554,16 @@ impl Banking {
         self.execute(call, confirmed).await
     }
     async fn execute(&self, call: Call, confirmed: Option<String>) -> ActionResult {
+        self.journey(&call, "tool_started", json!({"stage":"tool_dispatch"}));
         activity(&self.inner, &call, "started", None);
         let result = self.execute_inner(&call, confirmed.as_deref()).await;
+        self.journey(&call, "tool_finished", json!({
+            "stage":"tool_result",
+            "status":result.status,
+            "message":safe_text(&result.message),
+            "result_keys":result.data.as_object().map(|v| v.keys().cloned().collect::<Vec<_>>()).unwrap_or_default(),
+            "auth_status":result.extra.get("auth_status").cloned().unwrap_or(Value::Null),
+        }));
         activity(&self.inner, &call, "completed", Some(&result));
         if call.name == "wema_execute_prepared" && self.inner.voice_required {
             emit(
@@ -467,6 +573,13 @@ impl Banking {
             );
         }
         result
+    }
+    fn journey(&self, call: &Call, event: &str, data: Value) {
+        let mut data = data;
+        data["journey_id"] = json!(self.inner.session_id);
+        data["request_id"] = json!(call.id);
+        data["tool_name"] = json!(call.name);
+        self.inner.trace.emit(event, 0, 0, data);
     }
     pub(crate) fn require_device_approval(&self) {
         self.inner
@@ -518,6 +631,22 @@ impl Banking {
             .unwrap_or(&fallback.base_url);
         let _ = valid_url(base)?;
         let url = format!("{}{path}", base.trim_end_matches('/'));
+        let request_id = body
+            .get("correlationId")
+            .or_else(|| body.get("operation_id"))
+            .and_then(Value::as_str)
+            .unwrap_or("device-approval");
+        self.inner.trace.emit("banking_http_request_started", 0, 0, json!({
+            "journey_id":self.inner.session_id,
+            "request_id":request_id,
+            "stage":"device_approval_http",
+            "method":"POST",
+            "url":safe_url(&url),
+            "request_body":diagnostic_value(&body),
+            "request_fields":body.as_object().map(|v|v.keys().cloned().collect::<Vec<_>>()).unwrap_or_default(),
+            "correlation_header":"x-request-id",
+            "scoped_headers_present":["x-agent-id","x-business-id","x-session-id","x-end-user-id","x-wema-customer-id"],
+        }));
         let mut headers = reqwest::header::HeaderMap::new();
         if let Some(values) = record.and_then(|r| r.raw["headers"].as_object()) {
             for (name, value) in values {
@@ -541,6 +670,7 @@ impl Banking {
         let profile = self.device_profile();
         let customer = profile["customer_id"].as_str().unwrap_or("");
         for (name, value) in [
+            ("x-request-id", request_id),
             ("x-agent-id", self.inner.context.agent_id.as_str()),
             ("x-business-id", self.inner.context.business_id.as_str()),
             ("x-session-id", self.inner.session_id.as_str()),
@@ -553,7 +683,8 @@ impl Banking {
                     .map_err(|_| "invalid connector scope")?,
             );
         }
-        let mut response = self
+        let request_started = std::time::Instant::now();
+        let mut response = match self
             .inner
             .http
             .post(url)
@@ -562,22 +693,49 @@ impl Banking {
             .timeout(Duration::from_secs_f64(fallback.timeout_seconds))
             .send()
             .await
-            .map_err(|_| "device approval transport unavailable")?;
-        if !response.status().is_success() {
-            return Err("device approval HTTP failure".into());
-        }
+        {
+            Ok(response) => response,
+            Err(error) => {
+                self.inner.trace.emit("banking_http_transport_failed", 0, 0, json!({"journey_id":self.inner.session_id,"request_id":request_id,"stage":"device_approval_http","reason_code":if error.is_timeout(){"timeout"}else if error.is_connect(){"connection_failed"}else{"request_send_failed"},"is_timeout":error.is_timeout(),"is_connect":error.is_connect(),"elapsed_ms":request_started.elapsed().as_secs_f64()*1000.0}));
+                return Err("device approval transport unavailable".into());
+            }
+        };
+        let status = response.status();
+        let response_headers = safe_response_headers(response.headers());
         let mut bytes = Vec::new();
         while let Some(chunk) = response
             .chunk()
             .await
-            .map_err(|_| "device approval body unavailable")?
+            .map_err(|error| {
+                self.inner.trace.emit("banking_http_response_read_failed", 0, 0, json!({"journey_id":self.inner.session_id,"request_id":request_id,"stage":"device_approval_response","http_status":status.as_u16(),"reason_code":if error.is_timeout(){"response_read_timeout"}else{"response_read_failed"}}));
+                "device approval body unavailable"
+            })?
         {
             if bytes.len() + chunk.len() > 2 * 1024 * 1024 {
+                self.inner.trace.emit("banking_http_response_received", 0, 0, json!({"journey_id":self.inner.session_id,"request_id":request_id,"stage":"device_approval_response","http_status":status.as_u16(),"response_body_truncated":true}));
                 return Err("device approval response bound".into());
             }
             bytes.extend_from_slice(&chunk);
         }
-        serde_json::from_slice(&bytes).map_err(|_| "invalid device approval response".into())
+        let parsed: Result<Value, _> = serde_json::from_slice(&bytes);
+        self.inner.trace.emit("banking_http_response_received", 0, 0, json!({
+            "journey_id":self.inner.session_id,
+            "request_id":request_id,
+            "stage":"device_approval_response",
+            "http_status":status.as_u16(),
+            "success":status.is_success(),
+            "response_headers":response_headers,
+            "response_bytes":bytes.len(),
+            "elapsed_ms":request_started.elapsed().as_secs_f64()*1000.0,
+            "response_body":parsed.as_ref().ok().map(diagnostic_value).unwrap_or_else(||json!({"parse_error":"invalid_json","body_bytes":bytes.len()})),
+        }));
+        if !status.is_success() {
+            return Err(format!(
+                "device approval HTTP failure status={}",
+                status.as_u16()
+            ));
+        }
+        parsed.map_err(|_| "invalid device approval response".into())
     }
     fn uncertain(&self, call: &Call) -> ActionResult {
         let mut result = ActionResult::unknown();
@@ -599,6 +757,11 @@ impl Banking {
             .iter()
             .find(|r| r.raw["name"] == call.name)
         else {
+            self.journey(
+                call,
+                "banking_preflight_failed",
+                json!({"stage":"tool_configuration","reason_code":"tool_not_enabled"}),
+            );
             return ActionResult::failed("That tool is not enabled for this call.");
         };
         let customer = self.inner.identity.claims()["wema_context"]["customer_id"]
@@ -610,6 +773,7 @@ impl Banking {
                 .bytes()
                 .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
         {
+            self.journey(call, "banking_preflight_failed", json!({"stage":"caller_profile","reason_code":"customer_id_missing_or_invalid","customer_id_present":!customer.is_empty()}));
             return ActionResult::failed("The caller profile is missing its customer ID.");
         }
         let epoch = if call.name.starts_with("wema_prepare_") {
@@ -621,9 +785,10 @@ impl Banking {
         let args = match self.arguments(call) {
             Ok(args) => args,
             Err(message) => {
+                self.journey(call, "banking_preflight_failed", json!({"stage":"request_validation","reason_code":"arguments_invalid","message":safe_text(&message),"argument_keys":call.arguments.as_object().map(|v|v.keys().cloned().collect::<Vec<_>>()).unwrap_or_default()}));
                 return ActionResult::from_body(
                     json!({"status":"needs_input","message":message,"data":{}}),
-                )
+                );
             }
         };
         if call.name == "wema_execute_prepared"
@@ -633,17 +798,24 @@ impl Banking {
                     && confirmed.is_some()
             })
         {
+            self.journey(call, "banking_preflight_failed", json!({"stage":"execution_policy","reason_code":"prepared_operation_confirmation_mismatch"}));
             return ActionResult::failed(
                 "The latest preview must be confirmed in a separate caller turn.",
             );
         }
-        if !authorize(&self.inner).await {
+        if !authorize(&self.inner, &call.id).await {
+            self.journey(
+                call,
+                "banking_preflight_failed",
+                json!({"stage":"voice_authorization","reason_code":"voice_auth_not_authorized"}),
+            );
             return ActionResult::from_body(
                 json!({"status":"failed","message":"I am not authorised to handle this transaction on this call. I can still help with general questions.","data":{},"auth_required":true,"auth_status":"failed"}),
             );
         }
         if call.name == "wema_execute_prepared" {
             let Ok(mut prepared) = self.inner.prepared.lock() else {
+                self.journey(call, "banking_preflight_failed", json!({"stage":"prepared_operation","reason_code":"prepared_state_lock_unavailable"}));
                 return ActionResult::failed("The prepared request is unavailable.");
             };
             if !prepared
@@ -651,6 +823,7 @@ impl Banking {
                 .as_ref()
                 .is_some_and(|p| p["operation_id"] == args["operation_id"])
             {
+                self.journey(call, "banking_preflight_failed", json!({"stage":"prepared_operation","reason_code":"prepared_operation_stale_or_missing"}));
                 return ActionResult::failed("That preview is no longer current.");
             }
             prepared.value = None;
@@ -669,9 +842,11 @@ impl Banking {
             for (name, value) in headers {
                 if let Some(value) = value.as_str() {
                     let Ok(name) = reqwest::header::HeaderName::from_bytes(name.as_bytes()) else {
+                        self.journey(call, "banking_preflight_failed", json!({"stage":"configured_headers","reason_code":"invalid_configured_header_name"}));
                         return ActionResult::failed("Invalid configured banking header.");
                     };
                     let Ok(value) = reqwest::header::HeaderValue::from_str(value) else {
+                        self.journey(call, "banking_preflight_failed", json!({"stage":"configured_headers","reason_code":"invalid_configured_header_value"}));
                         return ActionResult::failed("Invalid configured banking header.");
                     };
                     pinned_headers.insert(name, value);
@@ -680,6 +855,7 @@ impl Banking {
         }
         for (name, value) in [
             ("X-Tool-Name", call.name.as_str()),
+            ("X-Request-Id", call.id.as_str()),
             ("X-Client-Id", "sales-girl-voice-agent"),
             ("X-Agent-Id", self.inner.context.agent_id.as_str()),
             ("X-Business-Id", self.inner.context.business_id.as_str()),
@@ -689,39 +865,76 @@ impl Banking {
             ("X-Wema-Customer-Id", customer),
         ] {
             let Ok(name) = reqwest::header::HeaderName::from_bytes(name.as_bytes()) else {
+                self.journey(call, "banking_preflight_failed", json!({"stage":"request_scope_headers","reason_code":"invalid_scope_header_name"}));
                 return ActionResult::failed("Invalid scoped banking header.");
             };
             let Ok(value) = reqwest::header::HeaderValue::from_str(value) else {
+                self.journey(call, "banking_preflight_failed", json!({"stage":"request_scope_headers","reason_code":"invalid_scope_header_value"}));
                 return ActionResult::failed("Invalid scoped banking header.");
             };
             pinned_headers.insert(name, value);
         }
         request = request.headers(pinned_headers);
+        let request_started = std::time::Instant::now();
+        self.journey(call, "banking_http_request_started", json!({
+            "stage":"banking_http",
+            "method":"POST",
+            "url":safe_url(record.raw["url"].as_str().unwrap_or("")),
+            "request_body":diagnostic_value(&args),
+            "request_fields":args.as_object().map(|v|v.keys().cloned().collect::<Vec<_>>()).unwrap_or_default(),
+            "scoped_headers_present":["X-Tool-Name","X-Request-Id","X-Client-Id","X-Agent-Id","X-Business-Id","X-Session-Id","X-Conversation-Id","X-End-User-Id","X-Wema-Customer-Id"],
+            "timeout_seconds":self.inner.config.tool_timeout_seconds,
+        }));
         let mut response = match request.send().await {
             Ok(r) => r,
-            Err(_) => return self.uncertain(call),
+            Err(error) => {
+                self.journey(call, "banking_http_transport_failed", json!({
+                    "stage":"banking_http",
+                    "reason_code":if error.is_timeout(){"timeout"}else if error.is_connect(){"connection_failed"}else{"request_send_failed"},
+                    "error_type":"reqwest",
+                    "is_timeout":error.is_timeout(),
+                    "is_connect":error.is_connect(),
+                    "elapsed_ms":request_started.elapsed().as_secs_f64()*1000.0,
+                }));
+                return self.uncertain(call);
+            }
         };
-        if !response.status().is_success() {
-            return if response.status().is_client_error() {
-                ActionResult::failed("The banking service rejected this request.")
-            } else {
-                self.uncertain(call)
-            };
-        }
+        let status = response.status();
+        let response_headers = safe_response_headers(response.headers());
         let mut bytes = vec![];
         loop {
             match response.chunk().await {
-                Ok(Some(chunk)) => {
-                    if bytes.len() + chunk.len() > 2 * 1024 * 1024 {
-                        return self.uncertain(call);
-                    }
-                    bytes.extend_from_slice(&chunk);
+                Ok(Some(chunk)) if bytes.len() + chunk.len() <= 64 * 1024 => {
+                    bytes.extend_from_slice(&chunk)
+                }
+                Ok(Some(_)) => {
+                    self.journey(call, "banking_http_response_received", json!({"stage":"banking_http","http_status":status.as_u16(),"response_body_truncated":true,"response_bytes_over_limit":true}));
+                    return self.uncertain(call);
                 }
                 Ok(None) => break,
-                Err(_) => return self.uncertain(call),
+                Err(error) => {
+                    self.journey(call, "banking_http_response_read_failed", json!({"stage":"banking_http_response","http_status":status.as_u16(),"reason_code":if error.is_timeout(){"response_read_timeout"}else{"response_read_failed"}}));
+                    return self.uncertain(call);
+                }
             }
         }
-        let mut body: Value = match serde_json::from_slice(&bytes) {
+        let parsed: Result<Value, _> = serde_json::from_slice(&bytes);
+        self.journey(call, "banking_http_response_received", json!({
+            "stage":"banking_http_response",
+            "http_status":status.as_u16(),
+            "success":status.is_success(),
+            "response_headers":response_headers,
+            "response_bytes":bytes.len(),
+            "elapsed_ms":request_started.elapsed().as_secs_f64()*1000.0,
+            "response_body":parsed.as_ref().ok().map(diagnostic_value).unwrap_or_else(||json!({"parse_error":"invalid_json","body_bytes":bytes.len()})),
+        }));
+        if !status.is_success() {
+            if status.is_client_error() {
+                return ActionResult::failed("The banking service rejected this request.");
+            }
+            return self.uncertain(call);
+        }
+        let mut body: Value = match parsed {
             Ok(Value::Object(v)) => Value::Object(v),
             _ => return self.uncertain(call),
         };
@@ -838,8 +1051,9 @@ async fn check_session(inner: &Inner, generation: u64, clip: &[i16]) {
         json!({"status":if verified{"verified"}else{"failed"},"authenticated":verified,"reason":reason}),
     );
 }
-async fn authorize(inner: &Inner) -> bool {
+async fn authorize(inner: &Inner, request_id: &str) -> bool {
     if !inner.voice_required {
+        inner.trace.emit("banking_authorization_result", 0, 0, json!({"journey_id":inner.session_id,"request_id":request_id,"stage":"voice_authorization","status":"not_required","reason_code":"policy_disabled_for_signed_session"}));
         return true;
     }
     let Some((generation, clip)) =
@@ -853,6 +1067,7 @@ async fn authorize(inner: &Inner) -> bool {
                 (s.generation, s.clip.clone())
             })
     else {
+        inner.trace.emit("banking_authorization_result", 0, 0, json!({"journey_id":inner.session_id,"request_id":request_id,"stage":"voice_authorization","status":"failed","reason_code":"no_committed_audio_generation"}));
         return false;
     };
     check_session(inner, generation, &clip).await;
@@ -862,6 +1077,22 @@ async fn authorize(inner: &Inner) -> bool {
         .lock()
         .ok()
         .is_some_and(|s| s.verified && s.generation == generation && result["matched"] == true);
+    inner.trace.emit(
+        "banking_authorization_result",
+        0,
+        0,
+        json!({
+            "journey_id":inner.session_id,
+            "request_id":request_id,
+            "stage":"voice_authorization",
+            "status":if passed{"verified"}else{"failed"},
+            "generation":generation,
+            "matched":result["matched"],
+            "score":result["score"],
+            "threshold":result["threshold"],
+            "reason_code":result["reason"],
+        }),
+    );
     emit(
         inner,
         "odion.auth.action_status",
@@ -1020,6 +1251,7 @@ mod tests {
             identity,
             "session-a".into(),
             emit,
+            super::super::Trace::default(),
         )
         .unwrap();
         Harness { bank, fake, server }
