@@ -229,7 +229,8 @@ async def one(kind, index, private, reference, output, binary):
         await wait_type("complete")
         event("opening_complete")
         await asyncio.sleep(0.6)
-        with wave.open(str(ROOT / "fixtures/input-neutral.wav"), "rb") as f:
+        input_wav = os.environ.get("SG_RVC_INPUT_WAV", str(ROOT / "fixtures/input-neutral.wav"))
+        with wave.open(input_wav, "rb") as f:
             assert (f.getframerate(), f.getnchannels(), f.getsampwidth()) == (
                 16000,
                 1,

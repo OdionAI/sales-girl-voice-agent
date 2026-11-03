@@ -216,7 +216,10 @@ impl Config {
             || (self.stt_ws_url.contains("whisper-rt")
                 && !self.stt_model.to_ascii_lowercase().contains("whisper"))
             || if languages::uses_sbpn(&self.tts_language) {
-                self.stt_model != languages::SBPN_MODEL
+                !matches!(
+                    self.stt_model.as_str(),
+                    languages::SBPN_MODEL | languages::SBPN_LARGE_MODEL
+                )
             } else {
                 self.stt_model != "Qwen3-ASR" && !providers::realtime_final(self)
             }
