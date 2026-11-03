@@ -49,6 +49,7 @@ class LagosReleaseTests(unittest.TestCase):
             previous_env = dict(item.split('=', 1) for item in base_env)
 
             updates = dict(release.LAGOS_ASR_ENV)
+            updates['ODION_SBPN_LARGE_TEST'] = '1'
             updates.update(release.reply_grace_env(reply_grace_ms, reply_grace_agent_ids))
             updates.update(release.inactivity_pilot_env())
             updates['RVC_LAB_LLM_PROVIDER'] = llm_provider
