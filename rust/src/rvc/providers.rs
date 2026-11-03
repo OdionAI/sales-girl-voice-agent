@@ -286,6 +286,23 @@ impl Providers {
         );
         let mut empty_retries = 0;
         let mut sent = false;
+        let dual_transcript_lengths = if c.stt_model == super::languages::SBPN_LARGE_MODEL {
+            body["messages"]
+                .as_array()
+                .and_then(|messages| messages.last())
+                .filter(|message| message["role"] == "user")
+                .and_then(|message| message["content"].as_str())
+                .and_then(|content| serde_json::from_str::<Value>(content).ok())
+                .and_then(|pair| {
+                    Some((
+                        pair["sbpn_large"].as_str()?.chars().count(),
+                        pair["sbpn_base"].as_str()?.chars().count(),
+                    ))
+                })
+                .filter(|(large, base)| *large > 0 && *base > 0)
+        } else {
+            None
+        };
         self.trace
             .emit("llm_request_start", turn, attempt, json!({"request":0}));
         for index in 0..(4 + c.llm_empty_retries) {
@@ -332,6 +349,14 @@ impl Providers {
                     return Err("LLM connection failure".into());
                 }
             };
+            if let Some((large, base)) = dual_transcript_lengths {
+                self.trace.emit(
+                    "llm_dual_transcript_request_accepted",
+                    turn,
+                    attempt,
+                    json!({"sbpn_large_chars":large,"sbpn_base_chars":base}),
+                );
+            }
             let mut stream = response.bytes_stream();
             let mut buffer = Vec::new();
             let mut spoken = SpokenFilter::default();
@@ -695,6 +720,13 @@ impl Providers {
     async fn final_http(&self, pcm: Vec<i16>) -> Result<String, String> {
         let c = &self.config;
         if super::languages::uses_sbpn(&c.tts_language) {
+            if c.stt_model == super::languages::SBPN_LARGE_MODEL {
+                let mut parts = Vec::new();
+                for chunk in pcm.chunks(29 * 16000) {
+                    parts.push(self.final_realtime(chunk).await?);
+                }
+                return Ok(parts.join(" "));
+            }
             return self.final_sbpn_http(&pcm).await;
         }
         if !c.stt_chat_url.is_empty() {
@@ -897,6 +929,7 @@ pub enum AsrEvent {
     Final {
         turn: u64,
         text: String,
+        base_candidate: Option<String>,
     },
     Unavailable(u64),
     Error(String),
@@ -1080,6 +1113,17 @@ async fn open(p: &Providers) -> Result<Socket, String> {
         let hello: Value = serde_json::from_str(&raw).map_err(|_| "SBPN session hello invalid")?;
         if hello["type"] != "session.created" {
             return Err("SBPN session was not created".into());
+        }
+        if p.config.stt_model == super::languages::SBPN_LARGE_MODEL {
+            if hello["session"]["model"] != super::languages::SBPN_LARGE_MODEL {
+                return Err("SBPN Large endpoint reported a different model".into());
+            }
+            p.trace.emit(
+                "stt_large_socket_ready",
+                0,
+                0,
+                json!({"model":p.config.stt_model}),
+            );
         }
     }
     let mut ws = Socket {
@@ -1345,18 +1389,29 @@ pub fn start_asr(p: Providers) -> Asr {
                flag.store(true,Ordering::SeqCst);suspended=false;
                let current=socket.take();let use_current=super::languages::uses_sbpn(&p.config.tts_language)&&!capped&&sent_samples>0;
                p.trace.emit("asr_final_request",turn,0,json!({"samples":pcm.len()}));
+               let dual=p.config.stt_model==super::languages::SBPN_LARGE_MODEL && super::languages::uses_sbpn(&p.config.tts_language);
                let result=interruptible_asr(&mut rx,&mut deferred,async{
+                let base_audio=dual.then(||pcm.clone());
+                let primary=async {
                 if let Some(mut ws)=current{
                  let final_=if use_current{Some(tokio::time::timeout(Duration::from_secs(30),flush_hypothesis(&mut ws,&audio,through,&mut sent_samples,&p.usage)).await)}else{None};
                  close_socket(&mut ws).await;
                  if let Some(Ok(Ok(text)))=final_{p.trace.emit("stt_realtime_final",turn,0,json!({"authoritative":true}));return Ok(text);}
                 }
                 p.final_http(pcm).await
+                };
+                let base=async {
+                    let audio=base_audio?;
+                    tokio::time::timeout(Duration::from_millis(1200),p.final_sbpn_http(&audio))
+                        .await.ok()?.ok()
+                };
+                let (primary,base_candidate)=tokio::join!(primary,base);
+                primary.map(|text|(text,base_candidate))
                }).await;
                capped=false;sent_samples=0;audio.lock().unwrap_or_else(|e|e.into_inner()).discard_through(through);accumulated=DeltaAccumulator::for_language(&p.config.tts_language);
                let Some(result)=result else{flag.store(false,Ordering::SeqCst);p.trace.emit("asr_final_cancelled",turn,0,json!({"reason":"superseded_control"}));continue;};
                if result.is_ok(){backoff=0.5;}
-               let event=match result{Ok(text)if !text.is_empty()=>AsrEvent::Final{turn,text},_=>AsrEvent::Unavailable(turn)};let _=out.send(event).await;
+               let event=match result{Ok((text,base_candidate))if !text.is_empty()=>AsrEvent::Final{turn,text,base_candidate},_=>AsrEvent::Unavailable(turn)};let _=out.send(event).await;
                match interruptible_asr(&mut rx,&mut deferred,open(&p)).await{Some(Ok(ws))=>{socket=Some(ws);},Some(Err(_))=>{socket=None;retry_at=tokio::time::Instant::now()+Duration::from_secs_f64(backoff);let _=out.send(AsrEvent::Degraded("realtime resume pending".into())).await;},None=>{flag.store(false,Ordering::SeqCst);continue;}}
                flag.store(false,Ordering::SeqCst);
               },
@@ -1775,7 +1830,7 @@ mod sbpn_wire_tests {
     async fn serve(fake: Arc<Fake>, mut socket: WebSocket) {
         if socket
             .send(Frame::Text(
-                json!({"type":"session.created"}).to_string().into(),
+                json!({"type":"session.created","session":{"model":super::super::languages::SBPN_LARGE_MODEL}}).to_string().into(),
             ))
             .await
             .is_err()
@@ -1860,7 +1915,7 @@ mod sbpn_wire_tests {
         };
         Json(json!({"text":format!("part{n}")}))
     }
-    async fn setup() -> (Asr, Arc<Fake>, tokio::task::JoinHandle<()>) {
+    async fn setup(model: &str) -> (Asr, Arc<Fake>, tokio::task::JoinHandle<()>) {
         let fake = Arc::new(Fake::default());
         let app = Router::new()
             .route("/ws", get(upgrade))
@@ -1872,7 +1927,7 @@ mod sbpn_wire_tests {
         let mut c: Config =
             serde_json::from_str(include_str!("../../fixtures/reference-config.json")).unwrap();
         c.tts_language = "Nigerian Pidgin".into();
-        c.stt_model = super::super::languages::SBPN_MODEL.into();
+        c.stt_model = model.into();
         c.stt_ws_url = format!("ws://{address}/ws");
         c.stt_batch_url = format!("http://{address}/final");
         c.stt_chat_url = "http://127.0.0.1:1/must-not-use-english-hint-model".into();
@@ -1898,7 +1953,7 @@ mod sbpn_wire_tests {
     }
     #[tokio::test]
     async fn sbpn_uses_binary_audio_revisable_prefixes_and_only_explicit_owned_final() {
-        let (mut asr, fake, server) = setup().await;
+        let (mut asr, fake, server) = setup(super::super::languages::SBPN_MODEL).await;
         asr.append(vec![1000; 1600]);
         assert_eq!(partial(&mut asr).await, "How you dey");
         asr.append(vec![1000; 1600]);
@@ -1906,7 +1961,7 @@ mod sbpn_wire_tests {
         asr.commit(7, vec![1000; 3200]).await.unwrap();
         let text = tokio::time::timeout(Duration::from_secs(2), async {
             loop {
-                if let Some(AsrEvent::Final { turn, text }) = asr.events.recv().await {
+                if let Some(AsrEvent::Final { turn, text, .. }) = asr.events.recv().await {
                     assert_eq!(turn, 7);
                     return text;
                 }
@@ -1926,15 +1981,48 @@ mod sbpn_wire_tests {
         server.abort();
     }
     #[tokio::test]
+    async fn large_streams_and_base_receives_only_the_committed_full_utterance() {
+        let model = super::super::languages::SBPN_LARGE_MODEL;
+        let (mut asr, fake, server) = setup(model).await;
+        asr.append(vec![1000; 1600]);
+        assert_eq!(partial(&mut asr).await, "How you dey");
+        assert!(fake.batch.lock().unwrap().is_empty());
+        asr.append(vec![1000; 1600]);
+        assert_eq!(partial(&mut asr).await, "How una dey");
+        asr.commit(8, vec![1000; 3200]).await.unwrap();
+        let (turn, primary, base) = tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                if let Some(AsrEvent::Final {
+                    turn,
+                    text,
+                    base_candidate,
+                }) = asr.events.recv().await
+                {
+                    break (turn, text, base_candidate);
+                }
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(turn, 8);
+        assert_eq!(primary, "How una dey today?");
+        assert_eq!(base.as_deref(), Some("part1"));
+        assert_eq!(*fake.batch.lock().unwrap(), vec![6400]);
+        assert_eq!(fake.updates.lock().unwrap()[0]["model"], model);
+        asr.task.abort();
+        let _ = asr.task.await;
+        server.abort();
+    }
+    #[tokio::test]
     async fn sbpn_failure_recovers_the_entire_owned_utterance_in_bounded_wav_chunks() {
-        let (mut asr, fake, server) = setup().await;
+        let (mut asr, fake, server) = setup(super::super::languages::SBPN_MODEL).await;
         fake.fail_final.store(true, Ordering::SeqCst);
         asr.append(vec![1000; 1600]);
         let _ = partial(&mut asr).await;
         asr.commit(9, vec![1000; 60 * 16000]).await.unwrap();
         let text = tokio::time::timeout(Duration::from_secs(3), async {
             loop {
-                if let Some(AsrEvent::Final { turn, text }) = asr.events.recv().await {
+                if let Some(AsrEvent::Final { turn, text, .. }) = asr.events.recv().await {
                     assert_eq!(turn, 9);
                     return text;
                 }
