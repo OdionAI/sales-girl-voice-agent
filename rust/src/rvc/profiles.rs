@@ -139,9 +139,14 @@ pub fn end_call_enabled(context: &AgentContext) -> bool {
 /// harness without an agent context retains the operator's original profile.
 pub fn apply_stt_scope(config: &mut Config) {
     if super::languages::uses_sbpn(&config.tts_language) {
-        config.stt_chat_url.clear();
-        config.stt_context.clear();
-        return;
+        // SBPN remains the authoritative ordinary Yoruba transcript. Retain the
+        // scoped Qwen chat endpoint only for Balogun's background number
+        // windows; primary final_http still returns SBPN first.
+        if !super::number_capture::enabled(config) {
+            config.stt_chat_url.clear();
+            config.stt_context.clear();
+            return;
+        }
     }
     let context = &config.agent_context;
     let has_context =

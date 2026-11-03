@@ -21,6 +21,7 @@ HAUSA_RESEARCH_KEY = 'RVC_LAB_ENABLE_HAUSA_TWB_VOICES'
 REPLY_GRACE_MS_KEY = 'RVC_LAB_REPLY_GRACE_MS'
 REPLY_GRACE_AGENT_IDS_KEY = 'RVC_LAB_REPLY_GRACE_AGENT_IDS'
 INACTIVITY_PILOT_AGENT_IDS_KEY = 'RVC_LAB_INACTIVITY_PILOT_AGENT_IDS'
+BALOGUN_NUMBER_CAPTURE_KEY = 'RVC_LAB_BALOGUN_NUMBER_CAPTURE_ENABLED'
 DEFAULT_INACTIVITY_PILOT_AGENT_IDS = '*'
 LAGOS_ASR_ENV = {
     'RVC_LAB_END_SILENCE_MS': '150',
@@ -32,8 +33,11 @@ LAGOS_ASR_ENV = {
     # failed chat transcripts automatically fall back to realtime Qwen finals.
     'RVC_LAB_STT_CHAT_URL': 'http://102.88.137.124:8080/asr-rt/v1/chat/completions',
     'RVC_LAB_STT_CHAT_MODEL': 'Qwen3-ASR',
-    # Retain the existing Wema and MoMo chat-ASR scopes, including UUID aliases.
+    # Retain existing Wema/MoMo chat-ASR scopes and explicitly allow Balogun's
+    # parallel number transcript, including canonical and compact UUID forms.
     'RVC_LAB_STT_CHAT_SCOPE': (
+        '3801e455-224a-4872-b406-95a4db6b8ffa '
+        '3801e455224a4872b40695a4db6b8ffa '
         'a0c8cda2-3b46-4ee0-898c-48f9a4d3a444 '
         '00f99439-59d9-42a2-9c3a-db06422ea6cf '
         'ccc440c5-452d-4690-abc0-61758c11cebd '
@@ -269,7 +273,8 @@ def inactivity_pilot_env(agent_ids=None):
 def deploy(release, revision, enable_hausa_research=False, momo_feedback_agent_id='',
            reply_grace_ms='0', reply_grace_agent_ids='', llm_provider='qwen',
            deepseek_model='deepseek-flash', deepseek_reasoning_effort='high',
-           deepseek_api_key='', inactivity_pilot_agent_ids=None):
+           deepseek_api_key='', inactivity_pilot_agent_ids=None,
+           balogun_number_capture_enabled=False):
     if not re.fullmatch(r'[0-9a-f]{40}', revision):
         raise ValueError('Expected a full Git commit SHA')
     if (release.parent != RELEASE_ROOT
@@ -284,6 +289,9 @@ def deploy(release, revision, enable_hausa_research=False, momo_feedback_agent_i
     updates = dict(LAGOS_ASR_ENV)
     updates.update(reply_grace_env(reply_grace_ms, reply_grace_agent_ids))
     updates.update(inactivity_pilot_env(inactivity_pilot_agent_ids))
+    if not isinstance(balogun_number_capture_enabled, bool):
+        raise ValueError('Balogun number-capture setting must be boolean')
+    updates[BALOGUN_NUMBER_CAPTURE_KEY] = str(balogun_number_capture_enabled).lower()
     provider = str(llm_provider).strip().lower()
     if provider not in {'qwen', 'deepseek'}:
         raise ValueError('RVC_LAB_LLM_PROVIDER must be qwen or deepseek')
@@ -392,6 +400,7 @@ if __name__ == '__main__':
     parser.add_argument('--reply-grace-ms', default='0')
     parser.add_argument('--reply-grace-agent-ids', default='')
     parser.add_argument('--inactivity-pilot-agent-ids')
+    parser.add_argument('--balogun-number-capture-enabled', action='store_true')
     parser.add_argument('--llm-provider', default='qwen')
     parser.add_argument('--deepseek-model', default='deepseek-flash')
     parser.add_argument('--deepseek-reasoning-effort', default='high')
@@ -410,7 +419,7 @@ if __name__ == '__main__':
                               if key in {'RVC_LAB_END_SILENCE_MS', 'RVC_LAB_LLM_PROVIDER',
                                          'RVC_LAB_MAX_JOBS', 'MOMO_CALL_CAPACITY_BUSINESS_ID',
                                          'RVC_INPUT_NOISE_SUPPRESSION', 'RVC_INPUT_NOISE_AGENT_IDS',
-                                         'RVC_INPUT_NOISE_IMPLEMENTATION'}},
+                                         'RVC_INPUT_NOISE_IMPLEMENTATION', BALOGUN_NUMBER_CAPTURE_KEY}},
                           'native_admission': native_admission_updates(dict(entry.split('=',1) for entry in current['Config']['Env']))}))
     else:
         if args.release is None or args.revision is None:
@@ -423,4 +432,5 @@ if __name__ == '__main__':
                    args.momo_feedback_agent_id, args.reply_grace_ms,
                    args.reply_grace_agent_ids, args.llm_provider,
                    args.deepseek_model, args.deepseek_reasoning_effort,
-                   deepseek_api_key, args.inactivity_pilot_agent_ids)
+                   deepseek_api_key, args.inactivity_pilot_agent_ids,
+                   args.balogun_number_capture_enabled)

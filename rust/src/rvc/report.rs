@@ -107,9 +107,11 @@ pub fn render(events: &[TraceEvent]) -> String {
         let enqueue = first("audio_first_enqueued");
         let winning = |name: &str| {
             enqueue.and_then(|played| {
-                rows.iter()
-                    .copied()
-                    .find(|e| e.event == name && e.attempt == played.attempt)
+                rows.iter().copied().find(|e| {
+                    e.event == name
+                        && e.attempt == played.attempt
+                        && e.data["purpose"] != "transfer_route"
+                })
             })
         };
         let token = winning("llm_first_token");

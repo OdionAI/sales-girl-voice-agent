@@ -65,3 +65,15 @@ Optional native directory settings live under `voice.directory`: `endpoint`, `to
 The optional `voice.passkey_demo` requires explicit `business_ids`, `agent_ids` and `subjects` allowlists; all default empty. Its `rp_id`, `origin` and `timeout_seconds` default to docs.odion.ai, its HTTPS origin and 90 seconds. This separate simulated WebAuthn test uses call-scoped credentials and cannot authorize a banking operation. Device-sheet QA requires the trusted app/domain; the loopback voice page is not that relying-party origin.
 
 The standard browser wire check is explicitly local: with the existing loopback LiveKit server running, execute `cargo test --release --all-features official_sdk_delivers_standard -- --ignored`. It creates a uniquely named room with synthetic participants and no model, financial, email, outbound or trunk operation. It verifies transcript/text/state and private recipient isolation.
+
+## Opt-in transfer streaming review
+
+`transfer_streaming_replies` defaults to false. Non-thinking DeepSeek calls with
+human-transfer tools can opt into a concurrent routing decision and answer-only
+draft. Speech remains held until routing validates; the coordinator's existing
+speculation, final-validation and interruption gates still apply. Each eligible
+generation uses two LLM requests.
+
+See the [local Balogun measurements and correctness review](reviews/transfer-guard-20261101.md)
+for the measured median improvement, unchanged observed tail, token cost and
+local-only reproduction commands. No production configuration is changed.
