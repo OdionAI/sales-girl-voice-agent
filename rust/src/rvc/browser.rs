@@ -277,7 +277,12 @@ impl MetricMapper {
     }
     pub fn map(&mut self, event: &TraceEvent) -> Option<Value> {
         let name = event.event.as_str();
-        if event.turn == 0
+        if (event.data["purpose"] == "transfer_route"
+            && matches!(
+                name,
+                "llm_request_start" | "llm_first_token" | "llm_first_tool" | "tool_call_prepared"
+            ))
+            || event.turn == 0
             || !matches!(
                 name,
                 "user_speech_end"
@@ -313,6 +318,12 @@ impl MetricMapper {
         }
         let turn = self.turns.get_mut(&event.turn)?;
         let mut body = json!({"type":"odion.voice_lab.metric","event":name,"run_id":self.run,"turn_id":format!("turn-{}",event.turn),"attempt_id":format!("attempt-{}",event.attempt),"ts_ms":event.at_us as f64/1000.0,"transport":"livekit","measurement_source":"native_rust_worker","clock":"run_relative"});
+        if matches!(
+            event.data["purpose"].as_str(),
+            Some("transfer_route" | "response")
+        ) {
+            body["request_purpose"] = event.data["purpose"].clone();
+        }
         match name {
             "user_speech_end" => {
                 turn.speech_end = Some(event.at_us);
@@ -697,6 +708,56 @@ mod tests {
         receipt.at_us = 5000;
         acks.observe(&item("attempt_cancel", 4500, 2, 3, json!({})));
         assert!(acks.observe(&receipt).is_none());
+    }
+    #[test]
+    fn routing_tokens_do_not_replace_spoken_response_metrics() {
+        let mut map = MetricMapper::new("routing-fixture".into());
+        map.map(&item(
+            "llm_request_start",
+            1000,
+            1,
+            2,
+            json!({"purpose":"response"}),
+        ));
+        assert!(map
+            .map(&item(
+                "llm_request_start",
+                2000,
+                1,
+                2,
+                json!({"purpose":"transfer_route"})
+            ))
+            .is_none());
+        assert!(map
+            .map(&item(
+                "llm_first_token",
+                2500,
+                1,
+                2,
+                json!({"purpose":"transfer_route"})
+            ))
+            .is_none());
+        let response = map
+            .map(&item(
+                "llm_first_token",
+                4000,
+                1,
+                2,
+                json!({"purpose":"response"}),
+            ))
+            .unwrap();
+        assert_eq!(response["llm_ttft_ms"], 3.0);
+        let route_usage = map
+            .map(&item(
+                "llm_provider_request_complete",
+                5000,
+                1,
+                2,
+                json!({"purpose":"transfer_route","input_tokens":20,"completed":true}),
+            ))
+            .unwrap();
+        assert_eq!(route_usage["input_tokens"], 20);
+        assert_eq!(route_usage["request_purpose"], "transfer_route");
     }
     #[test]
     fn provider_metrics_use_actual_request_boundary_and_never_copy_private_data() {

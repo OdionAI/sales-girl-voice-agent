@@ -13,6 +13,7 @@ pub mod identity;
 pub mod input_noise;
 pub mod languages;
 pub mod memory;
+pub(crate) mod number_capture;
 pub mod outbound;
 pub(crate) mod passkey;
 pub(crate) mod passkey_demo;
@@ -22,9 +23,11 @@ mod prompts;
 pub mod providers;
 pub(crate) mod recording;
 pub mod report;
+mod secondary_asr;
 pub mod sip;
 mod text;
 pub mod transfer;
+mod transfer_stream;
 pub mod usage;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -101,6 +104,12 @@ pub struct Config {
     pub llm_first_output_timeout_seconds: f64,
     pub llm_empty_retries: usize,
     pub llm_empty_retry_delay_seconds: f64,
+    /// Opt-in parallel routing for non-thinking DeepSeek; legacy guard stays default.
+    #[serde(default)]
+    pub transfer_streaming_replies: bool,
+    /// Opt-in dual-ASR number capture for Balogun Yoruba only.
+    #[serde(default)]
+    pub balogun_number_capture_enabled: bool,
     pub tts_url: String,
     pub tts_model: String,
     pub tts_voice: String,

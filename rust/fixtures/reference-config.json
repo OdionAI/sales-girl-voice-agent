@@ -1,4 +1,6 @@
 {
+  "transfer_streaming_replies": false,
+  "balogun_number_capture_enabled": false,
   "speech_language_override": "",
   "engagement_enabled": false,
   "inactivity_pilot_agent_ids": [],

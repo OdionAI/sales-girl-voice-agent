@@ -35,6 +35,22 @@ variables restores immediate replies after the normal Lagos voice release.
 This does not recover an empty ASR transcript. See
 [`latency_lab/README.md`](latency_lab/README.md) for the exact behavior.
 
+Balogun's Yoruba transaction-number handling runs in the native Rust RVC
+coordinator behind `RVC_LAB_BALOGUN_NUMBER_CAPTURE_ENABLED` (default `false`),
+scoped to Balogun's exact agent ID and Yoruba profile. SBPN drives ordinary
+conversation and RVC speculation. A separate caller-only recorder retains
+longer audio across short primary turns and submits one hinted, non-speculative
+Qwen transcription after one second of silence (bounded to 30 seconds).
+Ordinary replies do not wait for Qwen. Number-bearing replies wait for their
+completed background window; the LLM can also read that existing cache without
+starting or splitting a recording. The LLM selects a number from Qwen, Rust
+checks it against a complete observed digit sequence and reads it back
+word-for-word in Yoruba, preserving leading zeros. Caller confirmation is
+required before transaction use. Human-transfer and interruption paths remain
+available. Other agents, including Hausa, are outside this feature scope.
+See [the implementation review](rust/reviews/balogun-qwen-long-window-20261102.md)
+for provider-test evidence and deployment status.
+
 ## Core interactions
 
 This worker talks to:
