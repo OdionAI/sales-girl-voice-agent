@@ -523,6 +523,7 @@ pub fn start_with_services(
             svc.scope().clone(),
             client_session_id.clone(),
             emit,
+            trace.clone(),
         )
         .ok()
     });
@@ -3419,6 +3420,17 @@ impl Coordinator {
                             .is_some_and(|bank| bank.enabled(&call.name))
                     })
                 {
+                    self.trace.emit("banking_batch_rejected", attempt, 0, json!({
+                        "stage":"voice_tool_dispatch_gate",
+                        "journey_id":self.banking.as_ref().map(|bank|bank.journey_id()).unwrap_or(""),
+                        "reason_code":"unavailable_banking_tool_batch",
+                        "banking_offered":a.bank_offered,
+                        "speech_enabled":self.speech_enabled,
+                        "call_count":calls.len(),
+                        "tool_names":calls.iter().map(|call|call.name.as_str()).collect::<Vec<_>>(),
+                        "request_ids":calls.iter().map(|call|call.id.as_str()).collect::<Vec<_>>(),
+                        "configured_tool_names":self.banking.as_ref().map(|bank|bank.names()).unwrap_or_default(),
+                    }));
                     self.fail("unavailable banking tool batch".into()).await;
                     return;
                 }
@@ -3475,7 +3487,11 @@ impl Coordinator {
                         "tool_confirmation_requested",
                         owner,
                         attempt,
-                        json!({"reasks":reasks}),
+                        json!({
+                            "reasks":reasks,
+                            "tool_name":self.pending_action.as_ref().map(|pending|pending.call.name.as_str()).unwrap_or(""),
+                            "request_id":self.pending_action.as_ref().map(|pending|pending.call.id.as_str()).unwrap_or(""),
+                        }),
                     );
                     self.begin(self.final_text.clone(), true, Some(question))
                         .await;
@@ -3558,7 +3574,7 @@ impl Coordinator {
                     "tool_confirmation_decision",
                     owner,
                     attempt,
-                    json!({"decision":decision.label(),"tool_name":pending.call.name}),
+                    json!({"decision":decision.label(),"tool_name":pending.call.name,"request_id":pending.call.id}),
                 );
                 match decision {
                     super::actions::Decision::Revised => {
