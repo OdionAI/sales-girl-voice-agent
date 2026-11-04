@@ -102,6 +102,25 @@ playout drains.
 
 ## Current runtime status
 
+### Banking and passkey journey diagnostics
+
+The native RVC worker writes one append-only JSONL trace per session under
+`/app/latency_lab/artifacts/traces`. Banking events share the session-based
+`journey_id` and the bank `request_id` (also sent as `X-Request-Id`) so a
+voice trace can be matched to banking-service logs. The trace distinguishes
+tool dispatch, local preflight rejection, voice authorization, outbound HTTP
+request, transport failure, HTTP response, and final tool result. Passkey app
+messages record the app's bounded failure reason code alongside the
+authentication/correlation match booleans. See
+[`docs/BANKING_JOURNEY_DIAGNOSTICS.md`](docs/BANKING_JOURNEY_DIAGNOSTICS.md)
+for the event sequence and investigation guide.
+
+Request and response diagnostics preserve field names and safe values while
+withholding account/customer identifiers, phone numbers, email addresses,
+tokens, credentials, passkey proofs, audio, and signatures. The trace records
+HTTP status, response shape, safe response fields, failure stage, and elapsed
+time. It never records authentication headers or passkey proof material.
+
 Lagos RVC inactivity handling is implemented behind the worker-side
 `RVC_LAB_INACTIVITY_PILOT_AGENT_IDS` setting (default `*`). The release workflow enables it for
 successfully loaded agents on RVC browser and SIP calls; local workers remain off
