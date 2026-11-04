@@ -50,6 +50,7 @@ class LagosReleaseTests(unittest.TestCase):
             previous_env = dict(item.split('=', 1) for item in base_env)
 
             updates = dict(release.LAGOS_ASR_ENV)
+            updates[release.VOICE_AUTH_DISABLED_KEY] = release.VOICE_AUTH_DISABLED
             updates.update(release.reply_grace_env(reply_grace_ms, reply_grace_agent_ids))
             updates.update(release.inactivity_pilot_env())
             updates[release.BALOGUN_NUMBER_CAPTURE_KEY] = str(number_capture_enabled).lower()
