@@ -147,7 +147,8 @@ Current stable contract:
   uses these events for transfer counts and reason totals; a failed event write
   is logged without changing the successful SIP transfer result. Calls made
   before this telemetry is deployed may not have a handoff event available for
-  historical transfer rates.
+  historical transfer rates. Event metadata includes the SIP transfer mode and
+  configured destination for operational audit.
 - dashboard-configured custom `http` tools are promoted into real callable
   runtime tools for the active agent at session start, not just appended to the
   prompt as text
