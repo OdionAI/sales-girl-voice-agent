@@ -45,6 +45,10 @@ from .ops_api import (
     unblock_card as unblock_card_api,
     update_customer_record as update_customer_record_api,
 )
+from .conversation_service_api import (
+    create_session_event as create_session_event_api,
+    is_enabled as conversation_service_enabled,
+)
 
 logger = logging.getLogger(__name__)
 AGENT_CLIENT_ID = os.getenv("AGENT_CLIENT_ID", "sales-girl-internal")
@@ -503,11 +507,44 @@ class SalonAgent(Agent):
             }
         args = raw_arguments if isinstance(raw_arguments, dict) else {}
         reason_summary = str(args.get("reason_summary") or "").strip()
+        transfer_metadata = _tool_metadata(ctx)
         result = await transfer_to_aicc_api(
             reason_summary=reason_summary,
-            metadata=_tool_metadata(ctx),
+            metadata=transfer_metadata,
         )
-        if result.get("status") != "failed":
+        if result.get("status") == "success":
+            session_userdata = _session_userdata(ctx)
+            session_id = str(session_userdata.get("session_tracker_id") or "").strip()
+            business_id = str(transfer_metadata.get("business_id") or "").strip()
+            if session_id and conversation_service_enabled(business_id):
+                try:
+                    # Reporting telemetry must never change a successful live handoff.
+                    event = await create_session_event_api(
+                        session_id=session_id,
+                        event_type="aicc_handoff",
+                        role="system",
+                        title="Transferred to human",
+                        body=reason_summary or None,
+                        payload={
+                            "handoff_kind": "human_handoff",
+                            "reason_summary": reason_summary or None,
+                            "transfer_mode": "sip_bridge",
+                            "target": result.get("target_number"),
+                            "tool_result": {"status": "success"},
+                        },
+                        business_id=business_id,
+                    )
+                    if event.get("status") != "success":
+                        logger.error(
+                            "AICC handoff succeeded but report event was not saved: session_id=%s detail=%s",
+                            session_id,
+                            event.get("detail") or event.get("status"),
+                        )
+                except Exception:  # noqa: BLE001
+                    logger.exception(
+                        "AICC handoff succeeded but report event persistence failed: session_id=%s",
+                        session_id,
+                    )
             logger.info("[TOOL] transfer_to_aicc reason=%s", reason_summary or "")
         return result
 
