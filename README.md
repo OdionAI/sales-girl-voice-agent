@@ -157,6 +157,12 @@ Current stable contract:
 - generic/custom agents can optionally expose a `transfer_to_aicc` runtime tool
   that bridges the current live room back into a configured Huawei AICC SIP
   route for human escalation during a call
+- when `transfer_to_aicc` succeeds, the worker writes a business-scoped
+  `aicc_handoff` session event with a success marker and any supplied reason
+  summary. The conversation report uses these events for transfer counts and
+  reason totals; a failed event write is logged and does not change the
+  successful SIP transfer result. Calls made before this telemetry is deployed
+  may not have a handoff event available for historical transfer rates.
 - dashboard-configured custom `http` tools are promoted into real callable
   runtime tools for the active agent at session start, not just appended to the
   prompt as text
