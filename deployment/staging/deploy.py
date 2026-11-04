@@ -164,6 +164,8 @@ def deploy(release, revision, enable_hausa_research=False, reply_grace_ms='0',
         for item in previous['Config']['Env']
     )
     updates = dict(STAGING_ASR_ENV)
+    updates['ODION_CHINEDU_IGBO'] = '1'
+    updates['ODION_IGBO_QWEN_PHONE_CANDIDATE'] = '1'
     updates['ODION_PIDGIN_QWEN_CANDIDATE'] = '1'
     updates['ODION_SANFRID_PIDGIN'] = '1'
     updates.update(reply_grace_env(reply_grace_ms, reply_grace_agent_ids))

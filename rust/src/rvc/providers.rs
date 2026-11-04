@@ -159,6 +159,23 @@ impl Drop for LlmSpan {
         );
     }
 }
+fn igbo_qwen_phone_candidates(text: &str) -> Option<String> {
+    static RUN: std::sync::LazyLock<regex::Regex> =
+        std::sync::LazyLock::new(|| regex::Regex::new(r"\+?[0-9](?:[0-9 ()-]*[0-9])?").unwrap());
+    let phones: Vec<_> = RUN
+        .find_iter(text)
+        .filter_map(|m| {
+            let digits: String = m.as_str().chars().filter(char::is_ascii_digit).collect();
+            match (digits.len(), digits.as_str()) {
+                (11, s) if s.starts_with('0') => Some(digits),
+                (13, s) if s.starts_with("234") => Some(format!("+{digits}")),
+                _ => None,
+            }
+        })
+        .collect();
+    (!phones.is_empty()).then(|| phones.join(", "))
+}
+
 impl Providers {
     pub fn new(config: Arc<Config>, trace: Trace) -> Result<Self, String> {
         let tts_reference = if !super::languages::uses_sbpn(&config.tts_language)
@@ -349,7 +366,7 @@ impl Providers {
                 let (large, base, qwen) = (
                     length("sbpn_large"),
                     length("sbpn_base"),
-                    length("qwen_english"),
+                    length("qwen_english").max(length("qwen_phone_numbers")),
                 );
                 if base > 0 {
                     self.trace.emit(
@@ -360,7 +377,12 @@ impl Providers {
                     );
                 }
                 if qwen > 0 {
-                    self.trace.emit("llm_pidgin_qwen_candidate_accepted", turn, attempt,
+                    let event = if length("qwen_phone_numbers") > 0 {
+                        "llm_igbo_qwen_phone_candidate_accepted"
+                    } else {
+                        "llm_pidgin_qwen_candidate_accepted"
+                    };
+                    self.trace.emit(event, turn, attempt,
                         json!({"sbpn_large_chars":large,"sbpn_base_chars":base,"qwen_english_chars":qwen}));
                 }
             }
@@ -724,7 +746,7 @@ impl Providers {
         }
         Ok(())
     }
-    async fn pidgin_qwen_final(&self, pcm: &[i16]) -> Option<String> {
+    async fn qwen_candidate_final(&self, pcm: &[i16]) -> Option<String> {
         let url = super::languages::gateway(
             &self.config,
             "http://102.88.137.124:8080/asr-rt/v1/audio/transcriptions",
@@ -751,6 +773,9 @@ impl Providers {
         self.usage.stt_submitted(pcm.len() * 2);
         let payload: Value = response.json().await.ok()?;
         let text = super::text::clean_transcript_for_language(payload["text"].as_str()?, "English");
+        if super::languages::code(&self.config.tts_language) == "ig" {
+            return igbo_qwen_phone_candidates(&text);
+        }
         (!text.trim().is_empty()).then_some(text)
     }
 
@@ -1430,8 +1455,11 @@ pub fn start_asr(p: Providers) -> Asr {
                let dual=p.config.stt_model==super::languages::SBPN_LARGE_MODEL && super::languages::uses_sbpn(&p.config.tts_language);
                let result=interruptible_asr(&mut rx,&mut deferred,async{
                 let base_audio=dual.then(||pcm.clone());
-                let qwen_audio=(dual && super::languages::code(&p.config.tts_language)=="pcm"
-                    && std::env::var("ODION_PIDGIN_QWEN_CANDIDATE").as_deref()==Ok("1")).then(||pcm.clone());
+                let qwen_audio=(dual && match super::languages::code(&p.config.tts_language) {
+                    "pcm" => std::env::var("ODION_PIDGIN_QWEN_CANDIDATE").as_deref()==Ok("1"),
+                    "ig" => std::env::var("ODION_IGBO_QWEN_PHONE_CANDIDATE").as_deref()==Ok("1"),
+                    _ => false,
+                }).then(||pcm.clone());
                 let primary=async {
                 if let Some(mut ws)=current{
                  let final_=if use_current{Some(tokio::time::timeout(Duration::from_secs(30),flush_hypothesis(&mut ws,&audio,through,&mut sent_samples,&p.usage)).await)}else{None};
@@ -1447,7 +1475,7 @@ pub fn start_asr(p: Providers) -> Asr {
                 };
                 let qwen=async {
                     let audio=qwen_audio?;
-                    tokio::time::timeout(Duration::from_millis(1200),p.pidgin_qwen_final(&audio))
+                    tokio::time::timeout(Duration::from_millis(1200),p.qwen_candidate_final(&audio))
                         .await.ok().flatten()
                 };
                 let (primary,base_candidate,qwen_candidate)=tokio::join!(primary,base,qwen);
@@ -1850,6 +1878,17 @@ mod native_language_wire_tests {
 
 #[cfg(test)]
 mod sbpn_wire_tests {
+    #[test]
+    fn igbo_qwen_only_passes_nigerian_phone_numbers() {
+        assert_eq!(
+            super::igbo_qwen_phone_candidates("Call 0803 123 4567 or +234-803-123-4567").as_deref(),
+            Some("08031234567, +2348031234567")
+        );
+        assert_eq!(
+            super::igbo_qwen_phone_candidates("PIN 1234 and account 1234567890"),
+            None
+        );
+    }
     use super::*;
     use axum::{
         extract::{
