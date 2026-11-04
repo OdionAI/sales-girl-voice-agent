@@ -306,18 +306,9 @@ pub async fn execute(services: &Services, context: &AgentContext, permit: Permit
             extra: Default::default(),
         }
     } else {
-        let code = body["ticket_code"]
-            .as_str()
-            .or_else(|| body["id"].as_str())
-            .unwrap_or("")
-            .trim();
         ActionResult {
             status: "success".into(),
-            message: if code.is_empty() {
-                "The support ticket has been created.".into()
-            } else {
-                format!("The support ticket has been created. The reference is {code}.")
-            },
+            message: "The support ticket has been created.".into(),
             data: body,
             extra: Default::default(),
         }
@@ -418,7 +409,7 @@ mod tests {
         let result = execute(&services, &context, permit).await;
         assert_eq!(result.status, "success");
         assert_eq!(requests.lock().unwrap().len(), 1);
-        assert!(result.message.contains("TKT-001"));
+        assert_eq!(result.message, "The support ticket has been created.");
         server.abort();
     }
 }
