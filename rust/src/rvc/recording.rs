@@ -536,6 +536,14 @@ impl Recorder {
                 vec![EgressOutput::File(output)],
                 RoomCompositeOptions {
                     audio_only: true,
+                    encoding: livekit_api::services::egress::encoding::EncodingOptions {
+                        audio_codec: match self.config.format.as_str() {
+                            "mp3" => proto::AudioCodec::AcMp3,
+                            "mp4" => proto::AudioCodec::Aac,
+                            _ => proto::AudioCodec::Opus,
+                        },
+                        ..Default::default()
+                    },
                     ..Default::default()
                 },
             ),
