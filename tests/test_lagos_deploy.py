@@ -22,6 +22,11 @@ BASE_ROUTE = {
             'config_agent_id': 'ccc440c5452d4690abc061758c11cebd',
             'configured_agent_name': 'Amaka',
         },
+        '0301050': {
+            'business_id': MOMO_BUSINESS_ID,
+            'config_agent_id': 'ccc440c5452d4690abc061758c11cebd',
+            'configured_agent_name': 'Amaka',
+        },
     },
 }
 
@@ -66,9 +71,11 @@ class LagosReleaseTests(unittest.TestCase):
             if enabled:
                 updates[release.HAUSA_RESEARCH_KEY] = 'true'
             momo_route = release.momo_feedback_route(previous_env, AGENT_ID)
-            updates['RVC_AICC_SIP_ROUTE'] = release.leadway_caller_routes(
-                {'RVC_AICC_SIP_ROUTE': momo_route}
-            )
+            updates['RVC_AICC_SIP_ROUTE'] = release.aicc_0301050_handoff_route({
+                'RVC_AICC_SIP_ROUTE': release.leadway_caller_routes(
+                    {'RVC_AICC_SIP_ROUTE': momo_route}
+                )
+            })
             expected_env = [f'{key}={value}' for key, value in (previous_env | updates).items()]
 
             previous = {'Id': 'old-container', 'Image': 'old-image',
@@ -126,6 +133,7 @@ class LagosReleaseTests(unittest.TestCase):
                     self.assertEqual(route['did_routes'][number]['business_id'], MOMO_BUSINESS_ID_DASHED)
                     self.assertTrue(route['did_routes'][number]['outbound_required'])
                 self.assertEqual(route['did_routes']['030105'], BASE_ROUTE['did_routes']['030105'])
+                self.assertEqual(route['did_routes']['0301050']['transfer_target_number'], '0301050')
                 self.assertEqual(
                     route['caller_routes']['+2347012345678'],
                     {'config_agent_id': 'existing-agent'},
@@ -255,6 +263,27 @@ class LagosReleaseTests(unittest.TestCase):
                  patch.object(release, 'run'):
                 with self.assertRaisesRegex(RuntimeError, 'MoMo route is missing'):
                     release.deploy(target, revision, False, AGENT_ID)
+
+    def test_handoff_target_changes_only_0301050(self):
+        route = {**BASE_ROUTE, 'did_routes': {
+            **BASE_ROUTE['did_routes'],
+            '+233308048122': {'transfer_target_number': '+233308048122'},
+        }}
+        updated = json.loads(release.aicc_0301050_handoff_route({
+            'RVC_AICC_SIP_ROUTE': json.dumps(route)
+        }))
+        self.assertEqual(updated['did_routes']['0301050']['transfer_target_number'], '0301050')
+        self.assertEqual(updated['did_routes']['+233308048122'],
+                         route['did_routes']['+233308048122'])
+        self.assertEqual(updated['did_routes']['030105'], route['did_routes']['030105'])
+
+    def test_handoff_target_refuses_unexpected_existing_value(self):
+        route = {**BASE_ROUTE, 'did_routes': {
+            **BASE_ROUTE['did_routes'],
+            '0301050': {'transfer_target_number': 'unexpected'},
+        }}
+        with self.assertRaisesRegex(RuntimeError, 'different handoff target'):
+            release.aicc_0301050_handoff_route({'RVC_AICC_SIP_ROUTE': json.dumps(route)})
 
     def test_momo_feedback_caller_override_is_removed(self):
         env = {

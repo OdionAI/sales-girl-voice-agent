@@ -157,6 +157,12 @@ Current stable contract:
 - generic/custom agents can optionally expose a `transfer_to_aicc` runtime tool
   that bridges the current live room back into a configured Huawei AICC SIP
   route for human escalation during a call
+- Lagos releases pin `RVC_AICC_SIP_ROUTE.did_routes["0301050"].transfer_target_number`
+  to `0301050`. A handoff from that called route therefore dials `0301050`
+  through the configured AICC outbound trunk while preserving the verified
+  caller ID. Other called routes retain their own transfer target or the global
+  `AICC_TRANSFER_TARGET_NUMBER`; a dashboard agent override does not replace
+  the operator-pinned DID transfer target. The release changes new calls only.
 - when `transfer_to_aicc` succeeds, the worker writes a business-scoped
   `aicc_handoff` session event with a success marker and any supplied reason
   summary. The conversation report uses these events for transfer counts and
