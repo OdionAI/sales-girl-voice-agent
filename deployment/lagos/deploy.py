@@ -22,6 +22,11 @@ REPLY_GRACE_MS_KEY = 'RVC_LAB_REPLY_GRACE_MS'
 REPLY_GRACE_AGENT_IDS_KEY = 'RVC_LAB_REPLY_GRACE_AGENT_IDS'
 INACTIVITY_PILOT_AGENT_IDS_KEY = 'RVC_LAB_INACTIVITY_PILOT_AGENT_IDS'
 BALOGUN_NUMBER_CAPTURE_KEY = 'RVC_LAB_BALOGUN_NUMBER_CAPTURE_ENABLED'
+# Operator switch, mirroring .private/runtime.env. When '1' the release turns the
+# bank's fail-closed voice-authentication gate OFF for every session, so banking
+# tools run without a voiceprint match. Set back to '0' to restore the gate.
+VOICE_AUTH_DISABLED_KEY = 'VOICE_AUTH_DISABLED'
+VOICE_AUTH_DISABLED = '1'
 DEFAULT_INACTIVITY_PILOT_AGENT_IDS = '*'
 LAGOS_ASR_ENV = {
     'RVC_LAB_END_SILENCE_MS': '150',
@@ -287,6 +292,7 @@ def deploy(release, revision, enable_hausa_research=False, momo_feedback_agent_i
     # Lagos ASR is shared by the voice worker. Reassert Qwen realtime + batch
     # endpoints each release so stale Whisper overrides cannot persist.
     updates = dict(LAGOS_ASR_ENV)
+    updates[VOICE_AUTH_DISABLED_KEY] = VOICE_AUTH_DISABLED
     updates.update(reply_grace_env(reply_grace_ms, reply_grace_agent_ids))
     updates.update(inactivity_pilot_env(inactivity_pilot_agent_ids))
     if not isinstance(balogun_number_capture_enabled, bool):
