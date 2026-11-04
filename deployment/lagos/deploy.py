@@ -282,6 +282,7 @@ def deploy(release, revision, enable_hausa_research=False, momo_feedback_agent_i
     # Lagos ASR is shared by the voice worker. Reassert Qwen realtime + batch
     # endpoints each release so stale Whisper overrides cannot persist.
     updates = dict(LAGOS_ASR_ENV)
+    updates['ODION_CHINEDU_IGBO'] = '1'
     updates['ODION_SANFRID_PIDGIN'] = '1'
     updates['ODION_SBPN_LARGE_TEST'] = '1'
     updates.update(reply_grace_env(reply_grace_ms, reply_grace_agent_ids))
