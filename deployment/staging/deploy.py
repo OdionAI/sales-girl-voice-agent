@@ -164,6 +164,7 @@ def deploy(release, revision, enable_hausa_research=False, reply_grace_ms='0',
         for item in previous['Config']['Env']
     )
     updates = dict(STAGING_ASR_ENV)
+    updates['ODION_PIDGIN_QWEN_CANDIDATE'] = '1'
     updates.update(reply_grace_env(reply_grace_ms, reply_grace_agent_ids))
     updates.update(inactivity_pilot_env(inactivity_pilot_agent_ids))
     provider = str(llm_provider).strip().lower()
