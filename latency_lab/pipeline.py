@@ -446,6 +446,8 @@ class ConversationPipeline:
                     greeting = candidate
                     break
         profile = LANGUAGES.get(language_code(self.config.tts_language))
+        # Keep explicit openings on the personalization path below so verified
+        # caller names are added before this text is spoken.
         if profile and not greeting:
             greeting = profile["opening"]
         if is_pidgin(self.config.tts_language):
