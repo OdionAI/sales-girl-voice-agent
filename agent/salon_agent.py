@@ -518,6 +518,7 @@ class SalonAgent(Agent):
             business_id = str(transfer_metadata.get("business_id") or "").strip()
             if session_id and conversation_service_enabled(business_id):
                 try:
+                    # Reporting telemetry must never change a successful live handoff.
                     event = await create_session_event_api(
                         session_id=session_id,
                         event_type="aicc_handoff",
