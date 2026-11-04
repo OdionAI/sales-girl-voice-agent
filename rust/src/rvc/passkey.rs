@@ -473,7 +473,18 @@ impl Flow {
             "fido2_cancelled" => "cancelled",
             _ => "other",
         };
-        self.0.trace.emit("passkey_app_message",0,0,json!({"kind":safe_kind,"authentication_id_match":auth,"correlation_id_match":correlation}));
+        let reason = value.get("reason").and_then(Value::as_str).unwrap_or("");
+        let reason_code: String = reason
+            .chars()
+            .take(64)
+            .filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-')
+            .collect();
+        self.0.trace.emit("passkey_app_message",0,0,json!({
+            "kind":safe_kind,
+            "failure_reason_code":if safe_kind == "failed" { reason_code } else { String::new() },
+            "authentication_id_match":auth,
+            "correlation_id_match":correlation,
+        }));
         if !auth || !correlation {
             return Inbound::Ignore;
         }
@@ -770,6 +781,7 @@ mod tests {
             identity,
             "session-a".into(),
             emit.clone(),
+            super::super::Trace::default(),
         )
         .unwrap();
         assert_eq!(
