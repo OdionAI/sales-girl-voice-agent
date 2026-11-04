@@ -194,7 +194,11 @@ pub fn apply(config: &mut Config, context: &AgentContext, overrides: &Value) -> 
         config.tts_model = text(profile, "model").into();
         config.tts_voice = text(profile, "voice").into();
         config.tts_url = gateway(config, text(profile, "url"))?;
-        if language == "ig" || language == "ha" {
+        if language == "ig" && std::env::var("ODION_CHINEDU_IGBO").as_deref() == Ok("1") {
+            config.tts_model = "igbo-ljspeech-vits-epoch236".into();
+            config.tts_voice = "chinedu".into();
+            config.tts_seed = "17".into();
+        } else if language == "ig" || language == "ha" {
             let voices = &values[if language == "ig" {
                 "igbo_voices"
             } else {
@@ -459,8 +463,23 @@ pub fn tts_requests(config: &Config, input: &str) -> Result<Vec<TtsRequest>, Str
                 body["seed"] = serde_json::json!(17);
             }
             if code == "ig" {
-                body["language"] = serde_json::json!("ig");
-                timeout = 1800.0;
+                if config.tts_model == "igbo-ljspeech-vits-epoch236" {
+                    body["language"] = serde_json::json!("igbo");
+                    body["stream_format"] = serde_json::json!("audio");
+                    headers.extend([
+                        ("x-model".into(), config.tts_model.clone()),
+                        ("x-voice".into(), "chinedu".into()),
+                        ("x-speaker-id".into(), "chinedu".into()),
+                        (
+                            "x-checkpoint-sha256".into(),
+                            "8b82e4f2bb90668c720beafd31696b3f075d326fddcb712018342609111cc64d"
+                                .into(),
+                        ),
+                    ]);
+                } else {
+                    body["language"] = serde_json::json!("ig");
+                    timeout = 1800.0;
+                }
             }
         }
         requests.push(TtsRequest {
