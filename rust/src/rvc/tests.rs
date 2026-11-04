@@ -1371,7 +1371,7 @@ async fn native_asr_adapter_keeps_realtime_non_authoritative_and_serializes_fina
     );
     asr.commit(42, vec![1000; 1600]).await.unwrap();
     assert!(
-        matches!(tokio::time::timeout(Duration::from_secs(3),asr.events.recv()).await.unwrap(),Some(AsrEvent::Final{turn:42,text,base_candidate:None})if text=="first request")
+        matches!(tokio::time::timeout(Duration::from_secs(3),asr.events.recv()).await.unwrap(),Some(AsrEvent::Final{turn:42,text,base_candidate:None,qwen_candidate:None})if text=="first request")
     );
     assert!(state.handoff.load(Ordering::SeqCst));
     asr.task.abort();
