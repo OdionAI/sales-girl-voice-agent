@@ -139,7 +139,7 @@ def participant_identity(route, participant, room_name, sip_kind, *, called_over
         if caller_route and caller_route.get("override_did_routes") is True
         else dynamic_did_route or did_route or caller_route or {}
     )
-    return {
+    identity = {
         "business_id": chosen.get("business_id") or route["business_id"],
         "config_agent_id": chosen.get("config_agent_id") or route["config_agent_id"],
         "configured_agent_name": (
@@ -167,3 +167,10 @@ def participant_identity(route, participant, room_name, sip_kind, *, called_over
             "voice_auth_required", route.get("voice_auth_required", True)
         ),
     }
+    # A dashboard-selected agent can override the DID agent while the
+    # operator-pinned handoff number remains tied to the called route.
+    for key in ("transfer_target_number", "transfer_from_number"):
+        value = chosen.get(key) or (did_route or {}).get(key)
+        if isinstance(value, str) and value.strip():
+            identity[key] = value
+    return identity
