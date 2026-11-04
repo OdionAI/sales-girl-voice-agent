@@ -79,7 +79,7 @@ fn voice(selected: &str, voices: &Value, legacy: &Value, default: &str) -> Resul
         })
         .ok_or("unknown configured speech voice".into())
 }
-fn gateway(config: &Config, url: &str) -> Result<String, String> {
+pub(super) fn gateway(config: &Config, url: &str) -> Result<String, String> {
     if config.speech_gateway_url.is_empty() {
         return Ok(url.into());
     }
