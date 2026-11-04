@@ -49,7 +49,6 @@ class LagosReleaseTests(unittest.TestCase):
             previous_env = dict(item.split('=', 1) for item in base_env)
 
             updates = dict(release.LAGOS_ASR_ENV)
-            updates['ODION_PIDGIN_QWEN_CANDIDATE'] = '1'
             updates['ODION_CHINEDU_IGBO'] = '1'
             updates['ODION_IGBO_QWEN_PHONE_CANDIDATE'] = '1'
             updates['ODION_SANFRID_PIDGIN'] = '1'
