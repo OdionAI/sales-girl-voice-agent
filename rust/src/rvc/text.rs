@@ -11,6 +11,19 @@ static TAG: LazyLock<Regex> = LazyLock::new(|| {
 static LANGUAGE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?i)language\s+([a-z]+)").unwrap());
 static ASR: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)<asr_text>").unwrap());
+// Internal pipeline annotations (e.g. the interrupted-reply note the memory
+// layer appends for the model) must never be spoken. Strip them from any text
+// on its way to TTS as a final safety net, regardless of model echo or path.
+static INTERNAL_ANNOTATION: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?is)\s*\[\s*response interrupted[^\]]*\]").unwrap());
+pub fn strip_internal_annotations(text: &str) -> String {
+    // Leave every string without the marker byte-for-byte unchanged (no trim),
+    // so normal TTS input is identical to before; only annotated text changes.
+    if !INTERNAL_ANNOTATION.is_match(text) {
+        return text.to_string();
+    }
+    INTERNAL_ANNOTATION.replace_all(text, "").trim().to_string()
+}
 #[derive(Default)]
 pub struct PhraseTokenizer {
     buffer: String,
@@ -507,5 +520,24 @@ mod french_decoder_tests {
             Some("Salut")
         );
         assert!(decoder.push("language Chinese<asr_text>您好").is_none());
+    }
+}
+
+#[cfg(test)]
+mod internal_annotation_tests {
+    use super::*;
+    #[test]
+    fn interrupted_note_is_removed_before_speech() {
+        let raw = "Your balance is 100 naira.\n[Response interrupted; the caller may not have heard it in full.]";
+        assert_eq!(strip_internal_annotations(raw), "Your balance is 100 naira.");
+        let inline =
+            "Okay. [Response interrupted; the caller may not have heard it in full.] Let me check.";
+        assert_eq!(strip_internal_annotations(inline), "Okay. Let me check.");
+        assert_eq!(strip_internal_annotations("Hello there."), "Hello there.");
+        // A message that is only the note yields nothing to speak.
+        assert_eq!(
+            strip_internal_annotations("[Response interrupted; the caller may not have heard it in full.]"),
+            ""
+        );
     }
 }
