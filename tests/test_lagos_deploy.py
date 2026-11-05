@@ -421,6 +421,22 @@ class LagosReleaseTests(unittest.TestCase):
             release.uba_inbound_transfer_target(
                 {'RVC_AICC_SIP_ROUTE': json.dumps(placed)})
 
+    def test_uba_inbound_did_route_is_idempotent_with_existing_transfer_target(self):
+        placed = json.loads(release.uba_inbound_did_route(
+            {'RVC_AICC_SIP_ROUTE': json.dumps(BASE_ROUTE)}))
+        with_target = json.loads(release.uba_inbound_transfer_target(
+            {'RVC_AICC_SIP_ROUTE': json.dumps(placed)}))
+        # Re-running the DID step on an environment that already carries the
+        # transfer target (i.e. a second deploy) must not raise.
+        again = json.loads(release.uba_inbound_did_route(
+            {'RVC_AICC_SIP_ROUTE': json.dumps(with_target)}))
+        reapply = json.loads(release.uba_inbound_transfer_target(
+            {'RVC_AICC_SIP_ROUTE': json.dumps(again)}))
+        for number in release.UBA_INBOUND_DID_NUMBERS:
+            self.assertEqual(
+                reapply['did_routes'][number]['transfer_target_number'], '07012345678')
+        self.assertEqual(reapply, with_target)
+
 
 class NativeAdmissionTests(unittest.TestCase):
     def test_native_slots_cover_the_existing_capacity_policy_without_changing_it(self):

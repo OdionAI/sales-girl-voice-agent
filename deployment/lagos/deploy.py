@@ -293,11 +293,16 @@ def uba_inbound_did_route(previous_env):
     did_routes = route.get('did_routes')
     if not isinstance(did_routes, dict):
         raise RuntimeError('Lagos SIP To route map is missing')
+    expected = dict(UBA_INBOUND_DID_ROUTE)
+    # The transfer target is (re)applied later in the chain by
+    # uba_inbound_transfer_target(); accept an existing entry that already
+    # carries it so repeated deploys stay idempotent.
+    expected_with_target = {**expected, 'transfer_target_number': '07012345678'}
     for number in UBA_INBOUND_DID_NUMBERS:
         existing = did_routes.get(number)
-        if existing and existing != UBA_INBOUND_DID_ROUTE:
+        if existing and existing not in (expected, expected_with_target):
             raise RuntimeError(f'SIP To number {number} already has a different route')
-        did_routes[number] = dict(UBA_INBOUND_DID_ROUTE)
+        did_routes[number] = dict(expected)
     return json.dumps(route, separators=(',', ':'), sort_keys=True)
 
 
