@@ -544,12 +544,10 @@ impl Providers {
         tx: &mpsc::Sender<Vec<i16>>,
     ) -> Result<(), String> {
         // Never speak internal pipeline annotations (e.g. the interrupted-reply
-        // note the memory layer appends for the model). Strip at the TTS
-        // boundary so it cannot leak into audio even if echoed downstream.
+        // note the memory layer appends for the model). Text without the marker
+        // is returned unchanged; only annotated speech is cleaned here, so it
+        // cannot leak into audio even if echoed downstream.
         let cleaned = super::text::strip_internal_annotations(text);
-        if cleaned.is_empty() {
-            return Ok(());
-        }
         let text = cleaned.as_str();
         let c = &self.config;
         if super::languages::uses_sbpn(&c.tts_language) {

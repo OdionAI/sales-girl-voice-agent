@@ -17,6 +17,11 @@ static ASR: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)<asr_text>").unw
 static INTERNAL_ANNOTATION: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?is)\s*\[\s*response interrupted[^\]]*\]").unwrap());
 pub fn strip_internal_annotations(text: &str) -> String {
+    // Leave every string without the marker byte-for-byte unchanged (no trim),
+    // so normal TTS input is identical to before; only annotated text changes.
+    if !INTERNAL_ANNOTATION.is_match(text) {
+        return text.to_string();
+    }
     INTERNAL_ANNOTATION.replace_all(text, "").trim().to_string()
 }
 #[derive(Default)]
