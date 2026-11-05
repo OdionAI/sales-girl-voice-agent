@@ -71,6 +71,18 @@ UBA_INBOUND_DID_NUMBERS = ("+2347012345678", "07012345678")
 
 
 
+# Outbound "To" DID for the UBA feedback agent. AICC dials this number to reach
+# Odion for an outbound call; outbound_required makes the worker claim the
+# prepared customer context (matched by the customer's number on the INVITE).
+UBA_OUTBOUND_DID_ROUTE = {
+    "business_id": "b43d6e63-4bfd-418a-9fa4-63fb4eb7e6bb",
+    "config_agent_id": "67612796698e40e3883515f0441fe6df",
+    "configured_agent_name": "Teni",
+    "outbound_required": True,
+}
+UBA_OUTBOUND_DID_NUMBERS = ("+2348012345678", "08012345678")
+
+
 def run(*args, **kwargs):
     return subprocess.run(args, check=True, **kwargs)
 
@@ -277,6 +289,20 @@ def uba_inbound_did_route(previous_env):
     return json.dumps(route, separators=(',', ':'), sort_keys=True)
 
 
+def uba_outbound_did_route(previous_env):
+    """Route the UBA outbound DID to the UBA feedback agent (claim by customer)."""
+    route = json.loads(previous_env.get('RVC_AICC_SIP_ROUTE') or '{}')
+    did_routes = route.get('did_routes')
+    if not isinstance(did_routes, dict):
+        raise RuntimeError('Lagos SIP To route map is missing')
+    for number in UBA_OUTBOUND_DID_NUMBERS:
+        existing = did_routes.get(number)
+        if existing and existing != UBA_OUTBOUND_DID_ROUTE:
+            raise RuntimeError(f'SIP To number {number} already has a different route')
+        did_routes[number] = dict(UBA_OUTBOUND_DID_ROUTE)
+    return json.dumps(route, separators=(',', ':'), sort_keys=True)
+
+
 def reply_grace_env(delay_ms='0', agent_ids=''):
     delay = str(delay_ms).strip()
     if not re.fullmatch(r'\d{1,4}', delay) or int(delay) > 1500:
@@ -364,9 +390,11 @@ def deploy(release, revision, enable_hausa_research=False, momo_feedback_agent_i
     route_env = {
         'RVC_AICC_SIP_ROUTE': momo_feedback_route(previous_env, momo_feedback_agent_id)
     }
-    updates['RVC_AICC_SIP_ROUTE'] = uba_inbound_did_route({
-        'RVC_AICC_SIP_ROUTE': aicc_0301050_handoff_route({
-            'RVC_AICC_SIP_ROUTE': leadway_caller_routes(route_env)
+    updates['RVC_AICC_SIP_ROUTE'] = uba_outbound_did_route({
+        'RVC_AICC_SIP_ROUTE': uba_inbound_did_route({
+            'RVC_AICC_SIP_ROUTE': aicc_0301050_handoff_route({
+                'RVC_AICC_SIP_ROUTE': leadway_caller_routes(route_env)
+            })
         })
     })
     updates.update(native_admission_updates(previous_env))
