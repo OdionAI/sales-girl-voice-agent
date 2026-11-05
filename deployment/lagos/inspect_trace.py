@@ -80,29 +80,55 @@ if job == "BALOGUN":
                 print(json.dumps({"job_id":trace.stem,"inspection_error":type(error).__name__}))
     raise SystemExit(0)
 if job == "RECENT":
+    import subprocess
+    voice = json.loads(subprocess.check_output(
+        ["docker", "inspect", "odion-recovery-lagos-voice-1"], text=True))[0]
+    env = dict(v.split("=", 1) for v in voice["Config"]["Env"] if "=" in v)
+    keys = ("RVC_LAB_END_SILENCE_MS", "RVC_LAB_REPLY_GRACE_MS",
+            "RVC_LAB_LLM_PROVIDER", "RVC_LAB_LLM_MODEL",
+            "RVC_LAB_TRANSFER_STREAMING_REPLIES", "RVC_LAB_STT_SPECULATIVE_FLUSH_MS")
+    print(json.dumps({"container_started":voice["State"]["StartedAt"],
+                      "runtime":{key:env.get(key) for key in keys}}))
     root = Path("/opt/attentive/releases/recovery-20261009/.private/traces/traces")
-    for path in sorted(root.glob("AJ_*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True)[:12]:
-        if path.stat().st_size > 16 * 1024 * 1024:
+    selected = {
+        "user_audio_end_candidate", "user_speech_start", "user_speech_end", "stt_final",
+        "llm_request_start", "llm_first_token", "llm_text_released", "tts_request_start",
+        "tts_first_pcm", "audio_first_enqueued", "attempt_cancel", "speculation_start",
+        "speculation_authorized", "turn_complete", "engagement_spoken",
+        "llm_provider_request_complete", "knowledge_lookup_executed",
+        "knowledge_lookup_pending", "knowledge_lookup_complete", "llm_first_tool",
+        "tool_call_prepared", "tool_confirmation_requested", "tool_confirmation_decision",
+        "llm_transfer_guard_decision", "llm_directory_guard_decision",
+        "stt_base_candidate_available", "reply_grace_start", "reply_grace_elapsed",
+        "tool_execution_start", "tool_execution_complete", "speech_gate_changed",
+        "stt_realtime_final", "asr_final_request"
+    }
+    for path in sorted(root.glob("AJ_*.jsonl"), key=lambda p:p.stat().st_mtime, reverse=True)[:18]:
+        if path.stat().st_size > 16*1024*1024:
             continue
         counts = collections.Counter()
-        errors = []
         timings = []
-        timing_names = {"user_audio_end_candidate", "user_speech_start", "user_speech_end", "stt_final", "llm_request_start", "llm_first_token", "llm_text_released", "tts_request_start", "tts_first_pcm", "tts_request_complete", "audio_first_enqueued", "attempt_cancel", "speculation_start", "speculation_authorized", "turn_complete", "engagement_spoken", "speech_gate_changed", "llm_provider_request_complete"}
-        timing_fields = {"reason", "provider_ttft_ms", "duration_ms", "audio_seconds", "bytes", "chunks", "text_chars", "enabled", "request_id"}
         with path.open() as stream:
             for line in stream:
                 try: item = json.loads(line)
                 except ValueError: continue
                 event = item.get("event", "")
                 counts[event] += 1
-                if event in timing_names:
+                if event in selected:
                     data = item.get("data", {})
-                    timings.append({key: item[key] for key in ("event", "at_us", "turn", "attempt") if key in item} | {"data": {key: value for key, value in data.items() if key in timing_fields}})
-                if event in {"error", "engagement_failed", "tts_error", "session_failed"}:
-                    message = str(item.get("data", {}).get("error", ""))
-                    message = re.sub(r"https?://[^\s]+", "[endpoint]", message)
-                    errors.append({"event": event, "error": message[:240]})
-        print(json.dumps({"job_id": path.stem, "modified": path.stat().st_mtime, "counts": dict(counts), "errors": errors, "timings": timings[-300:]}))
+                    safe = {k:v for k,v in data.items() if k in {
+                        "text_buffer_ms", "provider_ttft_ms", "suppressed", "cache_hit",
+                        "matches", "duration_ms", "total_ms", "request_index"
+                    } and isinstance(v, (float, int, bool))}
+                    if event == "attempt_cancel" and data.get("reason") in {
+                        "stt_partial_revision", "final_transcript_changed", "stt_base_candidate_differs",
+                        "new_attempt_replaced_existing", "user_barge_in", "speech_gate_change"
+                    }:
+                        safe["reason"] = data["reason"]
+                    timings.append({key: item[key] for key in ("event", "at_us", "turn", "attempt")
+                                    if key in item} | {"data":safe})
+        print(json.dumps({"job_id": path.stem, "modified": path.stat().st_mtime,
+                          "counts":dict(counts), "timings":timings[-500:]}))
     raise SystemExit(0)
 if not re.fullmatch(r"AJ_[A-Za-z0-9_-]{6,80}", job):
     raise SystemExit("Invalid diagnostic job ID")
