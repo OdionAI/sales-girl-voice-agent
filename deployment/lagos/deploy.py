@@ -83,6 +83,18 @@ UBA_OUTBOUND_DID_ROUTE = {
 UBA_OUTBOUND_DID_NUMBERS = ("+2348012345678", "08012345678")
 
 
+# Inbound DID for the MTN MoMo inbound "Amaka" agent (business "MoMo PSB").
+# Calls whose SIP To matches this DID route to Amaka; human transfers from
+# these calls bridge to 0301050. Applies to this route only.
+MOMO_AMAKA_TRANSFER_DID_ROUTE = {
+    "business_id": "f2ff0fe3-d56c-4688-9048-9a76a6310d4a",
+    "config_agent_id": "ccc440c5-452d-4690-abc0-61758c11cebd",
+    "configured_agent_name": "Amaka",
+    "transfer_target_number": "0301050",
+}
+MOMO_AMAKA_TRANSFER_DID_NUMBERS = ("+2347060030105", "07060030105")
+
+
 def run(*args, **kwargs):
     return subprocess.run(args, check=True, **kwargs)
 
@@ -303,6 +315,20 @@ def uba_outbound_did_route(previous_env):
     return json.dumps(route, separators=(',', ':'), sort_keys=True)
 
 
+def momo_amaka_transfer_did_route(previous_env):
+    """Route the MTN MoMo inbound Amaka DID; human transfers bridge to 0301050."""
+    route = json.loads(previous_env.get('RVC_AICC_SIP_ROUTE') or '{}')
+    did_routes = route.get('did_routes')
+    if not isinstance(did_routes, dict):
+        raise RuntimeError('Lagos SIP To route map is missing')
+    for number in MOMO_AMAKA_TRANSFER_DID_NUMBERS:
+        existing = did_routes.get(number)
+        if existing and existing != MOMO_AMAKA_TRANSFER_DID_ROUTE:
+            raise RuntimeError(f'SIP To number {number} already has a different route')
+        did_routes[number] = dict(MOMO_AMAKA_TRANSFER_DID_ROUTE)
+    return json.dumps(route, separators=(',', ':'), sort_keys=True)
+
+
 def reply_grace_env(delay_ms='0', agent_ids=''):
     delay = str(delay_ms).strip()
     if not re.fullmatch(r'\d{1,4}', delay) or int(delay) > 1500:
@@ -390,10 +416,12 @@ def deploy(release, revision, enable_hausa_research=False, momo_feedback_agent_i
     route_env = {
         'RVC_AICC_SIP_ROUTE': momo_feedback_route(previous_env, momo_feedback_agent_id)
     }
-    updates['RVC_AICC_SIP_ROUTE'] = uba_outbound_did_route({
-        'RVC_AICC_SIP_ROUTE': uba_inbound_did_route({
-            'RVC_AICC_SIP_ROUTE': aicc_0301050_handoff_route({
-                'RVC_AICC_SIP_ROUTE': leadway_caller_routes(route_env)
+    updates['RVC_AICC_SIP_ROUTE'] = momo_amaka_transfer_did_route({
+        'RVC_AICC_SIP_ROUTE': uba_outbound_did_route({
+            'RVC_AICC_SIP_ROUTE': uba_inbound_did_route({
+                'RVC_AICC_SIP_ROUTE': aicc_0301050_handoff_route({
+                    'RVC_AICC_SIP_ROUTE': leadway_caller_routes(route_env)
+                })
             })
         })
     })
