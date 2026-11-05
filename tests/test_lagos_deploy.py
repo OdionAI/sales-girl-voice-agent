@@ -74,12 +74,14 @@ class LagosReleaseTests(unittest.TestCase):
             if enabled:
                 updates[release.HAUSA_RESEARCH_KEY] = 'true'
             momo_route = release.momo_feedback_route(previous_env, AGENT_ID)
-            updates['RVC_AICC_SIP_ROUTE'] = release.uba_outbound_did_route({
-                'RVC_AICC_SIP_ROUTE': release.uba_inbound_did_route({
-                    'RVC_AICC_SIP_ROUTE': release.aicc_0301050_handoff_route({
-                        'RVC_AICC_SIP_ROUTE': release.leadway_caller_routes(
-                            {'RVC_AICC_SIP_ROUTE': momo_route}
-                        )
+            updates['RVC_AICC_SIP_ROUTE'] = release.momo_amaka_transfer_did_route({
+                'RVC_AICC_SIP_ROUTE': release.uba_outbound_did_route({
+                    'RVC_AICC_SIP_ROUTE': release.uba_inbound_did_route({
+                        'RVC_AICC_SIP_ROUTE': release.aicc_0301050_handoff_route({
+                            'RVC_AICC_SIP_ROUTE': release.leadway_caller_routes(
+                                {'RVC_AICC_SIP_ROUTE': momo_route}
+                            )
+                        })
                     })
                 })
             })
@@ -144,6 +146,9 @@ class LagosReleaseTests(unittest.TestCase):
                 for uba_out in release.UBA_OUTBOUND_DID_NUMBERS:
                     self.assertEqual(route['did_routes'][uba_out], release.UBA_OUTBOUND_DID_ROUTE)
                     self.assertTrue(route['did_routes'][uba_out]['outbound_required'])
+                for amaka_num in release.MOMO_AMAKA_TRANSFER_DID_NUMBERS:
+                    self.assertEqual(route['did_routes'][amaka_num], release.MOMO_AMAKA_TRANSFER_DID_ROUTE)
+                    self.assertEqual(route['did_routes'][amaka_num]['transfer_target_number'], '0301050')
                 self.assertEqual(
                     route['caller_routes']['+2347012345678'],
                     {'config_agent_id': 'existing-agent'},
@@ -367,6 +372,26 @@ class LagosReleaseTests(unittest.TestCase):
         }}
         with self.assertRaisesRegex(RuntimeError, 'already has a different route'):
             release.uba_outbound_did_route({'RVC_AICC_SIP_ROUTE': json.dumps(route)})
+
+
+    def test_momo_amaka_transfer_did_route_adds_route_and_is_idempotent(self):
+        env = {'RVC_AICC_SIP_ROUTE': json.dumps(BASE_ROUTE)}
+        once = json.loads(release.momo_amaka_transfer_did_route(env))
+        twice = json.loads(release.momo_amaka_transfer_did_route(
+            {'RVC_AICC_SIP_ROUTE': json.dumps(once)}))
+        for number in release.MOMO_AMAKA_TRANSFER_DID_NUMBERS:
+            self.assertEqual(once['did_routes'][number], release.MOMO_AMAKA_TRANSFER_DID_ROUTE)
+            self.assertEqual(once['did_routes'][number]['transfer_target_number'], '0301050')
+        self.assertEqual(once, twice)
+
+    def test_momo_amaka_transfer_did_route_refuses_conflicting_route(self):
+        conflict_number = release.MOMO_AMAKA_TRANSFER_DID_NUMBERS[0]
+        route = {**BASE_ROUTE, 'did_routes': {
+            **BASE_ROUTE['did_routes'],
+            conflict_number: {'config_agent_id': 'someone-else'},
+        }}
+        with self.assertRaisesRegex(RuntimeError, 'already has a different route'):
+            release.momo_amaka_transfer_did_route({'RVC_AICC_SIP_ROUTE': json.dumps(route)})
 
 
 class NativeAdmissionTests(unittest.TestCase):
