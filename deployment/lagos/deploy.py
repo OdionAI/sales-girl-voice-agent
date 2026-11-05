@@ -301,6 +301,31 @@ def uba_inbound_did_route(previous_env):
     return json.dumps(route, separators=(',', ':'), sort_keys=True)
 
 
+def uba_inbound_transfer_target(previous_env):
+    """Return calls delivered to the UBA inbound DID to that same AICC number.
+
+    Human transfers from calls that arrive on the UBA inbound DID must bridge
+    back to the UBA AICC access number (07012345678), the same per-business
+    pattern used elsewhere (Sonia -> its own DID, MoMo Amaka -> 0301050).
+    Without this the UBA route falls back to the global transfer target.
+    """
+    route = json.loads(previous_env.get('RVC_AICC_SIP_ROUTE') or '{}')
+    did_routes = route.get('did_routes')
+    if not isinstance(did_routes, dict):
+        raise RuntimeError('Lagos SIP To route map is missing')
+    for number in UBA_INBOUND_DID_NUMBERS:
+        entry = did_routes.get(number)
+        if not isinstance(entry, dict):
+            raise RuntimeError(f'SIP To number {number} is missing')
+        if entry.get('config_agent_id') != UBA_INBOUND_DID_ROUTE['config_agent_id']:
+            raise RuntimeError(f'SIP To number {number} is not the UBA inbound route')
+        existing = entry.get('transfer_target_number')
+        if existing not in (None, '', '07012345678'):
+            raise RuntimeError(f'SIP To number {number} has a different handoff target')
+        entry['transfer_target_number'] = '07012345678'
+    return json.dumps(route, separators=(',', ':'), sort_keys=True)
+
+
 def uba_outbound_did_route(previous_env):
     """Route the UBA outbound DID to the UBA feedback agent (claim by customer)."""
     route = json.loads(previous_env.get('RVC_AICC_SIP_ROUTE') or '{}')
@@ -418,9 +443,11 @@ def deploy(release, revision, enable_hausa_research=False, momo_feedback_agent_i
     }
     updates['RVC_AICC_SIP_ROUTE'] = momo_amaka_transfer_did_route({
         'RVC_AICC_SIP_ROUTE': uba_outbound_did_route({
-            'RVC_AICC_SIP_ROUTE': uba_inbound_did_route({
-                'RVC_AICC_SIP_ROUTE': aicc_0301050_handoff_route({
-                    'RVC_AICC_SIP_ROUTE': leadway_caller_routes(route_env)
+            'RVC_AICC_SIP_ROUTE': uba_inbound_transfer_target({
+                'RVC_AICC_SIP_ROUTE': uba_inbound_did_route({
+                    'RVC_AICC_SIP_ROUTE': aicc_0301050_handoff_route({
+                        'RVC_AICC_SIP_ROUTE': leadway_caller_routes(route_env)
+                    })
                 })
             })
         })
