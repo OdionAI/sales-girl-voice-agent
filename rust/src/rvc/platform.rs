@@ -44,7 +44,7 @@ impl Default for PlatformConfig {
             conversation: Endpoint::default(),
             billing: Endpoint::default(),
             client_id: "sales-girl-voice-agent".into(),
-            knowledge_top_k: 4,
+            knowledge_top_k: 10,
             action_timeout_seconds: 12.0,
         }
     }
