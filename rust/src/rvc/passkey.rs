@@ -702,6 +702,10 @@ mod tests {
     ) -> Json<Value> {
         assert_eq!(headers["x-business-id"], "business-a");
         assert_eq!(headers["x-wema-customer-id"], "customer-a");
+        assert!(
+            headers.get("x-wema-confirmed-operation").is_none(),
+            "start must not claim a confirmed operation"
+        );
         assert_eq!(body["feature"], "Transfer");
         fake.begins.fetch_add(1, Ordering::SeqCst);
         fake.begin_started.notify_one();
@@ -719,6 +723,10 @@ mod tests {
     ) -> Json<Value> {
         assert_eq!(headers["x-business-id"], "business-a");
         assert_eq!(headers["x-wema-customer-id"], "customer-a");
+        assert_eq!(
+            headers["x-wema-confirmed-operation"], "operation-a",
+            "execute must present the confirmed operation id to the connector"
+        );
         assert_eq!(body["operation_id"], "operation-a");
         assert_eq!(body["authentication_id"], "authentication-secret");
         assert_eq!(body["fido2_credential_proof"]["id"], "credential-secret");
