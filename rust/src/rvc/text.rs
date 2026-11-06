@@ -254,7 +254,7 @@ pub fn tts_budget(text: &str) -> usize {
     let words = text.split_whitespace().count().max(1);
     let digits = Regex::new(r"[0-9]+").unwrap();
     let extra: usize = digits.find_iter(text).map(|m| m.len() - 1).sum();
-    ((((words + extra) as f64 / 2.5 + 0.5) * 12.5) as usize + 8).clamp(24, 360)
+    ((((words + extra) as f64 / 2.5 + 0.5) * 12.5) as usize + 8).clamp(24, 1500)
 }
 #[cfg(test)]
 mod tests {
