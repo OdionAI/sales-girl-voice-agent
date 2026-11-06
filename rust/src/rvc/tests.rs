@@ -237,7 +237,7 @@ async fn llm(State(s): State<Arc<Fixture>>, Json(body): Json<Value>) -> Response
                         .is_some()
             })
         }) {
-            arguments["acknowledgment"] = json!("I'll check that policy for you.");
+            arguments["acknowledgment"] = json!("I'll check that policy.");
         }
         json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":"lookup","function":{"name":"knowledge_lookup","arguments":arguments.to_string()}}]}}]})
     } else if text.contains("ticket request") {
@@ -3135,7 +3135,7 @@ async fn model_written_knowledge_ack_overlaps_lookup_and_is_interruptible() {
             .lock()
             .unwrap()
             .iter()
-            .any(|r| r["input"] == "I'll check that policy for you."));
+            .any(|r| r["input"] == "I'll check that policy."));
         if interrupt {
             h.voice().await;
             tokio::time::timeout(Duration::from_secs(3), async {
@@ -3173,6 +3173,26 @@ async fn model_written_knowledge_ack_overlaps_lookup_and_is_interruptible() {
             assert!(events
                 .iter()
                 .any(|e| e.event == "attempt_cancel" && e.data["reason"] == "user_barge_in"));
+        }
+        if !interrupt {
+            let requests = h.fixture.requests.lock().unwrap();
+            let grounded = requests
+                .iter()
+                .find(|r| {
+                    r["messages"][0]["content"]
+                        .as_str()
+                        .is_some_and(|s| s.contains("Validated business knowledge for the caller"))
+                })
+                .unwrap();
+            assert!(grounded.get("tools").is_none());
+            let history = grounded["messages"].as_array().unwrap();
+            assert!(!history.iter().any(|m| m["tool_call_id"] == "lookup"
+                || m["tool_calls"]
+                    .as_array()
+                    .is_some_and(|calls| calls.iter().any(|call| call["id"] == "lookup"))));
+            assert!(requests
+                .iter()
+                .any(|r| r["input"] == "Verified business answer."));
         }
         h.close().await;
     }
