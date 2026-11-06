@@ -636,6 +636,29 @@ impl Banking {
             .or_else(|| body.get("operation_id"))
             .and_then(Value::as_str)
             .unwrap_or("device-approval");
+        // Executing a prepared operation requires the connector's proof that the
+        // caller confirmed *these* details: X-Wema-Confirmed-Operation must equal
+        // the operation id. The execute call carries it; /v1/fido2/begin does not.
+        let executed_operation = if path == "/v1/tools/wema_execute_prepared" {
+            Some(
+                body.get("operation_id")
+                    .and_then(Value::as_str)
+                    .filter(|value| !value.is_empty())
+                    .ok_or_else(|| "missing operation id for approved execution".to_string())?,
+            )
+        } else {
+            None
+        };
+        let mut scoped_headers = vec![
+            "x-agent-id",
+            "x-business-id",
+            "x-session-id",
+            "x-end-user-id",
+            "x-wema-customer-id",
+        ];
+        if executed_operation.is_some() {
+            scoped_headers.push("x-wema-confirmed-operation");
+        }
         self.inner.trace.emit("banking_http_request_started", 0, 0, json!({
             "journey_id":self.inner.session_id,
             "request_id":request_id,
@@ -645,7 +668,7 @@ impl Banking {
             "request_body":diagnostic_value(&body),
             "request_fields":body.as_object().map(|v|v.keys().cloned().collect::<Vec<_>>()).unwrap_or_default(),
             "correlation_header":"x-request-id",
-            "scoped_headers_present":["x-agent-id","x-business-id","x-session-id","x-end-user-id","x-wema-customer-id"],
+            "scoped_headers_present":scoped_headers,
         }));
         let mut headers = reqwest::header::HeaderMap::new();
         if let Some(values) = record.and_then(|r| r.raw["headers"].as_object()) {
@@ -681,6 +704,13 @@ impl Banking {
                 name,
                 reqwest::header::HeaderValue::from_str(value)
                     .map_err(|_| "invalid connector scope")?,
+            );
+        }
+        if let Some(operation_id) = executed_operation {
+            headers.insert(
+                "x-wema-confirmed-operation",
+                reqwest::header::HeaderValue::from_str(operation_id)
+                    .map_err(|_| "invalid confirmed operation")?,
             );
         }
         let request_started = std::time::Instant::now();
