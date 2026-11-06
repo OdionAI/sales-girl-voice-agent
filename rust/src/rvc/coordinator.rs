@@ -2498,13 +2498,15 @@ impl Coordinator {
         };
         if knowledge_offered {
             let mut properties = json!({"query":{"type":"string"}});
+            let mut required = vec!["query"];
             if self.c.knowledge_wait_ack {
+                required.push("acknowledgment");
                 properties["acknowledgment"] = json!({
                     "type":"string", "maxLength":72,
                     "description":"Write one natural, context-specific spoken acknowledgment in the caller's language, at most eight words, while we check. Vary the phrasing across turns. Only acknowledge the wait. Give no facts, promises, completed results, or account details. Leave empty if an acknowledgment would be redundant."
                 });
             }
-            tools.push(json!({"type":"function","function":{"name":"knowledge_lookup","description":"Search the configured agent's attached business knowledge for the caller's current question.","parameters":{"type":"object","properties":properties,"required":["query"],"additionalProperties":false}}}));
+            tools.push(json!({"type":"function","function":{"name":"knowledge_lookup","description":"Search the configured agent's attached business knowledge for the caller's current question.","parameters":{"type":"object","properties":properties,"required":required,"additionalProperties":false}}}));
         }
         if actions_offered {
             tools.extend(super::actions::definitions(&self.c.agent_context));
