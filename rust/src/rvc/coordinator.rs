@@ -2507,7 +2507,7 @@ impl Coordinator {
                 required.push("acknowledgment");
                 properties["acknowledgment"] = json!({
                     "type":"string", "maxLength":60,
-                    "description":"Write one natural, context-specific spoken acknowledgment in the caller's language, at most five words, while we check. Include a brief non-sensitive reference to what you are checking for this caller. Vary the phrasing across turns. Only acknowledge the wait. Give no facts, promises, completed results, or account details. Leave empty if an acknowledgment would be redundant."
+                    "description":"Write one natural, context-specific spoken acknowledgment in the caller's language, prefer three to five words and keep it within eight, while we check. Include a brief non-sensitive reference to what you are checking for this caller. Vary the phrasing across turns. Only acknowledge the wait. Give no facts, promises, completed results, or account details. Leave empty if an acknowledgment would be redundant."
                 });
             }
             tools.push(json!({"type":"function","function":{"name":"knowledge_lookup","description":"Search the configured agent's attached business knowledge for the caller's current question.","parameters":{"type":"object","properties":properties,"required":required,"additionalProperties":false}}}));
@@ -2983,7 +2983,7 @@ impl Coordinator {
                         && !self.call_ending
                         && !text.is_empty()
                         && text.chars().count() <= 60
-                        && text.split_whitespace().count() <= 5
+                        && text.split_whitespace().count() <= 8
                         && !text.chars().any(char::is_control)
                 })
                 .map(str::to_owned);
