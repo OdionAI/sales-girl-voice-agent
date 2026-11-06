@@ -88,7 +88,8 @@ impl OperatorConfig {
             .remote_headers(&room.local_participant(), participant)
             .await;
         let called = dispatch.called(participant, &headers);
-        let dashboard = sip::dashboard_route(&platform.agent, &called).await;
+        let caller = dispatch.caller(participant);
+        let dashboard = sip::dashboard_route(&platform.agent, &called, &caller).await;
         let scope = dispatch.scope(participant, &headers, dashboard.as_ref())?;
         let services = Services::new(platform.clone(), scope, trace.clone())?;
         self.prepare_sip_services(services, headers, &room.name(), trace)
