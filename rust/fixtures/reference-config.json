@@ -1,5 +1,6 @@
 {
   "transfer_streaming_replies": false,
+  "knowledge_wait_ack": false,
   "balogun_number_capture_enabled": false,
   "speech_language_override": "",
   "engagement_enabled": false,

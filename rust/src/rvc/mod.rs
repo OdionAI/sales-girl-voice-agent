@@ -107,6 +107,8 @@ pub struct Config {
     /// Opt-in parallel routing for non-thinking DeepSeek; legacy guard stays default.
     #[serde(default)]
     pub transfer_streaming_replies: bool,
+    #[serde(default)]
+    pub knowledge_wait_ack: bool,
     /// Opt-in dual-ASR number capture for Balogun Yoruba only.
     #[serde(default)]
     pub balogun_number_capture_enabled: bool,
