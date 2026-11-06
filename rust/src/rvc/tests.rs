@@ -228,7 +228,18 @@ async fn llm(State(s): State<Arc<Fixture>>, Json(body): Json<Value>) -> Response
     } else if text.contains("natural knowledge request") {
         json!({"choices":[{"delta":{"content":"Let me check that for you."}}]})
     } else if text.contains("knowledge request") {
-        json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":"lookup","function":{"name":"knowledge_lookup","arguments":"{\"query\":\"bank policy\"}"}}]}}]})
+        let mut arguments = json!({"query":"bank policy"});
+        if body["tools"].as_array().is_some_and(|tools| {
+            tools.iter().any(|tool| {
+                tool["function"]["name"] == "knowledge_lookup"
+                    && tool["function"]["parameters"]["properties"]
+                        .get("acknowledgment")
+                        .is_some()
+            })
+        }) {
+            arguments["acknowledgment"] = json!("I'll check that policy for you.");
+        }
+        json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":"lookup","function":{"name":"knowledge_lookup","arguments":arguments.to_string()}}]}}]})
     } else if text.contains("ticket request") {
         json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":"ticket-call","function":{"name":"create_ticket","arguments":"{\"title\":\"Customer issue\",\"description\":\"Please investigate.\",\"priority\":\"normal\"}"}}]}}]})
     } else if system.contains("BALOGUN CUSTOMER SUPPORT FLOW")
@@ -3015,9 +3026,18 @@ async fn knowledge_service(
     )
 }
 async fn knowledge_harness() -> Harness {
+    knowledge_harness_with_ack(false).await
+}
+async fn knowledge_harness_with_ack(ack: bool) -> Harness {
     Harness::configured_platform(
         true,
         |c| {
+            c.knowledge_wait_ack = ack;
+            if ack {
+                c.transfer_streaming_replies = true;
+                c.llm_provider = "deepseek".into();
+                c.llm_enable_thinking = false;
+            }
             c.agent_context.loaded = true;
             c.agent_context.business_id = "business-a".into();
             c.agent_context.agent_id = "agent-a".into();
@@ -3081,8 +3101,86 @@ async fn knowledge_is_deferred_until_final_then_followup_uses_scoped_facts() {
     h.close().await;
 }
 #[tokio::test]
+async fn model_written_knowledge_ack_overlaps_lookup_and_is_interruptible() {
+    use std::sync::atomic::Ordering;
+    for interrupt in [false, true] {
+        let mut h = knowledge_harness_with_ack(true).await;
+        h.fixture.hold_knowledge.store(true, Ordering::SeqCst);
+        h.voice().await;
+        h.session
+            .input
+            .send(Input::Partial("knowledge request".into()))
+            .await
+            .unwrap();
+        h.until("speculation_start").await;
+        h.end().await;
+        assert!(h.sink.pcm.lock().unwrap().is_empty());
+        h.session
+            .input
+            .send(Input::Final {
+                turn: 1,
+                text: "knowledge request".into(),
+            })
+            .await
+            .unwrap();
+        h.until("knowledge_ack_first_audio").await;
+        assert!(!h
+            .trace
+            .events()
+            .iter()
+            .any(|e| e.event == "knowledge_lookup_result_ready"));
+        assert!(h
+            .fixture
+            .requests
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|r| r["input"] == "I'll check that policy for you."));
+        if interrupt {
+            h.voice().await;
+            tokio::time::timeout(Duration::from_secs(3), async {
+                while !h
+                    .trace
+                    .events()
+                    .iter()
+                    .any(|e| e.event == "user_speech_start" && e.turn == 2)
+                {
+                    tokio::time::sleep(Duration::from_millis(1)).await;
+                }
+            })
+            .await
+            .unwrap();
+            h.end().await;
+            h.session
+                .input
+                .send(Input::Final {
+                    turn: 2,
+                    text: "second request".into(),
+                })
+                .await
+                .unwrap();
+        }
+        h.fixture.knowledge_release.notify_one();
+        h.complete(if interrupt { 2 } else { 1 }).await;
+        let events = h.trace.events();
+        assert_eq!(
+            !interrupt,
+            events
+                .iter()
+                .any(|e| e.event == "knowledge_lookup_complete")
+        );
+        if interrupt {
+            assert!(events
+                .iter()
+                .any(|e| e.event == "attempt_cancel" && e.data["reason"] == "user_barge_in"));
+        }
+        h.close().await;
+    }
+}
+
+#[tokio::test]
 async fn mismatched_final_cancels_speculative_knowledge_without_service_effect() {
-    let mut h = knowledge_harness().await;
+    let mut h = knowledge_harness_with_ack(true).await;
     h.voice().await;
     h.session
         .input

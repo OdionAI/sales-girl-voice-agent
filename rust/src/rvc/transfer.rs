@@ -65,16 +65,21 @@ pub(crate) async fn generate_guarded(
     let directory_routing = tools
         .iter()
         .any(|tool| tool["function"]["name"] == super::directory::LOOKUP);
+    let guarded_lookup = p.config.knowledge_wait_ack
+        && tools
+            .iter()
+            .any(|tool| tool["function"]["name"] == "knowledge_lookup");
     if p.config.transfer_streaming_replies
         && super::providers::deepseek_wire(&p.config)
         && !p.config.llm_enable_thinking
         && !quiet
         && !directory
-        && tools.iter().any(|tool| tool["function"]["name"] == TOOL)
+        && (guarded_lookup || tools.iter().any(|tool| tool["function"]["name"] == TOOL))
     {
         return super::transfer_stream::generate(p, messages, tools, turn, attempt, out).await;
     }
     if !directory
+        && !guarded_lookup
         && !tools.iter().any(|tool| {
             tool["function"]["name"] == TOOL
                 || (tool["function"]["name"] == super::secondary_asr::READ_TOOL
@@ -111,7 +116,7 @@ pub(crate) async fn generate_guarded(
     let (_, (events, first)) = tokio::try_join!(producer, collector)?;
     let suppress = directory_routing || events
         .iter()
-        .any(|event| matches!(event,LlmEvent::Tool{name,..}if name==TOOL||name==super::secondary_asr::READ_TOOL||name==super::secondary_asr::PROPOSE_TOOL||super::directory::is_tool(name)));
+        .any(|event| matches!(event,LlmEvent::Tool{name,..}if name==TOOL||(guarded_lookup&&name=="knowledge_lookup")||name==super::secondary_asr::READ_TOOL||name==super::secondary_asr::PROPOSE_TOOL||super::directory::is_tool(name)));
     let generated_text = events
         .iter()
         .filter_map(|event| match event {
