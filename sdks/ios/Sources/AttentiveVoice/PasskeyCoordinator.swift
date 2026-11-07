@@ -131,6 +131,11 @@ final class PasskeyCoordinator {
                     let proof = try await self.authorizer.authorize(request)
                     guard !Task.isCancelled, self.active?.token == token else { return }
                     guard request.expiresAt > Date() else { throw PasskeyFailure.expired }
+                    do { try proof.validate(for: request.mode) }
+                    catch {
+                        self.diagnostics?.record(.proof, .failed, reason: .invalidCredential)
+                        throw PasskeyFailure.invalidCredential
+                    }
                     self.active?.phase = .awaitingVerification
                     self.diagnostics?.record(.proof, .succeeded)
                     self.armTimeout(seconds: min(self.configuration.verificationTimeoutSeconds,
@@ -143,8 +148,12 @@ final class PasskeyCoordinator {
                     let native = error as? PasskeyNativeError
                     let failure = native?.failure ?? error as? PasskeyFailure ?? .authorizationFailed
                     let cancelled = failure == .cancelled
-                    self.diagnostics?.record(self.active?.phase == .awaitingVerification ? .proof : .presentation,
-                                             cancelled ? .cancelled : .failed, reason: failure, systemError: native?.system)
+                    // The native authorizer may already have recorded a precise
+                    // anchor/scene/window check. Keep it for the outbound failure.
+                    if cancelled || self.diagnostics?.lastFailure?.reason != failure {
+                        self.diagnostics?.record(self.active?.phase == .awaitingVerification ? .proof : .presentation,
+                                                 cancelled ? .cancelled : .failed, reason: failure, systemError: native?.system)
+                    }
                     self.finish(cancelled ? .pending : .failed)
                     self.reject(id, correlation, failure, cancelled: cancelled)
                 }

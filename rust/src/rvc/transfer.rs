@@ -65,27 +65,7 @@ pub(crate) async fn generate_guarded(
     let directory_routing = tools
         .iter()
         .any(|tool| tool["function"]["name"] == super::directory::LOOKUP);
-    let guarded_lookup = p.config.knowledge_wait_ack
-        && tools
-            .iter()
-            .any(|tool| tool["function"]["name"] == "knowledge_lookup");
-    if p.config.transfer_streaming_replies
-        && super::providers::deepseek_wire(&p.config)
-        && !p.config.llm_enable_thinking
-        && !quiet
-        && !directory
-        && (guarded_lookup || tools.iter().any(|tool| tool["function"]["name"] == TOOL))
-    {
-        return super::transfer_stream::generate(p, messages, tools, turn, attempt, out).await;
-    }
-    if !directory
-        && !guarded_lookup
-        && !tools.iter().any(|tool| {
-            tool["function"]["name"] == TOOL
-                || (tool["function"]["name"] == super::secondary_asr::READ_TOOL
-                    || tool["function"]["name"] == super::secondary_asr::PROPOSE_TOOL)
-        })
-    {
+    if !directory && !tools.iter().any(|tool| tool["function"]["name"] == TOOL) {
         return p.llm(messages, tools, quiet, turn, attempt, out).await;
     }
     let (tx, mut rx) = tokio::sync::mpsc::channel(32);
@@ -116,33 +96,14 @@ pub(crate) async fn generate_guarded(
     let (_, (events, first)) = tokio::try_join!(producer, collector)?;
     let suppress = directory_routing || events
         .iter()
-        .any(|event| matches!(event,LlmEvent::Tool{name,..}if name==TOOL||(guarded_lookup&&name=="knowledge_lookup")||name==super::secondary_asr::READ_TOOL||name==super::secondary_asr::PROPOSE_TOOL||super::directory::is_tool(name)));
-    let generated_text = events
-        .iter()
-        .filter_map(|event| match event {
-            LlmEvent::Text(text) => Some(text.as_str()),
-            _ => None,
-        })
-        .collect::<String>();
-    let balogun_announcement_without_tool = !suppress
-        && super::number_capture::enabled(&p.config)
-        && super::number_capture::announces_human_transfer(&generated_text);
-    p.trace.emit(if directory{"llm_directory_guard_decision"}else{"llm_transfer_guard_decision"},turn,attempt,json!({"suppressed":suppress||balogun_announcement_without_tool,"buffered_events":events.len(),"text_buffer_ms":first.map(|started|(started.elapsed().as_secs_f64()*1_000_000.0).round()/1000.0),"balogun_transfer_announcement_without_tool":balogun_announcement_without_tool}));
+        .any(|event| matches!(event,LlmEvent::Tool{name,..}if name==TOOL||super::directory::is_tool(name)));
+    p.trace.emit(if directory{"llm_directory_guard_decision"}else{"llm_transfer_guard_decision"},turn,attempt,json!({"suppressed":suppress,"buffered_events":events.len(),"text_buffer_ms":first.map(|started|(started.elapsed().as_secs_f64()*1_000_000.0).round()/1000.0)}));
     for event in events {
-        if !suppress && !balogun_announcement_without_tool
-            || matches!(event, LlmEvent::Tool { .. } | LlmEvent::Context(_))
-        {
+        if !suppress || matches!(event, LlmEvent::Tool { .. } | LlmEvent::Context(_)) {
             out.send(event)
                 .await
                 .map_err(|_| "transfer generation cancelled")?;
         }
-    }
-    if balogun_announcement_without_tool {
-        out.send(LlmEvent::Text(
-            "Mi ò tíì pe aṣojú. Mo ṣì wà láti ràn yín lọ́wọ́.".into(),
-        ))
-        .await
-        .map_err(|_| "transfer generation cancelled")?;
     }
     Ok(())
 }

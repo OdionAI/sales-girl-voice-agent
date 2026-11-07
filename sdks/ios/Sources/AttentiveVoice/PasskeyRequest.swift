@@ -142,6 +142,20 @@ struct PasskeyProof: CustomStringConvertible, CustomDebugStringConvertible {
             "clientDataJSON": .string(PasskeyEncoding.encode(clientData)),
             "attestationObject": .string(PasskeyEncoding.encode(attestation))]))
     }
+    /// Never publish an empty or incomplete native credential as a proof.
+    func validate(for mode: PasskeyRequest.Mode) throws {
+        guard fields["type"] == .string("public-key"),
+              let id = fields["id"]?.stringValue, !id.isEmpty,
+              case .object(let response) = fields["response"],
+              let clientData = response["clientDataJSON"]?.stringValue, !clientData.isEmpty else {
+            throw PasskeyFailure.invalidCredential
+        }
+        let required = mode == .authenticate ? ["authenticatorData", "signature"] : ["attestationObject"]
+        guard required.allSatisfy({ !(response[$0]?.stringValue ?? "").isEmpty }) else {
+            throw PasskeyFailure.invalidCredential
+        }
+    }
+
     private static func credential(id: Data, response: [String: JSONValue]) -> [String: JSONValue] {
         ["id": .string(PasskeyEncoding.encode(id)), "rawId": .string(PasskeyEncoding.encode(id)),
          "type": .string("public-key"),

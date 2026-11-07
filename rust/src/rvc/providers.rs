@@ -13,8 +13,6 @@ use std::{
     },
     time::Duration,
 };
-static NUMBER_CAPTURE_REQUESTS: std::sync::LazyLock<Arc<tokio::sync::Semaphore>> =
-    std::sync::LazyLock::new(|| Arc::new(tokio::sync::Semaphore::new(8)));
 use tokio::sync::mpsc;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 #[derive(Clone, Debug)]
@@ -30,9 +28,6 @@ pub enum LlmEvent {
 #[derive(Clone, Copy)]
 pub struct LlmOptions {
     pub required: bool,
-    /// Routing must end with both tool_calls and [DONE] before releasing speech.
-    pub require_tool_completion: bool,
-    pub purpose: &'static str,
     pub turn: u64,
     pub attempt: u64,
     pub max_tokens: usize,
@@ -42,11 +37,9 @@ impl Default for LlmOptions {
     fn default() -> Self {
         Self {
             required: false,
-            require_tool_completion: false,
-            purpose: "response",
             turn: 0,
             attempt: 0,
-            max_tokens: 400,
+            max_tokens: 180,
             temperature: 0.35,
         }
     }
@@ -141,7 +134,6 @@ struct LlmSpan {
     finished: Option<f64>,
     first: bool,
     done: bool,
-    purpose: &'static str,
 }
 impl LlmSpan {
     fn finish(&mut self) {
@@ -155,7 +147,6 @@ impl Drop for LlmSpan {
         self.finish();
         let mut data = self.usage.llm_observation(self.usage_id);
         data["request_id"] = json!(self.request_id);
-        data["purpose"] = json!(self.purpose);
         data["request_index"] = json!(self.index + 1);
         data["completed"] = json!(self.done);
         data["first_text_observed"] = json!(self.first);
@@ -168,6 +159,23 @@ impl Drop for LlmSpan {
         );
     }
 }
+fn igbo_qwen_phone_candidates(text: &str) -> Option<String> {
+    static RUN: std::sync::LazyLock<regex::Regex> =
+        std::sync::LazyLock::new(|| regex::Regex::new(r"\+?[0-9](?:[0-9 ()-]*[0-9])?").unwrap());
+    let phones: Vec<_> = RUN
+        .find_iter(text)
+        .filter_map(|m| {
+            let digits: String = m.as_str().chars().filter(char::is_ascii_digit).collect();
+            match (digits.len(), digits.as_str()) {
+                (11, s) if s.starts_with('0') => Some(digits),
+                (13, s) if s.starts_with("234") => Some(format!("+{digits}")),
+                _ => None,
+            }
+        })
+        .collect();
+    (!phones.is_empty()).then(|| phones.join(", "))
+}
+
 impl Providers {
     pub fn new(config: Arc<Config>, trace: Trace) -> Result<Self, String> {
         let tts_reference = if !super::languages::uses_sbpn(&config.tts_language)
@@ -274,8 +282,6 @@ impl Providers {
         tx: mpsc::Sender<LlmEvent>,
     ) -> Result<(), String> {
         let LlmOptions {
-            require_tool_completion,
-            purpose,
             required,
             turn,
             attempt,
@@ -288,8 +294,6 @@ impl Providers {
             messages,
             tools,
             LlmOptions {
-                require_tool_completion,
-                purpose,
                 required,
                 turn,
                 attempt,
@@ -299,12 +303,19 @@ impl Providers {
         );
         let mut empty_retries = 0;
         let mut sent = false;
-        self.trace.emit(
-            "llm_request_start",
-            turn,
-            attempt,
-            json!({"request":0,"purpose":purpose}),
-        );
+        let transcript_candidates = if c.stt_model == super::languages::SBPN_LARGE_MODEL {
+            body["messages"]
+                .as_array()
+                .and_then(|messages| messages.last())
+                .filter(|message| message["role"] == "user")
+                .and_then(|message| message["content"].as_str())
+                .and_then(|content| serde_json::from_str::<Value>(content).ok())
+                .filter(|pair| pair["sbpn_large"].as_str().is_some_and(|s| !s.is_empty()))
+        } else {
+            None
+        };
+        self.trace
+            .emit("llm_request_start", turn, attempt, json!({"request":0}));
         for index in 0..(4 + c.llm_empty_retries) {
             let usage_request = self.usage.llm_started();
             let mut span = LlmSpan {
@@ -319,7 +330,6 @@ impl Providers {
                 finished: None,
                 first: false,
                 done: false,
-                purpose,
             };
             let request = self
                 .client
@@ -350,6 +360,32 @@ impl Providers {
                     return Err("LLM connection failure".into());
                 }
             };
+            if let Some(candidates) = &transcript_candidates {
+                let length =
+                    |name: &str| candidates[name].as_str().map_or(0, |s| s.chars().count());
+                let (large, base, qwen) = (
+                    length("sbpn_large"),
+                    length("sbpn_base"),
+                    length("qwen_english").max(length("qwen_phone_numbers")),
+                );
+                if base > 0 {
+                    self.trace.emit(
+                        "llm_dual_transcript_request_accepted",
+                        turn,
+                        attempt,
+                        json!({"sbpn_large_chars":large,"sbpn_base_chars":base}),
+                    );
+                }
+                if qwen > 0 {
+                    let event = if length("qwen_phone_numbers") > 0 {
+                        "llm_igbo_qwen_phone_candidate_accepted"
+                    } else {
+                        "llm_pidgin_qwen_candidate_accepted"
+                    };
+                    self.trace.emit(event, turn, attempt,
+                        json!({"sbpn_large_chars":large,"sbpn_base_chars":base,"qwen_english_chars":qwen}));
+                }
+            }
             let mut stream = response.bytes_stream();
             let mut buffer = Vec::new();
             let mut spoken = SpokenFilter::default();
@@ -357,7 +393,6 @@ impl Providers {
             let mut assistant_content = String::new();
             let mut calls: BTreeMap<u64, (String, String, String)> = BTreeMap::new();
             let mut done = false;
-            let mut finish_reason = None;
             let mut first = true;
             let mut first_tool = true;
             let deadline = tokio::time::Instant::now()
@@ -398,9 +433,6 @@ impl Providers {
                         Err(_) => continue,
                     };
                     self.usage.llm_usage(usage_request, &item["usage"]);
-                    if let Some(reason) = item["choices"][0]["finish_reason"].as_str() {
-                        finish_reason = Some(reason.to_owned());
-                    }
                     let delta = &item["choices"][0]["delta"];
                     if deepseek_wire(c) {
                         if let Some(text) = delta["reasoning_content"].as_str() {
@@ -433,7 +465,7 @@ impl Providers {
                                         "llm_first_tool",
                                         turn,
                                         attempt,
-                                        json!({"assembled":false,"purpose":purpose}),
+                                        json!({"assembled":false}),
                                     );
                                 }
                             }
@@ -448,7 +480,7 @@ impl Providers {
                             if first {
                                 first = false;
                                 span.first = true;
-                                self.trace.emit("llm_first_token", turn, attempt, json!({"request_id":span.request_id,"purpose":purpose,"provider_ttft_ms":(span.start.elapsed().as_secs_f64()*1_000_000.0).round()/1000.0}));
+                                self.trace.emit("llm_first_token", turn, attempt, json!({"request_id":span.request_id,"provider_ttft_ms":(span.start.elapsed().as_secs_f64()*1_000_000.0).round()/1000.0}));
                             }
                             sent = true;
                             tx.send(LlmEvent::Text(text))
@@ -462,10 +494,6 @@ impl Providers {
                 }
             }
             span.finish();
-            if require_tool_completion && (!done || finish_reason.as_deref() != Some("tool_calls"))
-            {
-                return Err("incomplete routing stream".into());
-            }
             if !sent
                 && calls.values().all(|(_, name, _)| name.is_empty())
                 && empty_retries < c.llm_empty_retries
@@ -487,12 +515,8 @@ impl Providers {
                 if !name.is_empty() {
                     let arguments = serde_json::from_str(&raw)
                         .map_err(|_| "invalid structured tool arguments")?;
-                    self.trace.emit(
-                        "tool_call_prepared",
-                        turn,
-                        attempt,
-                        json!({"purpose":purpose}),
-                    );
+                    self.trace
+                        .emit("tool_call_prepared", turn, attempt, json!({}));
                     tx.send(LlmEvent::Tool {
                         id: if id.is_empty() {
                             format!("tool-call-{call_index}")
@@ -519,6 +543,12 @@ impl Providers {
         attempt: u64,
         tx: &mpsc::Sender<Vec<i16>>,
     ) -> Result<(), String> {
+        // Never speak internal pipeline annotations (e.g. the interrupted-reply
+        // note the memory layer appends for the model). Text without the marker
+        // is returned unchanged; only annotated speech is cleaned here, so it
+        // cannot leak into audio even if echoed downstream.
+        let cleaned = super::text::strip_internal_annotations(text);
+        let text = cleaned.as_str();
         let c = &self.config;
         if super::languages::uses_sbpn(&c.tts_language) {
             return self.tts_native(text, turn, attempt, tx).await;
@@ -722,9 +752,49 @@ impl Providers {
         }
         Ok(())
     }
+    async fn qwen_candidate_final(&self, pcm: &[i16]) -> Option<String> {
+        let url = super::languages::gateway(
+            &self.config,
+            "http://102.88.137.124:8080/asr-rt/v1/audio/transcriptions",
+        )
+        .ok()?;
+        let file = reqwest::multipart::Part::bytes(wav(pcm))
+            .file_name("turn.wav")
+            .mime_str("audio/wav")
+            .ok()?;
+        let response = self
+            .client
+            .post(url)
+            .multipart(
+                reqwest::multipart::Form::new()
+                    .part("file", file)
+                    .text("model", "Qwen3-ASR")
+                    .text("language", "en"),
+            )
+            .send()
+            .await
+            .ok()?
+            .error_for_status()
+            .ok()?;
+        self.usage.stt_submitted(pcm.len() * 2);
+        let payload: Value = response.json().await.ok()?;
+        let text = super::text::clean_transcript_for_language(payload["text"].as_str()?, "English");
+        if super::languages::code(&self.config.tts_language) == "ig" {
+            return igbo_qwen_phone_candidates(&text);
+        }
+        (!text.trim().is_empty()).then_some(text)
+    }
+
     async fn final_http(&self, pcm: Vec<i16>) -> Result<String, String> {
         let c = &self.config;
         if super::languages::uses_sbpn(&c.tts_language) {
+            if c.stt_model == super::languages::SBPN_LARGE_MODEL {
+                let mut parts = Vec::new();
+                for chunk in pcm.chunks(29 * 16000) {
+                    parts.push(self.final_realtime(chunk).await?);
+                }
+                return Ok(parts.join(" "));
+            }
             return self.final_sbpn_http(&pcm).await;
         }
         if !c.stt_chat_url.is_empty() {
@@ -850,63 +920,6 @@ impl Providers {
             &self.config.tts_language,
         ))
     }
-
-    /// Parallel Qwen transcript for each Balogun caller utterance.
-    pub(crate) async fn parallel_number_transcribe(&self, pcm: &[i16]) -> Result<String, String> {
-        if pcm.is_empty() || pcm.len() > (16_000 * 60) {
-            return Err("parallel ASR audio outside limits".into());
-        }
-        let permit = NUMBER_CAPTURE_REQUESTS
-            .clone()
-            .try_acquire_owned()
-            .map_err(|_| "parallel Qwen ASR at capacity")?;
-        let c = &self.config;
-        if !super::number_capture::enabled(c) {
-            return Err("Balogun parallel Qwen ASR not configured".into());
-        }
-        let mut messages = vec![];
-        if !c.stt_context.is_empty() {
-            messages.push(json!({"role":"system","content":c.stt_context}));
-        }
-        messages.push(json!({"role":"system","content":"Transcribe the caller's complete utterance verbatim. Preserve all spoken words, every digit and leading zero in order. You may write digits or exact spoken English/Yoruba digit words. In a clear phone-number digit sequence, a spoken letter O or oh can mean zero; write it as 0 only in that context. Do not infer a digit from an isolated O or unrelated word. Do not translate, complete, guess, explain, summarize, omit or add words. If any part is unclear, mark only that part as unclear and preserve the rest."}));
-        messages.push(json!({"role":"user","content":[{"type":"input_audio","input_audio":{"data":STANDARD.encode(wav(pcm)),"format":"wav"}}]}));
-        let timeout = Duration::from_secs_f64(c.stt_batch_timeout_seconds.clamp(1.0, 15.0));
-        let request = async {
-            let response = self
-                .client
-                .post(&c.stt_chat_url)
-                .json(&json!({"model":c.stt_chat_model,"messages":messages,"max_tokens":1024,"temperature":0.0}))
-                .send()
-                .await
-                .map_err(|_| "parallel Qwen ASR connection failed")?
-                .error_for_status()
-                .map_err(|_| "parallel Qwen ASR HTTP error")?;
-            self.usage.stt_submitted(pcm.len() * 2);
-            let payload: Value = response
-                .json()
-                .await
-                .map_err(|_| "parallel Qwen ASR JSON error")?;
-            Ok::<Value, &'static str>(payload)
-        };
-        let payload = tokio::time::timeout(timeout, request)
-            .await
-            .map_err(|_| "parallel Qwen ASR timed out")??;
-        if payload["choices"][0]["finish_reason"] == "length" {
-            return Err("parallel Qwen ASR transcript truncated".into());
-        }
-        let text = super::text::clean_transcript_for_language(
-            payload["choices"][0]["message"]["content"]
-                .as_str()
-                .unwrap_or(""),
-            "Yoruba",
-        );
-        drop(permit);
-        if text.is_empty() || super::text::is_asr_context_echo(&text, &c.stt_context) {
-            return Err("parallel Qwen ASR empty or copied hint context".into());
-        }
-        Ok(text)
-    }
-
     /// A separate request receives the full caller-owned utterance. Its done
     /// event is authoritative only after this explicit final commit; streaming
     /// partials from the speculative socket can never enter this path.
@@ -984,6 +997,8 @@ pub enum AsrEvent {
     Final {
         turn: u64,
         text: String,
+        base_candidate: Option<String>,
+        qwen_candidate: Option<String>,
     },
     Unavailable(u64),
     Error(String),
@@ -1167,6 +1182,17 @@ async fn open(p: &Providers) -> Result<Socket, String> {
         let hello: Value = serde_json::from_str(&raw).map_err(|_| "SBPN session hello invalid")?;
         if hello["type"] != "session.created" {
             return Err("SBPN session was not created".into());
+        }
+        if p.config.stt_model == super::languages::SBPN_LARGE_MODEL {
+            if hello["session"]["model"] != super::languages::SBPN_LARGE_MODEL {
+                return Err("SBPN Large endpoint reported a different model".into());
+            }
+            p.trace.emit(
+                "stt_large_socket_ready",
+                0,
+                0,
+                json!({"model":p.config.stt_model}),
+            );
         }
     }
     let mut ws = Socket {
@@ -1432,18 +1458,39 @@ pub fn start_asr(p: Providers) -> Asr {
                flag.store(true,Ordering::SeqCst);suspended=false;
                let current=socket.take();let use_current=super::languages::uses_sbpn(&p.config.tts_language)&&!capped&&sent_samples>0;
                p.trace.emit("asr_final_request",turn,0,json!({"samples":pcm.len()}));
+               let dual=p.config.stt_model==super::languages::SBPN_LARGE_MODEL && super::languages::uses_sbpn(&p.config.tts_language);
                let result=interruptible_asr(&mut rx,&mut deferred,async{
+                let base_audio=dual.then(||pcm.clone());
+                let qwen_audio=(dual && match super::languages::code(&p.config.tts_language) {
+                    "pcm" => std::env::var("ODION_PIDGIN_QWEN_CANDIDATE").as_deref()==Ok("1"),
+                    "ig" => std::env::var("ODION_IGBO_QWEN_PHONE_CANDIDATE").as_deref()==Ok("1"),
+                    _ => false,
+                }).then(||pcm.clone());
+                let primary=async {
                 if let Some(mut ws)=current{
                  let final_=if use_current{Some(tokio::time::timeout(Duration::from_secs(30),flush_hypothesis(&mut ws,&audio,through,&mut sent_samples,&p.usage)).await)}else{None};
                  close_socket(&mut ws).await;
                  if let Some(Ok(Ok(text)))=final_{p.trace.emit("stt_realtime_final",turn,0,json!({"authoritative":true}));return Ok(text);}
                 }
                 p.final_http(pcm).await
+                };
+                let base=async {
+                    let audio=base_audio?;
+                    tokio::time::timeout(Duration::from_millis(1200),p.final_sbpn_http(&audio))
+                        .await.ok()?.ok()
+                };
+                let qwen=async {
+                    let audio=qwen_audio?;
+                    tokio::time::timeout(Duration::from_millis(1200),p.qwen_candidate_final(&audio))
+                        .await.ok().flatten()
+                };
+                let (primary,base_candidate,qwen_candidate)=tokio::join!(primary,base,qwen);
+                primary.map(|text|(text,base_candidate,qwen_candidate))
                }).await;
                capped=false;sent_samples=0;audio.lock().unwrap_or_else(|e|e.into_inner()).discard_through(through);accumulated=DeltaAccumulator::for_language(&p.config.tts_language);
                let Some(result)=result else{flag.store(false,Ordering::SeqCst);p.trace.emit("asr_final_cancelled",turn,0,json!({"reason":"superseded_control"}));continue;};
                if result.is_ok(){backoff=0.5;}
-               let event=match result{Ok(text)if !text.is_empty()=>AsrEvent::Final{turn,text},_=>AsrEvent::Unavailable(turn)};let _=out.send(event).await;
+               let event=match result{Ok((text,base_candidate,qwen_candidate))if !text.is_empty()=>AsrEvent::Final{turn,text,base_candidate,qwen_candidate},_=>AsrEvent::Unavailable(turn)};let _=out.send(event).await;
                match interruptible_asr(&mut rx,&mut deferred,open(&p)).await{Some(Ok(ws))=>{socket=Some(ws);},Some(Err(_))=>{socket=None;retry_at=tokio::time::Instant::now()+Duration::from_secs_f64(backoff);let _=out.send(AsrEvent::Degraded("realtime resume pending".into())).await;},None=>{flag.store(false,Ordering::SeqCst);continue;}}
                flag.store(false,Ordering::SeqCst);
               },
@@ -1837,6 +1884,17 @@ mod native_language_wire_tests {
 
 #[cfg(test)]
 mod sbpn_wire_tests {
+    #[test]
+    fn igbo_qwen_only_passes_nigerian_phone_numbers() {
+        assert_eq!(
+            super::igbo_qwen_phone_candidates("Call 0803 123 4567 or +234-803-123-4567").as_deref(),
+            Some("08031234567, +2348031234567")
+        );
+        assert_eq!(
+            super::igbo_qwen_phone_candidates("PIN 1234 and account 1234567890"),
+            None
+        );
+    }
     use super::*;
     use axum::{
         extract::{
@@ -1862,7 +1920,7 @@ mod sbpn_wire_tests {
     async fn serve(fake: Arc<Fake>, mut socket: WebSocket) {
         if socket
             .send(Frame::Text(
-                json!({"type":"session.created"}).to_string().into(),
+                json!({"type":"session.created","session":{"model":super::super::languages::SBPN_LARGE_MODEL}}).to_string().into(),
             ))
             .await
             .is_err()
@@ -1947,7 +2005,7 @@ mod sbpn_wire_tests {
         };
         Json(json!({"text":format!("part{n}")}))
     }
-    async fn setup() -> (Asr, Arc<Fake>, tokio::task::JoinHandle<()>) {
+    async fn setup(model: &str) -> (Asr, Arc<Fake>, tokio::task::JoinHandle<()>) {
         let fake = Arc::new(Fake::default());
         let app = Router::new()
             .route("/ws", get(upgrade))
@@ -1959,7 +2017,7 @@ mod sbpn_wire_tests {
         let mut c: Config =
             serde_json::from_str(include_str!("../../fixtures/reference-config.json")).unwrap();
         c.tts_language = "Nigerian Pidgin".into();
-        c.stt_model = super::super::languages::SBPN_MODEL.into();
+        c.stt_model = model.into();
         c.stt_ws_url = format!("ws://{address}/ws");
         c.stt_batch_url = format!("http://{address}/final");
         c.stt_chat_url = "http://127.0.0.1:1/must-not-use-english-hint-model".into();
@@ -1985,7 +2043,7 @@ mod sbpn_wire_tests {
     }
     #[tokio::test]
     async fn sbpn_uses_binary_audio_revisable_prefixes_and_only_explicit_owned_final() {
-        let (mut asr, fake, server) = setup().await;
+        let (mut asr, fake, server) = setup(super::super::languages::SBPN_MODEL).await;
         asr.append(vec![1000; 1600]);
         assert_eq!(partial(&mut asr).await, "How you dey");
         asr.append(vec![1000; 1600]);
@@ -1993,7 +2051,7 @@ mod sbpn_wire_tests {
         asr.commit(7, vec![1000; 3200]).await.unwrap();
         let text = tokio::time::timeout(Duration::from_secs(2), async {
             loop {
-                if let Some(AsrEvent::Final { turn, text }) = asr.events.recv().await {
+                if let Some(AsrEvent::Final { turn, text, .. }) = asr.events.recv().await {
                     assert_eq!(turn, 7);
                     return text;
                 }
@@ -2013,15 +2071,49 @@ mod sbpn_wire_tests {
         server.abort();
     }
     #[tokio::test]
+    async fn large_streams_and_base_receives_only_the_committed_full_utterance() {
+        let model = super::super::languages::SBPN_LARGE_MODEL;
+        let (mut asr, fake, server) = setup(model).await;
+        asr.append(vec![1000; 1600]);
+        assert_eq!(partial(&mut asr).await, "How you dey");
+        assert!(fake.batch.lock().unwrap().is_empty());
+        asr.append(vec![1000; 1600]);
+        assert_eq!(partial(&mut asr).await, "How una dey");
+        asr.commit(8, vec![1000; 3200]).await.unwrap();
+        let (turn, primary, base) = tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                if let Some(AsrEvent::Final {
+                    turn,
+                    text,
+                    base_candidate,
+                    ..
+                }) = asr.events.recv().await
+                {
+                    break (turn, text, base_candidate);
+                }
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(turn, 8);
+        assert_eq!(primary, "How una dey today?");
+        assert_eq!(base.as_deref(), Some("part1"));
+        assert_eq!(*fake.batch.lock().unwrap(), vec![6400]);
+        assert_eq!(fake.updates.lock().unwrap()[0]["model"], model);
+        asr.task.abort();
+        let _ = asr.task.await;
+        server.abort();
+    }
+    #[tokio::test]
     async fn sbpn_failure_recovers_the_entire_owned_utterance_in_bounded_wav_chunks() {
-        let (mut asr, fake, server) = setup().await;
+        let (mut asr, fake, server) = setup(super::super::languages::SBPN_MODEL).await;
         fake.fail_final.store(true, Ordering::SeqCst);
         asr.append(vec![1000; 1600]);
         let _ = partial(&mut asr).await;
         asr.commit(9, vec![1000; 60 * 16000]).await.unwrap();
         let text = tokio::time::timeout(Duration::from_secs(3), async {
             loop {
-                if let Some(AsrEvent::Final { turn, text }) = asr.events.recv().await {
+                if let Some(AsrEvent::Final { turn, text, .. }) = asr.events.recv().await {
                     assert_eq!(turn, 9);
                     return text;
                 }

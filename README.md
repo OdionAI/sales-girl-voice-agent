@@ -35,22 +35,6 @@ variables restores immediate replies after the normal Lagos voice release.
 This does not recover an empty ASR transcript. See
 [`latency_lab/README.md`](latency_lab/README.md) for the exact behavior.
 
-Balogun's Yoruba transaction-number handling runs in the native Rust RVC
-coordinator behind `RVC_LAB_BALOGUN_NUMBER_CAPTURE_ENABLED` (default `false`),
-scoped to Balogun's exact agent ID and Yoruba profile. SBPN drives ordinary
-conversation and RVC speculation. A separate caller-only recorder retains
-longer audio across short primary turns and submits one hinted, non-speculative
-Qwen transcription after one second of silence (bounded to 30 seconds).
-Ordinary replies do not wait for Qwen. Number-bearing replies wait for their
-completed background window; the LLM can also read that existing cache without
-starting or splitting a recording. The LLM selects a number from Qwen, Rust
-checks it against a complete observed digit sequence and reads it back
-word-for-word in Yoruba, preserving leading zeros. Caller confirmation is
-required before transaction use. Human-transfer and interruption paths remain
-available. Other agents, including Hausa, are outside this feature scope.
-See [the implementation review](rust/reviews/balogun-qwen-long-window-20261102.md)
-for provider-test evidence and deployment status.
-
 ## Core interactions
 
 This worker talks to:
@@ -157,6 +141,12 @@ Current stable contract:
 - generic/custom agents can optionally expose a `transfer_to_aicc` runtime tool
   that bridges the current live room back into a configured Huawei AICC SIP
   route for human escalation during a call
+- Lagos releases pin `RVC_AICC_SIP_ROUTE.did_routes["0301050"].transfer_target_number`
+  to `0301050`. A handoff from that called route therefore dials `0301050`
+  through the configured AICC outbound trunk while preserving the verified
+  caller ID. Other called routes retain their own transfer target or the global
+  `AICC_TRANSFER_TARGET_NUMBER`; a dashboard agent override does not replace
+  the operator-pinned DID transfer target. The release changes new calls only.
 - when `transfer_to_aicc` succeeds, the worker writes a business-scoped
   `aicc_handoff` session event with a success marker and any supplied reason
   summary. The conversation report uses these events for transfer counts and

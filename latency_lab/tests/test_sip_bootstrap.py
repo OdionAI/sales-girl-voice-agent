@@ -87,6 +87,20 @@ class AiccNumberRoutingTest(unittest.TestCase):
         # The DID is still an outbound route, so it keeps claiming its prepared call.
         self.assertTrue(ident["outbound_required"])
 
+    def test_handoff_target_stays_with_called_route_after_dashboard_override(self) -> None:
+        route = {**ROUTE, "expected_trunk_id": TRUNK,
+                 "did_routes": {**ROUTE["did_routes"], "0301050": {
+                     **ROUTE["did_routes"]["0301050"],
+                     "transfer_target_number": "0301050",
+                 }}}
+        ident = sip_bootstrap.participant_identity(
+            route, _participant(caller="07061583271", called="0301050"),
+            "aicc-lara-1", "sip",
+            dynamic_did_route={"business_id": "biz-other", "config_agent_id": "agent-other"},
+        )
+        self.assertEqual(ident["config_agent_id"], "agent-other")
+        self.assertEqual(ident["transfer_target_number"], "0301050")
+
     def test_explicit_caller_override_still_precedes_dashboard_did_route(self) -> None:
         p = _participant(caller="08112812216", called="0301051")
         ident = sip_bootstrap.participant_identity(

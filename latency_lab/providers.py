@@ -220,11 +220,14 @@ class RSTTClient:
         on_partial: Callable[[str, str], Awaitable[None]],
         on_final: Callable[[str], Awaitable[None]],
         on_provider_event: Callable[[str, dict[str, Any]], None],
+        *,
+        on_final_unavailable: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         self.config = config
         self.on_partial = on_partial
         self.on_final = on_final
         self.on_provider_event = on_provider_event
+        self.on_final_unavailable = on_final_unavailable
         self.session: aiohttp.ClientSession | None = None
         self.ws: aiohttp.ClientWebSocketResponse | None = None
         self.recv_task: asyncio.Task[None] | None = None
@@ -481,6 +484,7 @@ class RSTTClient:
         decode both requests at once. Closing and awaiting the websocket before
         POSTing the final removes that overlap without adding a fixed sleep.
         """
+        produced = False
         async with self._inference_mode_lock:
             self.on_provider_event(
                 "stt_inference_handoff_start",
@@ -488,7 +492,7 @@ class RSTTClient:
             )
             await self._quiesce_realtime_locked()
             try:
-                await self._transcribe_batch(pcm16)
+                produced = await self._transcribe_batch(pcm16)
             finally:
                 if not self._closing:
                     self.on_provider_event(
@@ -513,6 +517,8 @@ class RSTTClient:
                             "stt_realtime_resume_complete",
                             {"reason": "authoritative_batch_complete"},
                         )
+        if not produced and not self._closing:
+            await self._notify_final_unavailable()
 
     async def _quiesce_realtime_locked(self) -> None:
         """Close realtime and await its receiver before batch inference starts."""
@@ -555,7 +561,7 @@ class RSTTClient:
                     **audio_diagnostics,
                 },
             )
-            return
+            return False
         assert self.session is not None and not self.session.closed
         wav_audio = pcm16_wav(pcm16)
         form = aiohttp.FormData()
@@ -619,16 +625,17 @@ class RSTTClient:
             )
             if final:
                 await self.on_final(final)
-            else:
-                self.on_provider_event(
-                    "stt_batch_error",
-                    {
-                        "error": "batch endpoint returned an empty transcript",
-                        "error_type": "EmptyTranscript",
-                        "elapsed_ms": round(elapsed_ms, 1),
-                        **response_diagnostics,
-                    },
-                )
+                return True
+            self.on_provider_event(
+                "stt_batch_error",
+                {
+                    "error": "batch endpoint returned an empty transcript",
+                    "error_type": "EmptyTranscript",
+                    "elapsed_ms": round(elapsed_ms, 1),
+                    **response_diagnostics,
+                },
+            )
+            return False
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -644,6 +651,7 @@ class RSTTClient:
                     **audio_diagnostics,
                 },
             )
+            return False
 
     async def _run_authoritative_chat(self, pcm16: bytes) -> None:
         """Committed final via the hint-capable Qwen chat endpoint.
@@ -845,6 +853,7 @@ class RSTTClient:
                                     "error_type": "EmptyTranscript",
                                 },
                             )
+                            await self._notify_final_unavailable()
                     else:
                         self.on_provider_event(
                             "stt_realtime_final_ignored",
@@ -899,6 +908,12 @@ class RSTTClient:
                     )
                     raise
                 self.on_provider_event("stt_recovery_complete", {"reason": reason})
+
+    async def _notify_final_unavailable(self) -> None:
+        """Tell the pipeline an authoritative final was empty so it can go back
+        to listening instead of waiting out the STT deadline."""
+        if self.on_final_unavailable is not None:
+            await self.on_final_unavailable()
 
     async def close(self) -> None:
         self._closing = True
