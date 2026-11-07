@@ -302,6 +302,7 @@ impl Flow {
         let feature = match workflow {
             "transfer" => "Transfer",
             "airtime" => "Airtime",
+            "data" => "Data",
             _ => return result("blocked", "That action cannot be confirmed with a passkey."),
         };
         let nonce = uuid::Uuid::new_v4().simple().to_string();
