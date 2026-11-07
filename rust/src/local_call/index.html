@@ -9,16 +9,6 @@
 <div class="controls"><button id="start">Start call</button><button id="mute" class="secondary" disabled>Mute microphone</button><button id="hangup" class="end" disabled>End call</button><button id="audio" class="secondary" hidden>Enable sound</button></div></section>
 <div id="error" role="alert"></div><section class="transcripts"><article class="card"><div class="label">YOU</div><div id="you" class="words placeholder">Your words will appear here.</div></article><article class="card"><div class="label">HELEN</div><div id="agent" class="words placeholder">Helen’s reply will appear here.</div></article></section><div id="sound"></div><footer>Speak naturally. You can interrupt Helen while she is talking.</footer></main>
 <script src="/sdk.js"></script><script>
-const reviewLabel = new URLSearchParams(location.search).get('label');
-if (reviewLabel && reviewLabel.length <= 80) {
- document.title = reviewLabel + ' · Local Rust call';
- document.querySelector('.intro h1').textContent = 'Talk to ' + reviewLabel + ', locally.';
- document.querySelector('.intro p').textContent = 'Your local agent, using the existing voice services.';
- document.querySelector('#orb').textContent = [...reviewLabel][0];
- document.querySelector('#agent').previousElementSibling.textContent = reviewLabel.toUpperCase();
- document.querySelector('#agent').textContent = reviewLabel + '’s reply will appear here.';
- document.querySelector('footer').textContent = 'Speak naturally. You can interrupt ' + reviewLabel + ' while the agent is talking.';
-}
 const $=id=>document.getElementById(id);let room=null,session=null,mic=null,muted=false,readySent=false,timer=null;
 const status=text=>$('status').textContent=text;
 const words=(id,text)=>{const el=$(id);el.textContent=text;el.classList.remove('placeholder');};

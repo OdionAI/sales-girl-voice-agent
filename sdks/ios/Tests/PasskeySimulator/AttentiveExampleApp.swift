@@ -6,6 +6,8 @@ import CryptoKit
 import SwiftUI
 import UIKit
 
+private let simulatorBankURL = URL(string: "http://127.0.0.1:\(ProcessInfo.processInfo.environment["ATTENTIVE_PASSKEY_TEST_PORT"] ?? "8765")")!
+
 @main
 struct PasskeySimulatorApp: App {
     @StateObject private var model = SimulatorBankModel()
@@ -62,14 +64,16 @@ private final class SimulatorBankModel: ObservableObject {
     let call: AttentiveCall
     @Published var bankStage = "Start the local call"
     @Published var request = CallRequest(businessSlug: "simulated-bank", agentPublicId: "agt_simulated", endUserContact: "simulator@example.test")
-    private let base = URL(string: "http://127.0.0.1:8765")!
+    private let base = simulatorBankURL
+    private let autorun = ProcessInfo.processInfo.environment["ATTENTIVE_PASSKEY_REGRESSION_AUTORUN"] == "1"
+    private var scenarioStarted = false
 
     init() {
         let device = SimulatorCredentialDevice()
         self.device = device
         call = AttentiveCall(provider: SimulatorBootstrap(publicKey: device.key.publicKey.derRepresentation),
             allowInsecure: true, makeTransport: { RealtimeCallTransport() }, microphonePermission: { true },
-            passkeys: .init(relyingPartyIdentifiers: ["auth.bank.example"]), passkeyAuthorizer: device)
+            passkeys: .init(relyingPartyIdentifiers: ["auth.bank.example"], diagnosticsEnabled: true), passkeyAuthorizer: device)
         call.onEvent = { event in
             switch event {
             case .stateChanged(let state): print("SIMULATOR_CALL_STATE \(state.rawValue)")
@@ -96,11 +100,25 @@ private final class SimulatorBankModel: ObservableObject {
     }
 
     func observeBank() async {
+        if autorun {
+            do { try await call.start(request, microphoneEnabled: false) }
+            catch { print("PASSKEY_WIRE_REGRESSION_START_FAILED"); return }
+        }
         while !Task.isCancelled {
             do {
                 let (data, _) = try await URLSession.shared.data(from: base.appendingPathComponent("status"))
                 let status = try JSONDecoder().decode(BankStatus.self, from: data)
                 bankStage = status.stage
+                if autorun && !scenarioStarted && status.stage == "Context received; choose a test" {
+                    scenarioStarted = true
+                    begin("approve")
+                }
+                if autorun && device.showingPrompt { device.approve() }
+                if autorun && call.actionAuthentication == .verified {
+                    print("PASSKEY_WIRE_REGRESSION_PASSED synthetic=true")
+                    await call.end()
+                    return
+                }
             } catch { bankStage = "Local test server unavailable" }
             do { try await Task.sleep(for: .milliseconds(500)) } catch { return }
         }
@@ -112,7 +130,7 @@ private final class SimulatorBankModel: ObservableObject {
 private struct SimulatorBootstrap: CallCredentialProvider {
     let publicKey: Data
     func fetch(for request: CallRequest) async throws -> CallCredentials {
-        var request = URLRequest(url: URL(string: "http://127.0.0.1:8765/start")!)
+        var request = URLRequest(url: simulatorBankURL.appendingPathComponent("start"))
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONEncoder().encode(["publicKey": publicKey.base64EncodedString()])
@@ -150,7 +168,25 @@ private final class SimulatorCredentialDevice: ObservableObject, PasskeyAuthoriz
             let proof = PasskeyProof.assertion(id: Data(SHA256.hash(data: key.publicKey.rawRepresentation)),
                 clientData: clientData, authenticatorData: authenticatorData, signature: signature, userID: Data("simulated-user".utf8))
             self.continuation = nil; pending = nil; showingPrompt = false
-            continuation.resume(returning: proof)
+            guard let capturedWindow = window else {
+                continuation.resume(throwing: PasskeyFailure.presentationUnavailable); return
+            }
+            Task {
+                do {
+                    // Simulate Apple returning a credential just as the host anchor
+                    // disappears. Exercise the native completion and SDK wire emitter.
+                    let retained = try await native.beginAuthorization(request, window: capturedWindow) { controller in
+                        self.window = nil
+                        self.native.completeAuthorizedCredential(proof, for: controller)
+                    }
+                    window = capturedWindow
+                    print("PASSKEY_NATIVE_COMPLETION_RETAINED synthetic=true")
+                    continuation.resume(returning: retained)
+                } catch {
+                    window = capturedWindow
+                    continuation.resume(throwing: error)
+                }
+            }
         } catch {
             self.continuation = nil; pending = nil; showingPrompt = false
             continuation.resume(throwing: PasskeyFailure.authorizationFailed)

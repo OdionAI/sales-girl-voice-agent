@@ -69,7 +69,13 @@ require iOS 17.
 Registration exclusion lists require iOS 17.4; older systems reject those requests
 rather than ignoring their constraints.
 
-## Diagnostics (0.1.5)
+## Diagnostics (0.1.5+)
+
+SDK 0.1.7 retains credentials after successful native authorization even if the
+presenting window changes, rejects empty/incomplete proofs, and preserves the
+specific presentation failure check in outbound diagnostics. Upgrade the package
+requirement to 0.1.7, resolve packages, then rebuild the host app to receive this fix.
+The configuration API and supplied caller UI are unchanged.
 
 Diagnostics are off by default. Enable them in the same `passkeys` configuration
 on `AttentiveAgentView` or `AttentiveCall`:

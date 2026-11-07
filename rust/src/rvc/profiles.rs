@@ -92,7 +92,7 @@ pub struct AgentContext {
     pub outbound_context_fields: Vec<Value>,
 }
 pub fn default_voice_allowlist() -> Vec<String> {
-    "helen-mavino-0030,wema-en-ng-female,wema-en-ng-male,wema-en-us-female,wema-en-us-male,wema-en-ng-female-short,wema-en-ng-male-short,wema-en-us-female-short,wema-en-us-male-short,access-ghana-cindy".split(',').map(str::to_owned).collect()
+    "helen-mavino-0030,wema-en-ng-female,wema-en-ng-male,wema-en-us-female,wema-en-us-male,wema-en-ng-female-short,wema-en-ng-male-short,wema-en-us-female-short,wema-en-us-male-short,access-ghana-cindy,nneka".split(',').map(str::to_owned).collect()
 }
 pub fn apply_agent_configured_voice(
     config: &mut Config,
@@ -139,14 +139,9 @@ pub fn end_call_enabled(context: &AgentContext) -> bool {
 /// harness without an agent context retains the operator's original profile.
 pub fn apply_stt_scope(config: &mut Config) {
     if super::languages::uses_sbpn(&config.tts_language) {
-        // SBPN remains the authoritative ordinary Yoruba transcript. Retain the
-        // scoped Qwen chat endpoint only for Balogun's background number
-        // windows; primary final_http still returns SBPN first.
-        if !super::number_capture::enabled(config) {
-            config.stt_chat_url.clear();
-            config.stt_context.clear();
-            return;
-        }
+        config.stt_chat_url.clear();
+        config.stt_context.clear();
+        return;
     }
     let context = &config.agent_context;
     let has_context =

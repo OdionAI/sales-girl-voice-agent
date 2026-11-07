@@ -21,7 +21,6 @@ HAUSA_RESEARCH_KEY = 'RVC_LAB_ENABLE_HAUSA_TWB_VOICES'
 REPLY_GRACE_MS_KEY = 'RVC_LAB_REPLY_GRACE_MS'
 REPLY_GRACE_AGENT_IDS_KEY = 'RVC_LAB_REPLY_GRACE_AGENT_IDS'
 INACTIVITY_PILOT_AGENT_IDS_KEY = 'RVC_LAB_INACTIVITY_PILOT_AGENT_IDS'
-BALOGUN_NUMBER_CAPTURE_KEY = 'RVC_LAB_BALOGUN_NUMBER_CAPTURE_ENABLED'
 # Operator switch, mirroring .private/runtime.env. When '1' the release turns the
 # bank's fail-closed voice-authentication gate OFF for every session, so banking
 # tools run without a voiceprint match. Set back to '0' to restore the gate.
@@ -38,11 +37,8 @@ LAGOS_ASR_ENV = {
     # failed chat transcripts automatically fall back to realtime Qwen finals.
     'RVC_LAB_STT_CHAT_URL': 'http://102.88.137.124:8080/asr-rt/v1/chat/completions',
     'RVC_LAB_STT_CHAT_MODEL': 'Qwen3-ASR',
-    # Retain existing Wema/MoMo chat-ASR scopes and explicitly allow Balogun's
-    # parallel number transcript, including canonical and compact UUID forms.
+    # Retain the existing Wema and MoMo chat-ASR scopes, including UUID aliases.
     'RVC_LAB_STT_CHAT_SCOPE': (
-        '3801e455-224a-4872-b406-95a4db6b8ffa '
-        '3801e455224a4872b40695a4db6b8ffa '
         'a0c8cda2-3b46-4ee0-898c-48f9a4d3a444 '
         '00f99439-59d9-42a2-9c3a-db06422ea6cf '
         'ccc440c5-452d-4690-abc0-61758c11cebd '
@@ -61,6 +57,42 @@ LEADWAY_CALLER_ROUTES = {
     },
 }
 MOMO_FEEDBACK_CALLERS = {"+2348112812216"}
+
+# Inbound DID for the UBA account's "Teni" agent (business "UBA"). Calls whose
+# SIP To number matches this DID are routed to that agent. The native worker
+# matches on the last 10 digits, so a local "0701…"/"+234701…" To resolves here.
+UBA_INBOUND_DID_ROUTE = {
+    "business_id": "b43d6e63-4bfd-418a-9fa4-63fb4eb7e6bb",
+    "config_agent_id": "b629a875-9700-4ba7-bd77-fe54372357df",
+    "configured_agent_name": "Teni",
+    "voice_auth_required": False,
+}
+UBA_INBOUND_DID_NUMBERS = ("+2347012345678", "07012345678")
+
+
+
+# Outbound "To" DID for the UBA feedback agent. AICC dials this number to reach
+# Odion for an outbound call; outbound_required makes the worker claim the
+# prepared customer context (matched by the customer's number on the INVITE).
+UBA_OUTBOUND_DID_ROUTE = {
+    "business_id": "b43d6e63-4bfd-418a-9fa4-63fb4eb7e6bb",
+    "config_agent_id": "67612796698e40e3883515f0441fe6df",
+    "configured_agent_name": "Teni",
+    "outbound_required": True,
+}
+UBA_OUTBOUND_DID_NUMBERS = ("+2348012345678", "08012345678")
+
+
+# Inbound DID for the MTN MoMo inbound "Amaka" agent (business "MoMo PSB").
+# Calls whose SIP To matches this DID route to Amaka; human transfers from
+# these calls bridge to 0301050. Applies to this route only.
+MOMO_AMAKA_TRANSFER_DID_ROUTE = {
+    "business_id": "f2ff0fe3-d56c-4688-9048-9a76a6310d4a",
+    "config_agent_id": "ccc440c5-452d-4690-abc0-61758c11cebd",
+    "configured_agent_name": "Amaka",
+    "transfer_target_number": "0301050",
+}
+MOMO_AMAKA_TRANSFER_DID_NUMBERS = ("+2347060030105", "07060030105")
 
 
 def run(*args, **kwargs):
@@ -242,6 +274,91 @@ def leadway_caller_routes(previous_env):
     return json.dumps(route, separators=(',', ':'), sort_keys=True)
 
 
+def aicc_0301050_handoff_route(previous_env):
+    """Return calls delivered to 0301050 to that same AICC access number."""
+    route = json.loads(previous_env.get('RVC_AICC_SIP_ROUTE') or '{}')
+    did_routes = route.get('did_routes')
+    if not isinstance(did_routes, dict) or not isinstance(did_routes.get('0301050'), dict):
+        raise RuntimeError('Lagos SIP To route 0301050 is missing')
+    existing = did_routes['0301050'].get('transfer_target_number')
+    if existing not in (None, '', '0301050'):
+        raise RuntimeError('Lagos SIP To route 0301050 has a different handoff target')
+    did_routes['0301050']['transfer_target_number'] = '0301050'
+    return json.dumps(route, separators=(',', ':'), sort_keys=True)
+
+
+def uba_inbound_did_route(previous_env):
+    """Route the UBA inbound DID to the UBA "Teni" agent."""
+    route = json.loads(previous_env.get('RVC_AICC_SIP_ROUTE') or '{}')
+    did_routes = route.get('did_routes')
+    if not isinstance(did_routes, dict):
+        raise RuntimeError('Lagos SIP To route map is missing')
+    expected = dict(UBA_INBOUND_DID_ROUTE)
+    # The transfer target is (re)applied later in the chain by
+    # uba_inbound_transfer_target(); accept an existing entry that already
+    # carries it so repeated deploys stay idempotent.
+    expected_with_target = {**expected, 'transfer_target_number': '07012345678'}
+    for number in UBA_INBOUND_DID_NUMBERS:
+        existing = did_routes.get(number)
+        if existing and existing not in (expected, expected_with_target):
+            raise RuntimeError(f'SIP To number {number} already has a different route')
+        did_routes[number] = dict(expected)
+    return json.dumps(route, separators=(',', ':'), sort_keys=True)
+
+
+def uba_inbound_transfer_target(previous_env):
+    """Return calls delivered to the UBA inbound DID to that same AICC number.
+
+    Human transfers from calls that arrive on the UBA inbound DID must bridge
+    back to the UBA AICC access number (07012345678), the same per-business
+    pattern used elsewhere (Sonia -> its own DID, MoMo Amaka -> 0301050).
+    Without this the UBA route falls back to the global transfer target.
+    """
+    route = json.loads(previous_env.get('RVC_AICC_SIP_ROUTE') or '{}')
+    did_routes = route.get('did_routes')
+    if not isinstance(did_routes, dict):
+        raise RuntimeError('Lagos SIP To route map is missing')
+    for number in UBA_INBOUND_DID_NUMBERS:
+        entry = did_routes.get(number)
+        if not isinstance(entry, dict):
+            raise RuntimeError(f'SIP To number {number} is missing')
+        if entry.get('config_agent_id') != UBA_INBOUND_DID_ROUTE['config_agent_id']:
+            raise RuntimeError(f'SIP To number {number} is not the UBA inbound route')
+        existing = entry.get('transfer_target_number')
+        if existing not in (None, '', '07012345678'):
+            raise RuntimeError(f'SIP To number {number} has a different handoff target')
+        entry['transfer_target_number'] = '07012345678'
+    return json.dumps(route, separators=(',', ':'), sort_keys=True)
+
+
+def uba_outbound_did_route(previous_env):
+    """Route the UBA outbound DID to the UBA feedback agent (claim by customer)."""
+    route = json.loads(previous_env.get('RVC_AICC_SIP_ROUTE') or '{}')
+    did_routes = route.get('did_routes')
+    if not isinstance(did_routes, dict):
+        raise RuntimeError('Lagos SIP To route map is missing')
+    for number in UBA_OUTBOUND_DID_NUMBERS:
+        existing = did_routes.get(number)
+        if existing and existing != UBA_OUTBOUND_DID_ROUTE:
+            raise RuntimeError(f'SIP To number {number} already has a different route')
+        did_routes[number] = dict(UBA_OUTBOUND_DID_ROUTE)
+    return json.dumps(route, separators=(',', ':'), sort_keys=True)
+
+
+def momo_amaka_transfer_did_route(previous_env):
+    """Route the MTN MoMo inbound Amaka DID; human transfers bridge to 0301050."""
+    route = json.loads(previous_env.get('RVC_AICC_SIP_ROUTE') or '{}')
+    did_routes = route.get('did_routes')
+    if not isinstance(did_routes, dict):
+        raise RuntimeError('Lagos SIP To route map is missing')
+    for number in MOMO_AMAKA_TRANSFER_DID_NUMBERS:
+        existing = did_routes.get(number)
+        if existing and existing != MOMO_AMAKA_TRANSFER_DID_ROUTE:
+            raise RuntimeError(f'SIP To number {number} already has a different route')
+        did_routes[number] = dict(MOMO_AMAKA_TRANSFER_DID_ROUTE)
+    return json.dumps(route, separators=(',', ':'), sort_keys=True)
+
+
 def reply_grace_env(delay_ms='0', agent_ids=''):
     delay = str(delay_ms).strip()
     if not re.fullmatch(r'\d{1,4}', delay) or int(delay) > 1500:
@@ -278,8 +395,7 @@ def inactivity_pilot_env(agent_ids=None):
 def deploy(release, revision, enable_hausa_research=False, momo_feedback_agent_id='',
            reply_grace_ms='0', reply_grace_agent_ids='', llm_provider='qwen',
            deepseek_model='deepseek-flash', deepseek_reasoning_effort='high',
-           deepseek_api_key='', inactivity_pilot_agent_ids=None,
-           balogun_number_capture_enabled=False):
+           deepseek_api_key='', inactivity_pilot_agent_ids=None):
     if not re.fullmatch(r'[0-9a-f]{40}', revision):
         raise ValueError('Expected a full Git commit SHA')
     if (release.parent != RELEASE_ROOT
@@ -292,12 +408,13 @@ def deploy(release, revision, enable_hausa_research=False, momo_feedback_agent_i
     # Lagos ASR is shared by the voice worker. Reassert Qwen realtime + batch
     # endpoints each release so stale Whisper overrides cannot persist.
     updates = dict(LAGOS_ASR_ENV)
+    updates['ODION_CHINEDU_IGBO'] = '1'
+    updates['ODION_IGBO_QWEN_PHONE_CANDIDATE'] = '1'
+    updates['ODION_SANFRID_PIDGIN'] = '1'
+    updates['ODION_SBPN_LARGE_TEST'] = '1'
     updates[VOICE_AUTH_DISABLED_KEY] = VOICE_AUTH_DISABLED
     updates.update(reply_grace_env(reply_grace_ms, reply_grace_agent_ids))
     updates.update(inactivity_pilot_env(inactivity_pilot_agent_ids))
-    if not isinstance(balogun_number_capture_enabled, bool):
-        raise ValueError('Balogun number-capture setting must be boolean')
-    updates[BALOGUN_NUMBER_CAPTURE_KEY] = str(balogun_number_capture_enabled).lower()
     provider = str(llm_provider).strip().lower()
     if provider not in {'qwen', 'deepseek'}:
         raise ValueError('RVC_LAB_LLM_PROVIDER must be qwen or deepseek')
@@ -329,7 +446,17 @@ def deploy(release, revision, enable_hausa_research=False, momo_feedback_agent_i
     route_env = {
         'RVC_AICC_SIP_ROUTE': momo_feedback_route(previous_env, momo_feedback_agent_id)
     }
-    updates['RVC_AICC_SIP_ROUTE'] = leadway_caller_routes(route_env)
+    updates['RVC_AICC_SIP_ROUTE'] = momo_amaka_transfer_did_route({
+        'RVC_AICC_SIP_ROUTE': uba_outbound_did_route({
+            'RVC_AICC_SIP_ROUTE': uba_inbound_transfer_target({
+                'RVC_AICC_SIP_ROUTE': uba_inbound_did_route({
+                    'RVC_AICC_SIP_ROUTE': aicc_0301050_handoff_route({
+                        'RVC_AICC_SIP_ROUTE': leadway_caller_routes(route_env)
+                    })
+                })
+            })
+        })
+    })
     updates.update(native_admission_updates(previous_env))
     expected_env = [f'{key}={value}' for key, value in (previous_env | updates).items()]
     old_image = f'attentive/voice:before-{release.name}'
@@ -406,7 +533,6 @@ if __name__ == '__main__':
     parser.add_argument('--reply-grace-ms', default='0')
     parser.add_argument('--reply-grace-agent-ids', default='')
     parser.add_argument('--inactivity-pilot-agent-ids')
-    parser.add_argument('--balogun-number-capture-enabled', action='store_true')
     parser.add_argument('--llm-provider', default='qwen')
     parser.add_argument('--deepseek-model', default='deepseek-flash')
     parser.add_argument('--deepseek-reasoning-effort', default='high')
@@ -425,7 +551,7 @@ if __name__ == '__main__':
                               if key in {'RVC_LAB_END_SILENCE_MS', 'RVC_LAB_LLM_PROVIDER',
                                          'RVC_LAB_MAX_JOBS', 'MOMO_CALL_CAPACITY_BUSINESS_ID',
                                          'RVC_INPUT_NOISE_SUPPRESSION', 'RVC_INPUT_NOISE_AGENT_IDS',
-                                         'RVC_INPUT_NOISE_IMPLEMENTATION', BALOGUN_NUMBER_CAPTURE_KEY}},
+                                         'RVC_INPUT_NOISE_IMPLEMENTATION'}},
                           'native_admission': native_admission_updates(dict(entry.split('=',1) for entry in current['Config']['Env']))}))
     else:
         if args.release is None or args.revision is None:
@@ -438,5 +564,4 @@ if __name__ == '__main__':
                    args.momo_feedback_agent_id, args.reply_grace_ms,
                    args.reply_grace_agent_ids, args.llm_provider,
                    args.deepseek_model, args.deepseek_reasoning_effort,
-                   deepseek_api_key, args.inactivity_pilot_agent_ids,
-                   args.balogun_number_capture_enabled)
+                   deepseek_api_key, args.inactivity_pilot_agent_ids)

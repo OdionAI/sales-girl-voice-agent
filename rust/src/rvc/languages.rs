@@ -4,6 +4,7 @@ use super::{profiles::AgentContext, Config};
 use serde_json::Value;
 use std::sync::OnceLock;
 pub const SBPN_MODEL: &str = "ogunlao/SBPN_multilingual_base";
+pub const SBPN_LARGE_MODEL: &str = "ogunlao/SBPN_multilingual_large";
 pub fn data() -> &'static Value {
     static DATA: OnceLock<Value> = OnceLock::new();
     DATA.get_or_init(|| {
@@ -78,7 +79,7 @@ fn voice(selected: &str, voices: &Value, legacy: &Value, default: &str) -> Resul
         })
         .ok_or("unknown configured speech voice".into())
 }
-fn gateway(config: &Config, url: &str) -> Result<String, String> {
+pub(super) fn gateway(config: &Config, url: &str) -> Result<String, String> {
     if config.speech_gateway_url.is_empty() {
         return Ok(url.into());
     }
@@ -150,7 +151,13 @@ pub fn apply(config: &mut Config, context: &AgentContext, overrides: &Value) -> 
     };
     let configured = config.tts_voice.trim().to_lowercase();
     let requested = override_voice(overrides).trim();
-    if language == "pcm" {
+    if language == "pcm" && std::env::var("ODION_SANFRID_PIDGIN").as_deref() == Ok("1") {
+        config.tts_language = "Nigerian Pidgin".into();
+        config.tts_model = "coqui-pidgin-vits".into();
+        config.tts_voice = "maro".into();
+        config.tts_url = gateway(config, text(values, "dynamic_url"))?;
+        config.tts_seed = "17".into();
+    } else if language == "pcm" {
         let configured = if values["dynamic_voices"]
             .as_array()
             .is_some_and(|v| v.iter().any(|v| v == &configured))
@@ -193,7 +200,11 @@ pub fn apply(config: &mut Config, context: &AgentContext, overrides: &Value) -> 
         config.tts_model = text(profile, "model").into();
         config.tts_voice = text(profile, "voice").into();
         config.tts_url = gateway(config, text(profile, "url"))?;
-        if language == "ig" || language == "ha" {
+        if language == "ig" && std::env::var("ODION_CHINEDU_IGBO").as_deref() == Ok("1") {
+            config.tts_model = "igbo-ljspeech-vits-epoch236".into();
+            config.tts_voice = "chinedu".into();
+            config.tts_seed = "17".into();
+        } else if language == "ig" || language == "ha" {
             let voices = &values[if language == "ig" {
                 "igbo_voices"
             } else {
@@ -247,6 +258,24 @@ pub fn apply(config: &mut Config, context: &AgentContext, overrides: &Value) -> 
     config.stt_model = SBPN_MODEL.into();
     config.stt_ws_url = gateway(config, text(values, "sbpn_ws_url"))?;
     config.stt_batch_url = gateway(config, text(values, "sbpn_url"))?;
+    if std::env::var("ODION_SBPN_LARGE_TEST").as_deref() == Ok("1") {
+        config.stt_model = SBPN_LARGE_MODEL.into();
+        config.stt_ws_url = match std::env::var("ODION_SBPN_LARGE_TEST_LOCAL_PORT") {
+            Ok(value) => {
+                let port = value
+                    .parse::<u16>()
+                    .ok()
+                    .filter(|port| *port != 0)
+                    .ok_or("invalid SBPN Large local tunnel port")?;
+                format!("ws://127.0.0.1:{port}/v1/realtime")
+            }
+            Err(std::env::VarError::NotPresent) => gateway(
+                config,
+                "ws://102.88.137.124:8080/asr-sbpn-large-test/v1/realtime",
+            )?,
+            Err(_) => return Err("invalid SBPN Large local tunnel port".into()),
+        };
+    }
     config.stt_batch_timeout_seconds = 120.0;
     Ok(())
 }
@@ -354,10 +383,12 @@ pub fn tts_requests(config: &Config, input: &str) -> Result<Vec<TtsRequest>, Str
         return Err("not a native-language speech route".into());
     }
     let values = data();
-    let dynamic = code == "pcm"
-        && values["dynamic_voices"]
-            .as_array()
-            .is_some_and(|items| items.iter().any(|v| v == &config.tts_voice));
+    let sanfrid = code == "pcm" && config.tts_model == "coqui-pidgin-vits";
+    let dynamic = sanfrid
+        || (code == "pcm"
+            && values["dynamic_voices"]
+                .as_array()
+                .is_some_and(|items| items.iter().any(|v| v == &config.tts_voice)));
     let spoken = if code == "pcm" && !dynamic {
         pidgin_spoken_text(input)?
     } else {
@@ -389,7 +420,25 @@ pub fn tts_requests(config: &Config, input: &str) -> Result<Vec<TtsRequest>, Str
         } else {
             headers.insert("x-audio-sample-rate".into(), "24000".into());
             headers.insert("x-audio-channels".into(), "1".into());
-            if dynamic {
+            if sanfrid {
+                body["language"] = serde_json::json!("pcm");
+                body["stream_format"] = serde_json::json!("audio");
+                timeout = 180.0;
+                for (key, value) in [
+                    ("x-model", "sanfrid-pidgin-vits-epoch270"),
+                    ("x-voice", "maro"),
+                    ("x-speaker-id", "maro"),
+                    (
+                        "x-checkpoint-sha256",
+                        "e8ccbef1eacb107cfafb6f8b13ad020dfdf281776fb5af6627609dc9b2cf5e25",
+                    ),
+                    ("x-seed", "17"),
+                    ("x-speed", "1"),
+                    ("x-audio-format", "pcm_s16le"),
+                ] {
+                    headers.insert(key.into(), value.into());
+                }
+            } else if dynamic {
                 body["model"] = values["dynamic_model"].clone();
                 body["language"] = serde_json::json!("pcm");
                 body["stream_format"] = serde_json::json!("audio");
@@ -440,8 +489,23 @@ pub fn tts_requests(config: &Config, input: &str) -> Result<Vec<TtsRequest>, Str
                 body["seed"] = serde_json::json!(17);
             }
             if code == "ig" {
-                body["language"] = serde_json::json!("ig");
-                timeout = 1800.0;
+                if config.tts_model == "igbo-ljspeech-vits-epoch236" {
+                    body["language"] = serde_json::json!("igbo");
+                    body["stream_format"] = serde_json::json!("audio");
+                    headers.extend([
+                        ("x-model".into(), config.tts_model.clone()),
+                        ("x-voice".into(), "chinedu".into()),
+                        ("x-speaker-id".into(), "chinedu".into()),
+                        (
+                            "x-checkpoint-sha256".into(),
+                            "8b82e4f2bb90668c720beafd31696b3f075d326fddcb712018342609111cc64d"
+                                .into(),
+                        ),
+                    ]);
+                } else {
+                    body["language"] = serde_json::json!("ig");
+                    timeout = 1800.0;
+                }
             }
         }
         requests.push(TtsRequest {
@@ -568,6 +632,22 @@ mod tests {
                     .collect::<Vec<_>>()
             );
         }
+    }
+    #[test]
+    fn sanfrid_uses_verified_stream_contract() {
+        let mut c = config();
+        c.tts_language = "Nigerian Pidgin".into();
+        c.tts_model = "coqui-pidgin-vits".into();
+        c.tts_voice = "maro".into();
+        let requests = tts_requests(&c, "How you dey?").unwrap();
+        let request = &requests[0];
+        assert_eq!(request.sample_rate, 24000);
+        assert_eq!(request.body["model"], "coqui-pidgin-vits");
+        assert_eq!(request.body["voice"], "maro");
+        assert_eq!(request.body["stream"], true);
+        assert_eq!(request.body["stream_format"], "audio");
+        assert_eq!(request.headers["x-model"], "sanfrid-pidgin-vits-epoch270");
+        assert_eq!(request.headers["x-seed"], "17");
     }
     #[test]
     fn operator_gateway_overrides_only_speech_origins_and_rejects_credentials() {
