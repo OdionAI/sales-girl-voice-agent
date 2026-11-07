@@ -747,13 +747,13 @@ impl Coordinator {
         }
         self.pending_action = None;
         let prepared = self.banking.as_ref().and_then(|bank| bank.prepared());
-        let workflow = if prepared
+        let workflow = match prepared
             .as_ref()
-            .is_some_and(|p| p["preview"]["execution_endpoint_id"] == "D1")
+            .and_then(|p| p["preview"]["execution_endpoint_id"].as_str())
         {
-            "airtime"
-        } else {
-            "transfer"
+            Some("D1") => "airtime",
+            Some("D3") => "data",
+            _ => "transfer",
         };
         if prepared.is_none() && !super::passkey::configured(&self.c.agent_context) {
             self.begin(
