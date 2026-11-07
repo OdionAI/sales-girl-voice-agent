@@ -31,7 +31,6 @@ DEFAULT_INACTIVITY_PILOT_AGENT_IDS = '*'
 # Reuse the shared prod Qwen realtime ASR. Chat transcripts remain authoritative
 # and fall back to realtime finals, exactly as in Lagos.
 STAGING_ASR_ENV = {
-    'ODION_SBPN_LARGE_TEST': '1',
     # Staging-only trial: shorten turn endpointing while retaining final ASR validation.
     'RVC_LAB_END_SILENCE_MS': '150',
     'RVC_LAB_STT_PROVIDER': 'self_hosted',
@@ -164,10 +163,6 @@ def deploy(release, revision, enable_hausa_research=False, reply_grace_ms='0',
         for item in previous['Config']['Env']
     )
     updates = dict(STAGING_ASR_ENV)
-    updates['ODION_CHINEDU_IGBO'] = '1'
-    updates['ODION_IGBO_QWEN_PHONE_CANDIDATE'] = '1'
-    updates['ODION_PIDGIN_QWEN_CANDIDATE'] = '1'
-    updates['ODION_SANFRID_PIDGIN'] = '1'
     updates.update(reply_grace_env(reply_grace_ms, reply_grace_agent_ids))
     updates.update(inactivity_pilot_env(inactivity_pilot_agent_ids))
     provider = str(llm_provider).strip().lower()

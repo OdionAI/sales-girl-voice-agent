@@ -22,6 +22,11 @@ BASE_ROUTE = {
             'config_agent_id': 'ccc440c5452d4690abc061758c11cebd',
             'configured_agent_name': 'Amaka',
         },
+        '0301050': {
+            'business_id': MOMO_BUSINESS_ID,
+            'config_agent_id': 'ccc440c5452d4690abc061758c11cebd',
+            'configured_agent_name': 'Amaka',
+        },
     },
 }
 
@@ -49,6 +54,11 @@ class LagosReleaseTests(unittest.TestCase):
             previous_env = dict(item.split('=', 1) for item in base_env)
 
             updates = dict(release.LAGOS_ASR_ENV)
+            updates['ODION_CHINEDU_IGBO'] = '1'
+            updates['ODION_IGBO_QWEN_PHONE_CANDIDATE'] = '1'
+            updates['ODION_SANFRID_PIDGIN'] = '1'
+            updates['ODION_SBPN_LARGE_TEST'] = '1'
+            updates[release.VOICE_AUTH_DISABLED_KEY] = release.VOICE_AUTH_DISABLED
             updates.update(release.reply_grace_env(reply_grace_ms, reply_grace_agent_ids))
             updates.update(release.inactivity_pilot_env())
             updates['RVC_LAB_LLM_PROVIDER'] = llm_provider
@@ -64,9 +74,19 @@ class LagosReleaseTests(unittest.TestCase):
             if enabled:
                 updates[release.HAUSA_RESEARCH_KEY] = 'true'
             momo_route = release.momo_feedback_route(previous_env, AGENT_ID)
-            updates['RVC_AICC_SIP_ROUTE'] = release.leadway_caller_routes(
-                {'RVC_AICC_SIP_ROUTE': momo_route}
-            )
+            updates['RVC_AICC_SIP_ROUTE'] = release.momo_amaka_transfer_did_route({
+                'RVC_AICC_SIP_ROUTE': release.uba_outbound_did_route({
+                    'RVC_AICC_SIP_ROUTE': release.uba_inbound_transfer_target({
+                        'RVC_AICC_SIP_ROUTE': release.uba_inbound_did_route({
+                            'RVC_AICC_SIP_ROUTE': release.aicc_0301050_handoff_route({
+                                'RVC_AICC_SIP_ROUTE': release.leadway_caller_routes(
+                                    {'RVC_AICC_SIP_ROUTE': momo_route}
+                                )
+                            })
+                        })
+                    })
+                })
+            })
             expected_env = [f'{key}={value}' for key, value in (previous_env | updates).items()]
 
             previous = {'Id': 'old-container', 'Image': 'old-image',
@@ -122,6 +142,17 @@ class LagosReleaseTests(unittest.TestCase):
                     self.assertEqual(route['did_routes'][number]['business_id'], MOMO_BUSINESS_ID_DASHED)
                     self.assertTrue(route['did_routes'][number]['outbound_required'])
                 self.assertEqual(route['did_routes']['030105'], BASE_ROUTE['did_routes']['030105'])
+                self.assertEqual(route['did_routes']['0301050']['transfer_target_number'], '0301050')
+                for uba_number in release.UBA_INBOUND_DID_NUMBERS:
+                    self.assertEqual(
+                        route['did_routes'][uba_number],
+                        {**release.UBA_INBOUND_DID_ROUTE, 'transfer_target_number': '07012345678'})
+                for uba_out in release.UBA_OUTBOUND_DID_NUMBERS:
+                    self.assertEqual(route['did_routes'][uba_out], release.UBA_OUTBOUND_DID_ROUTE)
+                    self.assertTrue(route['did_routes'][uba_out]['outbound_required'])
+                for amaka_num in release.MOMO_AMAKA_TRANSFER_DID_NUMBERS:
+                    self.assertEqual(route['did_routes'][amaka_num], release.MOMO_AMAKA_TRANSFER_DID_ROUTE)
+                    self.assertEqual(route['did_routes'][amaka_num]['transfer_target_number'], '0301050')
                 self.assertEqual(
                     route['caller_routes']['+2347012345678'],
                     {'config_agent_id': 'existing-agent'},
@@ -246,6 +277,27 @@ class LagosReleaseTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, 'MoMo route is missing'):
                     release.deploy(target, revision, False, AGENT_ID)
 
+    def test_handoff_target_changes_only_0301050(self):
+        route = {**BASE_ROUTE, 'did_routes': {
+            **BASE_ROUTE['did_routes'],
+            '+233308048122': {'transfer_target_number': '+233308048122'},
+        }}
+        updated = json.loads(release.aicc_0301050_handoff_route({
+            'RVC_AICC_SIP_ROUTE': json.dumps(route)
+        }))
+        self.assertEqual(updated['did_routes']['0301050']['transfer_target_number'], '0301050')
+        self.assertEqual(updated['did_routes']['+233308048122'],
+                         route['did_routes']['+233308048122'])
+        self.assertEqual(updated['did_routes']['030105'], route['did_routes']['030105'])
+
+    def test_handoff_target_refuses_unexpected_existing_value(self):
+        route = {**BASE_ROUTE, 'did_routes': {
+            **BASE_ROUTE['did_routes'],
+            '0301050': {'transfer_target_number': 'unexpected'},
+        }}
+        with self.assertRaisesRegex(RuntimeError, 'different handoff target'):
+            release.aicc_0301050_handoff_route({'RVC_AICC_SIP_ROUTE': json.dumps(route)})
+
     def test_momo_feedback_caller_override_is_removed(self):
         env = {
             'RVC_AICC_SIP_ROUTE': json.dumps({
@@ -286,6 +338,105 @@ class LagosReleaseTests(unittest.TestCase):
 
         updated = json.loads(release.leadway_caller_routes(env))['caller_routes']
         self.assertNotIn('08112812216', updated)
+
+    def test_uba_inbound_did_route_adds_teni_route_and_is_idempotent(self):
+        env = {'RVC_AICC_SIP_ROUTE': json.dumps(BASE_ROUTE)}
+        once = json.loads(release.uba_inbound_did_route(env))
+        twice = json.loads(release.uba_inbound_did_route(
+            {'RVC_AICC_SIP_ROUTE': json.dumps(once)}))
+        for number in release.UBA_INBOUND_DID_NUMBERS:
+            self.assertEqual(once['did_routes'][number], release.UBA_INBOUND_DID_ROUTE)
+        self.assertEqual(once, twice)
+
+    def test_uba_inbound_did_route_refuses_conflicting_route(self):
+        conflict_number = release.UBA_INBOUND_DID_NUMBERS[0]
+        route = {**BASE_ROUTE, 'did_routes': {
+            **BASE_ROUTE['did_routes'],
+            conflict_number: {'config_agent_id': 'someone-else'},
+        }}
+        with self.assertRaisesRegex(RuntimeError, 'already has a different route'):
+            release.uba_inbound_did_route({'RVC_AICC_SIP_ROUTE': json.dumps(route)})
+
+
+    def test_uba_outbound_did_route_adds_feedback_route_and_is_idempotent(self):
+        env = {'RVC_AICC_SIP_ROUTE': json.dumps(BASE_ROUTE)}
+        once = json.loads(release.uba_outbound_did_route(env))
+        twice = json.loads(release.uba_outbound_did_route(
+            {'RVC_AICC_SIP_ROUTE': json.dumps(once)}))
+        for number in release.UBA_OUTBOUND_DID_NUMBERS:
+            self.assertEqual(once['did_routes'][number], release.UBA_OUTBOUND_DID_ROUTE)
+            self.assertTrue(once['did_routes'][number]['outbound_required'])
+        self.assertEqual(once, twice)
+
+    def test_uba_outbound_did_route_refuses_conflicting_route(self):
+        conflict_number = release.UBA_OUTBOUND_DID_NUMBERS[0]
+        route = {**BASE_ROUTE, 'did_routes': {
+            **BASE_ROUTE['did_routes'],
+            conflict_number: {'config_agent_id': 'someone-else'},
+        }}
+        with self.assertRaisesRegex(RuntimeError, 'already has a different route'):
+            release.uba_outbound_did_route({'RVC_AICC_SIP_ROUTE': json.dumps(route)})
+
+
+    def test_momo_amaka_transfer_did_route_adds_route_and_is_idempotent(self):
+        env = {'RVC_AICC_SIP_ROUTE': json.dumps(BASE_ROUTE)}
+        once = json.loads(release.momo_amaka_transfer_did_route(env))
+        twice = json.loads(release.momo_amaka_transfer_did_route(
+            {'RVC_AICC_SIP_ROUTE': json.dumps(once)}))
+        for number in release.MOMO_AMAKA_TRANSFER_DID_NUMBERS:
+            self.assertEqual(once['did_routes'][number], release.MOMO_AMAKA_TRANSFER_DID_ROUTE)
+            self.assertEqual(once['did_routes'][number]['transfer_target_number'], '0301050')
+        self.assertEqual(once, twice)
+
+    def test_momo_amaka_transfer_did_route_refuses_conflicting_route(self):
+        conflict_number = release.MOMO_AMAKA_TRANSFER_DID_NUMBERS[0]
+        route = {**BASE_ROUTE, 'did_routes': {
+            **BASE_ROUTE['did_routes'],
+            conflict_number: {'config_agent_id': 'someone-else'},
+        }}
+        with self.assertRaisesRegex(RuntimeError, 'already has a different route'):
+            release.momo_amaka_transfer_did_route({'RVC_AICC_SIP_ROUTE': json.dumps(route)})
+
+    def test_uba_inbound_transfer_target_sets_own_did_and_is_idempotent(self):
+        placed = json.loads(release.uba_inbound_did_route(
+            {'RVC_AICC_SIP_ROUTE': json.dumps(BASE_ROUTE)}))
+        once = json.loads(release.uba_inbound_transfer_target(
+            {'RVC_AICC_SIP_ROUTE': json.dumps(placed)}))
+        twice = json.loads(release.uba_inbound_transfer_target(
+            {'RVC_AICC_SIP_ROUTE': json.dumps(once)}))
+        for number in release.UBA_INBOUND_DID_NUMBERS:
+            self.assertEqual(once['did_routes'][number]['transfer_target_number'], '07012345678')
+            self.assertEqual(once['did_routes'][number]['config_agent_id'],
+                             release.UBA_INBOUND_DID_ROUTE['config_agent_id'])
+        # unrelated routes are left untouched
+        self.assertNotIn('transfer_target_number', once['did_routes']['0301050'])
+        self.assertEqual(once, twice)
+
+    def test_uba_inbound_transfer_target_refuses_different_target(self):
+        placed = json.loads(release.uba_inbound_did_route(
+            {'RVC_AICC_SIP_ROUTE': json.dumps(BASE_ROUTE)}))
+        number = release.UBA_INBOUND_DID_NUMBERS[0]
+        placed['did_routes'][number]['transfer_target_number'] = '9999999'
+        with self.assertRaisesRegex(RuntimeError, 'different handoff target'):
+            release.uba_inbound_transfer_target(
+                {'RVC_AICC_SIP_ROUTE': json.dumps(placed)})
+
+    def test_uba_inbound_did_route_is_idempotent_with_existing_transfer_target(self):
+        placed = json.loads(release.uba_inbound_did_route(
+            {'RVC_AICC_SIP_ROUTE': json.dumps(BASE_ROUTE)}))
+        with_target = json.loads(release.uba_inbound_transfer_target(
+            {'RVC_AICC_SIP_ROUTE': json.dumps(placed)}))
+        # Re-running the DID step on an environment that already carries the
+        # transfer target (i.e. a second deploy) must not raise.
+        again = json.loads(release.uba_inbound_did_route(
+            {'RVC_AICC_SIP_ROUTE': json.dumps(with_target)}))
+        reapply = json.loads(release.uba_inbound_transfer_target(
+            {'RVC_AICC_SIP_ROUTE': json.dumps(again)}))
+        for number in release.UBA_INBOUND_DID_NUMBERS:
+            self.assertEqual(
+                reapply['did_routes'][number]['transfer_target_number'], '07012345678')
+        self.assertEqual(reapply, with_target)
+
 
 class NativeAdmissionTests(unittest.TestCase):
     def test_native_slots_cover_the_existing_capacity_policy_without_changing_it(self):

@@ -48,6 +48,14 @@ final class NativePasskeyAuthorizer: NSObject, PasskeyAuthorizing, ASAuthorizati
                                 check: .visibleWindow)
             throw PasskeyFailure.presentationUnavailable
         }
+        return try await beginAuthorization(request, window: window) { $0.performRequests() }
+    }
+
+    // Separate native-session completion from UI preflight so a credential returned
+    // by Apple remains usable after its presenting window or scene changes.
+    func beginAuthorization(_ request: PasskeyRequest, window: UIWindow,
+                            performRequests: (ASAuthorizationController) -> Void) async throws -> PasskeyProof {
+        guard controller == nil else { throw PasskeyFailure.busy }
         let authorization = try authorizationRequest(for: request)
         self.window = window
         mode = request.mode
@@ -58,7 +66,7 @@ final class NativePasskeyAuthorizer: NSObject, PasskeyAuthorizing, ASAuthorizati
         return try await withCheckedThrowingContinuation { continuation in
             self.continuation = continuation
             diagnostics?.record(.presentation, .requested)
-            controller.performRequests()
+            performRequests(controller)
         }
     }
 
@@ -101,21 +109,37 @@ final class NativePasskeyAuthorizer: NSObject, PasskeyAuthorizing, ASAuthorizati
 
     func authorizationController(controller: ASAuthorizationController, didCompleteWithAuthorization authorization: ASAuthorization) {
         guard self.controller === controller else { return }
-        diagnostics?.record(.presentation, .succeeded)
-        diagnostics?.record(.proof, .started)
-        // AuthenticationServices returned a credential. Do not discard that
-        // proof because SwiftUI replaced the anchor or iOS changed scene state
-        // while the Face ID sheet was onscreen; the backend still verifies it.
+        let proof: PasskeyProof?
         if mode == .authenticate, let credential = authorization.credential as? ASAuthorizationPlatformPublicKeyCredentialAssertion,
            !credential.credentialID.isEmpty, !credential.rawClientDataJSON.isEmpty,
            !credential.rawAuthenticatorData.isEmpty, !credential.signature.isEmpty {
-            complete(.success(.assertion(id: credential.credentialID, clientData: credential.rawClientDataJSON,
-                                         authenticatorData: credential.rawAuthenticatorData, signature: credential.signature, userID: credential.userID)))
+            proof = .assertion(id: credential.credentialID, clientData: credential.rawClientDataJSON,
+                               authenticatorData: credential.rawAuthenticatorData, signature: credential.signature, userID: credential.userID)
         } else if mode == .register, let credential = authorization.credential as? ASAuthorizationPlatformPublicKeyCredentialRegistration,
                   !credential.credentialID.isEmpty, !credential.rawClientDataJSON.isEmpty,
                   let attestation = credential.rawAttestationObject, !attestation.isEmpty {
-            complete(.success(.registration(id: credential.credentialID, clientData: credential.rawClientDataJSON, attestation: attestation)))
-        } else { complete(.failure(PasskeyFailure.invalidCredential)) }
+            proof = .registration(id: credential.credentialID, clientData: credential.rawClientDataJSON, attestation: attestation)
+        } else { proof = nil }
+        completeAuthorizedCredential(proof, for: controller)
+    }
+
+    // The native delegate and internal regression harness share this completion path.
+    // Window/scene checks belong before presentation, never after Apple supplies a credential.
+    func completeAuthorizedCredential(_ proof: PasskeyProof?, for controller: ASAuthorizationController) {
+        guard self.controller === controller else { return }
+        diagnostics?.record(.presentation, .succeeded)
+        diagnostics?.record(.proof, .started)
+        guard let proof, let mode else {
+            diagnostics?.record(.proof, .failed, reason: .invalidCredential)
+            complete(.failure(PasskeyFailure.invalidCredential)); return
+        }
+        do {
+            try proof.validate(for: mode)
+            complete(.success(proof))
+        } catch {
+            diagnostics?.record(.proof, .failed, reason: .invalidCredential)
+            complete(.failure(PasskeyFailure.invalidCredential))
+        }
     }
 
     func authorizationController(controller: ASAuthorizationController, didCompleteWithError error: Error) {

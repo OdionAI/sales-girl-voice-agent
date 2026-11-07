@@ -199,6 +199,17 @@ This test agent can provide guidance only. It cannot see accounts, verify identi
     speech_rms: float = _float("RVC_LAB_SPEECH_RMS", 280.0)
     min_speech_ms: float = _float("RVC_LAB_MIN_SPEECH_MS", 240.0)
     end_silence_ms: float = _float("RVC_LAB_END_SILENCE_MS", 300.0)
+    # Speech-probability VAD gate. RNNoise reports a per-frame speech
+    # probability (0..1). When the input filter supplies it, a frame must ALSO
+    # clear this floor to count as speech, so a loud non-speech burst (TV,
+    # music, room noise) cannot start or sustain a caller turn. Set <= 0 to
+    # disable and fall back to the loudness threshold alone.
+    speech_prob_min: float = _float("RVC_LAB_SPEECH_PROB_MIN", 0.35)
+    # Reject a committed utterance before ASR final when it is below these
+    # floors (a tap, cough or line blip). 0 disables each guard. The primary
+    # defense against noise blips is speech_prob_min; these are a safety net.
+    min_utterance_ms: float = _float("RVC_LAB_MIN_UTTERANCE_MS", 0.0)
+    min_voiced_frame_percent: float = _float("RVC_LAB_MIN_VOICED_FRAME_PERCENT", 0.0)
     reply_grace_agent_ids: tuple[str, ...] = _ids("RVC_LAB_REPLY_GRACE_AGENT_IDS")
     reply_grace_ms: float = _float("RVC_LAB_REPLY_GRACE_MS", 0.0)
     stable_partial_ms: float = _float("RVC_LAB_STABLE_PARTIAL_MS", 180.0)

@@ -264,9 +264,23 @@ impl Dispatch {
             .unwrap_or(identity);
         let mut keys = attributes.keys().cloned().collect::<Vec<_>>();
         keys.sort();
-        Ok(
-            json!({"business_id":selected("business_id",&self.config.business_id),"config_agent_id":selected("config_agent_id",&self.config.config_agent_id),"configured_agent_name":selected("configured_agent_name",&self.config.configured_agent_name),"end_user_id":user,"participant_identity":identity,"room_name":self.room,"entry_surface":"aicc_inbound","language":"en","caller_phone":attributes.get("sip.phoneNumber").cloned().unwrap_or_default(),"caller_number":caller,"called_phone":called,"outbound_required":chosen.is_some_and(|v|v["outbound_required"]==true)||did_route.is_some_and(|v|v["outbound_required"]==true),"sip_attribute_keys":keys,"sip_trunk_id":self.trunk,"sip_caller_verified":true,"voice_auth_required":chosen.and_then(|v|v["voice_auth_required"].as_bool()).or(self.config.voice_auth_required).unwrap_or(true)}),
-        )
+        let mut claims = json!({"business_id":selected("business_id",&self.config.business_id),"config_agent_id":selected("config_agent_id",&self.config.config_agent_id),"configured_agent_name":selected("configured_agent_name",&self.config.configured_agent_name),"end_user_id":user,"participant_identity":identity,"room_name":self.room,"entry_surface":"aicc_inbound","language":"en","caller_phone":attributes.get("sip.phoneNumber").cloned().unwrap_or_default(),"caller_number":caller,"called_phone":called,"outbound_required":chosen.is_some_and(|v|v["outbound_required"]==true)||did_route.is_some_and(|v|v["outbound_required"]==true),"sip_attribute_keys":keys,"sip_trunk_id":self.trunk,"sip_caller_verified":true,"voice_auth_required":chosen.and_then(|v|v["voice_auth_required"].as_bool()).or(self.config.voice_auth_required).unwrap_or(true)});
+        // A dashboard agent selection must not discard the operator-pinned DID
+        // handoff destination. Caller-specific transfer settings take precedence.
+        for key in ["transfer_target_number", "transfer_from_number"] {
+            if let Some(value) = chosen
+                .and_then(|route| route[key].as_str())
+                .filter(|value| !value.trim().is_empty())
+                .or_else(|| {
+                    did_route
+                        .and_then(|route| route[key].as_str())
+                        .filter(|value| !value.trim().is_empty())
+                })
+            {
+                claims[key] = json!(value);
+            }
+        }
+        Ok(claims)
     }
 }
 fn called(lower: &HashMap<String, String>, override_: &str) -> String {
@@ -404,6 +418,39 @@ mod tests {
             assert_eq!(number(case["raw"].as_str().unwrap()), case["number"]);
             assert_eq!(phone(case["raw"].as_str().unwrap()), case["phone"]);
         }
+    }
+    #[test]
+    fn called_route_keeps_its_handoff_target_when_dashboard_selects_agent() {
+        let mut config = fixture()["sip_route"].clone();
+        config["did_routes"]["0301050"]["transfer_target_number"] = json!("0301050");
+        let dispatch = serde_json::from_value::<Config>(config)
+            .unwrap()
+            .dispatch(
+                r#"{"entry_surface":"aicc_inbound","sip_trunk_id":"ST_TEST"}"#,
+                "aicc-lara-1",
+            )
+            .unwrap()
+            .unwrap();
+        let attrs = HashMap::from([
+            ("sip.trunkID".into(), "ST_TEST".into()),
+            ("sip.phoneNumber".into(), "+2347061583271".into()),
+        ]);
+        let dashboard = json!({"business_id":"biz-other","config_agent_id":"agent-other"});
+        let routed = dispatch
+            .resolve(
+                ParticipantKind::Sip,
+                "sip_caller",
+                &attrs,
+                "0301050",
+                Some(&dashboard),
+            )
+            .unwrap();
+        assert_eq!(routed["config_agent_id"], "agent-other");
+        assert_eq!(routed["transfer_target_number"], "0301050");
+        let other = dispatch
+            .resolve(ParticipantKind::Sip, "sip_caller", &attrs, "0301051", None)
+            .unwrap();
+        assert!(other.get("transfer_target_number").is_none());
     }
     #[test]
     fn metadata_and_caller_attributes_cannot_replace_operator_scope_or_trunk() {
