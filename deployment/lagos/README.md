@@ -143,6 +143,13 @@ The separate `+2349040760651` Leadway caller route remains mapped to the
 Leadway new-member check-in agent (`c4f4925d-0188-431e-a881-15533f6bb31b`),
 with an explicit per-caller override so a carrier-rewritten shared DID cannot
 take precedence for that caller. Other callers retain DID-first routing.
+The release also pins the `0301050` DID's AICC transfer target to `0301050`.
+The native worker carries this operator-set target into its verified SIP scope,
+including when Agent Config selects a different agent for that DID. It keeps
+the original caller ID on the outbound leg. Other DIDs and the global
+`AICC_TRANSFER_TARGET_NUMBER` are left as configured. After release, verify a
+real `0301050` handoff in SIP edge logs: outbound `toUser=0301050` and
+`fromUser` equal to the normalized inbound caller number.
 `deploy.yml` remains available only for an explicit legacy node-B run.
 
 For the explicitly opted-in noncommercial Hausa research pilot, set the GitHub

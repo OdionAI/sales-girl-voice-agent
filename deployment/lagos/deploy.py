@@ -242,6 +242,19 @@ def leadway_caller_routes(previous_env):
     return json.dumps(route, separators=(',', ':'), sort_keys=True)
 
 
+def aicc_0301050_handoff_route(previous_env):
+    """Return calls delivered to 0301050 to that same AICC access number."""
+    route = json.loads(previous_env.get('RVC_AICC_SIP_ROUTE') or '{}')
+    did_routes = route.get('did_routes')
+    if not isinstance(did_routes, dict) or not isinstance(did_routes.get('0301050'), dict):
+        raise RuntimeError('Lagos SIP To route 0301050 is missing')
+    existing = did_routes['0301050'].get('transfer_target_number')
+    if existing not in (None, '', '0301050'):
+        raise RuntimeError('Lagos SIP To route 0301050 has a different handoff target')
+    did_routes['0301050']['transfer_target_number'] = '0301050'
+    return json.dumps(route, separators=(',', ':'), sort_keys=True)
+
+
 def reply_grace_env(delay_ms='0', agent_ids=''):
     delay = str(delay_ms).strip()
     if not re.fullmatch(r'\d{1,4}', delay) or int(delay) > 1500:
@@ -329,7 +342,9 @@ def deploy(release, revision, enable_hausa_research=False, momo_feedback_agent_i
     route_env = {
         'RVC_AICC_SIP_ROUTE': momo_feedback_route(previous_env, momo_feedback_agent_id)
     }
-    updates['RVC_AICC_SIP_ROUTE'] = leadway_caller_routes(route_env)
+    updates['RVC_AICC_SIP_ROUTE'] = aicc_0301050_handoff_route({
+        'RVC_AICC_SIP_ROUTE': leadway_caller_routes(route_env)
+    })
     updates.update(native_admission_updates(previous_env))
     expected_env = [f'{key}={value}' for key, value in (previous_env | updates).items()]
     old_image = f'attentive/voice:before-{release.name}'
