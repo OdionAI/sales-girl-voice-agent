@@ -134,7 +134,16 @@ class Bank:
             self.verifying = True
             valid = self.verify(value.get("proof", {}), active)
             self.stage = "Proof received; verifying simulated bank result"
-            self.record("proof_received", signature_valid=valid)
+            proof = value.get("proof")
+            response = proof.get("response", {}) if isinstance(proof, dict) else {}
+            self.record("proof_received", signature_valid=valid,
+                        populated_proof=isinstance(proof, dict) and bool(proof),
+                        id_present=bool(proof.get("id")) if isinstance(proof, dict) else False,
+                        client_data_present=bool(response.get("clientDataJSON")),
+                        signature_present=bool(response.get("signature")),
+                        authenticator_data_present=bool(response.get("authenticatorData")),
+                        authentication_id_match=value.get("authenticationId") == active["id"],
+                        correlation_id_match=value.get("correlationId") == active["correlation"])
             await asyncio.sleep(2)
             verified = valid and active["mode"] == "approve" and time.time() < active["expires"]
             await self.send("fido2_result", authenticationId=active["id"],
@@ -197,11 +206,12 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--greeting", type=Path, required=True)
     parser.add_argument("--evidence", type=Path, required=True)
+    parser.add_argument("--port", type=int, default=8765)
     args = parser.parse_args()
     bank = Bank(args.greeting, args.evidence)
     application = web.Application()
     application.add_routes([web.post("/start", bank.start), web.post("/scenario", bank.scenario), web.get("/status", bank.status)])
-    web.run_app(application, host="127.0.0.1", port=8765, access_log=None)
+    web.run_app(application, host="127.0.0.1", port=args.port, access_log=None)
 
 
 if __name__ == "__main__":

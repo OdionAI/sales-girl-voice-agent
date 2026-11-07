@@ -92,7 +92,7 @@ pub struct AgentContext {
     pub outbound_context_fields: Vec<Value>,
 }
 pub fn default_voice_allowlist() -> Vec<String> {
-    "helen-mavino-0030,wema-en-ng-female,wema-en-ng-male,wema-en-us-female,wema-en-us-male,wema-en-ng-female-short,wema-en-ng-male-short,wema-en-us-female-short,wema-en-us-male-short,access-ghana-cindy".split(',').map(str::to_owned).collect()
+    "helen-mavino-0030,wema-en-ng-female,wema-en-ng-male,wema-en-us-female,wema-en-us-male,wema-en-ng-female-short,wema-en-ng-male-short,wema-en-us-female-short,wema-en-us-male-short,access-ghana-cindy,nneka".split(',').map(str::to_owned).collect()
 }
 pub fn apply_agent_configured_voice(
     config: &mut Config,

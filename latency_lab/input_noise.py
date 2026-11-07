@@ -3,7 +3,9 @@
 Implementation is operator-selected per call:
 - ``webrtc`` (default): LiveKit WebRTC APM, the established filter.
 - ``rnnoise``: RNNoise (recurrent-neural-network suppressor via ``pyrnnoise``),
-  which also reports a per-frame speech probability used only for metrics here.
+  which also reports a per-frame speech probability. That probability is
+  exposed via ``last_speech_prob`` so the VAD can gate on speech-vs-noise
+  rather than on loudness alone (see ``pipeline.audio``).
 
 Both paths fail open: on any error the filter disables itself and passes the
 caller's audio through unfiltered, and the trace records the failure.
@@ -26,6 +28,10 @@ class InputNoiseFilter:
         self.processing_ms = 0.0
         self.speech_prob_total = 0.0
         self.speech_prob_frames = 0
+        # Speech probability of the most recent process() call (mean over the
+        # frames in that chunk), or None when suppression is off / APM (which
+        # reports no probability). The VAD reads this to gate on speech vs noise.
+        self.last_speech_prob: float | None = None
         allowed = {s.strip() for s in os.getenv('RVC_INPUT_NOISE_AGENT_IDS', '').split(',') if s.strip()}
         self.enabled = os.getenv('RVC_INPUT_NOISE_SUPPRESSION') == '1' and ('*' in allowed or context.agent_id in allowed)
         self.implementation = str(os.getenv('RVC_INPUT_NOISE_IMPLEMENTATION', 'webrtc')).strip().lower()
@@ -62,12 +68,16 @@ class InputNoiseFilter:
 
     def process(self, pcm):
         if not self.enabled:
+            self.last_speech_prob = None
             return pcm
         if self.rnnoise is not None:
             return self._process_rnnoise(pcm)
         return self._process_apm(pcm)
 
     def _process_apm(self, pcm):
+        # WebRTC APM does not report a speech probability; leave the VAD on its
+        # loudness threshold for this path.
+        self.last_speech_prob = None
         self.pending.extend(pcm)
         size = len(self.pending) // self.BLOCK * self.BLOCK
         if not size:
@@ -95,19 +105,26 @@ class InputNoiseFilter:
         import numpy as np
         started = time.perf_counter()
         output = bytearray()
+        prob_sum = 0.0
+        prob_count = 0
         try:
             for probability, frame in self.rnnoise.denoise_chunk(
                     np.frombuffer(pcm, dtype=np.int16), partial=False):
                 output.extend(np.asarray(frame, dtype=np.int16).reshape(-1).tobytes())
-                self.speech_prob_total += float(np.asarray(probability).reshape(-1)[0])
+                prob = float(np.asarray(probability).reshape(-1)[0])
+                self.speech_prob_total += prob
                 self.speech_prob_frames += 1
+                prob_sum += prob
+                prob_count += 1
         except Exception as exc:
             # Fail open: drop suppression entirely rather than corrupt or drop audio.
             self.enabled = False
             self.rnnoise = None
+            self.last_speech_prob = None
             self.trace.record('input_noise_filter_error', stage='process', implementation='rnnoise',
                               error_type=type(exc).__name__, fallback='unfiltered')
             return pcm
+        self.last_speech_prob = (prob_sum / prob_count) if prob_count else None
         self.processing_ms += (time.perf_counter()-started)*1000
         self._accumulate(pcm, bytes(output), max(1, len(pcm) // self.BLOCK))
         return bytes(output)
@@ -174,6 +191,10 @@ class ListeningNoiseRoute:
             self.filter = InputNoiseFilter(self.context, self.trace)
             self.bypassing = False
         return self.filter.process(pcm)
+
+    @property
+    def last_speech_prob(self):
+        return getattr(self.filter, "last_speech_prob", None)
 
     def finish(self):
         if self.bypassing:
