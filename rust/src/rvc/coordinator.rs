@@ -274,6 +274,7 @@ impl Drop for TransferCleanupWatch {
         self.task.abort();
     }
 }
+const MOMO_PSB_BUSINESS_ID: &str = "f2ff0fe3d56c468890489a76a6310d4a";
 struct Operation {
     bank: bool,
     id: u64,
@@ -3165,6 +3166,59 @@ impl Coordinator {
                     return;
                 };
                 let owner = a.owner;
+                // MoMo PSB: create the support ticket automatically — never ask the
+                // caller for permission. Execute now and speak a message that tells
+                // them the team has been informed; never expose the ticket id/reference.
+                if call.name == "create_ticket"
+                    && self.c.agent_context.business_id.as_str() == MOMO_PSB_BUSINESS_ID
+                {
+                    let Some(services) = self.services.clone() else {
+                        self.fail("action services unavailable".into()).await;
+                        return;
+                    };
+                    self.next_operation += 1;
+                    let operation = self.next_operation;
+                    let (context, events) = (self.c.agent_context.clone(), self.events.clone());
+                    let permit = super::actions::direct_permit(call.clone());
+                    let op_call = call.clone();
+                    let task = tokio::spawn(async move {
+                        let mut result = super::actions::execute(&services, &context, permit).await;
+                        if result.status == "success" {
+                            result.message = "I've informed the team about this and they will reach out to you to resolve it.".into();
+                            result.data = json!({});
+                            result.extra.clear();
+                        }
+                        let _ = events
+                            .send(Internal::ActionExecuted { operation, result })
+                            .await;
+                    });
+                    self.operation = Some(Operation {
+                        bank: false,
+                        id: operation,
+                        owner,
+                        call: op_call,
+                        task,
+                        result: None,
+                        delivered: false,
+                        delivery_queued: false,
+                        next_check: tokio::time::Instant::now()
+                            + Duration::from_secs_f64(self.c.engagement_ack_seconds),
+                        updates: 0,
+                        completion_revision: None,
+                    });
+                    if let Some(a) = &mut self.attempt {
+                        a.waiting_operation = Some(operation);
+                        a.task = None;
+                    }
+                    self.trace.emit(
+                        "tool_execution_start",
+                        owner,
+                        operation,
+                        json!({"auto_executed": true}),
+                    );
+                    self.transition(State::Releasing, "auto_ticket_execution");
+                    return;
+                }
                 if let Some(question) = question {
                     self.pending_action = Some(super::actions::Pending {
                         call,
