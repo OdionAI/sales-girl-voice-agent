@@ -99,6 +99,9 @@ impl Permit {
         self.call
     }
 }
+pub(crate) fn direct_permit(call: Call) -> Permit {
+    Permit { call }
+}
 impl ActionResult {
     pub(crate) fn from_body(mut body: Value) -> Self {
         let Some(object) = body.as_object_mut() else {
