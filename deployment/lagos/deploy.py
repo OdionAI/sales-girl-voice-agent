@@ -395,7 +395,8 @@ def inactivity_pilot_env(agent_ids=None):
 def deploy(release, revision, enable_hausa_research=False, momo_feedback_agent_id='',
            reply_grace_ms='0', reply_grace_agent_ids='', llm_provider='qwen',
            deepseek_model='deepseek-flash', deepseek_reasoning_effort='high',
-           deepseek_api_key='', inactivity_pilot_agent_ids=None):
+           deepseek_api_key='', inactivity_pilot_agent_ids=None,
+           balogun_number_capture_enabled=False):
     if not re.fullmatch(r'[0-9a-f]{40}', revision):
         raise ValueError('Expected a full Git commit SHA')
     if (release.parent != RELEASE_ROOT
@@ -441,6 +442,8 @@ def deploy(release, revision, enable_hausa_research=False, momo_feedback_agent_i
         updates['RVC_LAB_DEEPSEEK_API_KEY'] = ''
     if enable_hausa_research:
         updates[HAUSA_RESEARCH_KEY] = 'true'
+    if balogun_number_capture_enabled:
+        updates['RVC_LAB_BALOGUN_NUMBER_CAPTURE_ENABLED'] = 'true'
     if not momo_feedback_agent_id:
         raise RuntimeError('AICC_MOMO_FEEDBACK_AGENT_ID is required for this release')
     route_env = {
@@ -537,6 +540,7 @@ if __name__ == '__main__':
     parser.add_argument('--deepseek-model', default='deepseek-flash')
     parser.add_argument('--deepseek-reasoning-effort', default='high')
     parser.add_argument('--deepseek-api-key-stdin', action='store_true')
+    parser.add_argument('--balogun-number-capture-enabled', action='store_true')
     args = parser.parse_args()
     if args.verify_only:
         current, files = inspect_voice()
@@ -564,4 +568,5 @@ if __name__ == '__main__':
                    args.momo_feedback_agent_id, args.reply_grace_ms,
                    args.reply_grace_agent_ids, args.llm_provider,
                    args.deepseek_model, args.deepseek_reasoning_effort,
-                   deepseek_api_key, args.inactivity_pilot_agent_ids)
+                   deepseek_api_key, args.inactivity_pilot_agent_ids,
+                   balogun_number_capture_enabled=args.balogun_number_capture_enabled)
