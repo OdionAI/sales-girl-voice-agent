@@ -14,6 +14,7 @@ pub mod input_noise;
 pub mod languages;
 pub mod memory;
 pub mod outbound;
+pub mod output_noise;
 pub(crate) mod passkey;
 pub(crate) mod passkey_demo;
 pub mod platform;
