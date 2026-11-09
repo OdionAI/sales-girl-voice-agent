@@ -275,6 +275,11 @@ impl Drop for TransferCleanupWatch {
     }
 }
 const MOMO_PSB_BUSINESS_ID: &str = "f2ff0fe3d56c468890489a76a6310d4a";
+/// Business ids arrive either hyphenated (canonical UUID, e.g. from the auth
+/// scope) or bare; compare them hyphen- and case-insensitively.
+fn business_matches(a: &str, b: &str) -> bool {
+    a.trim().to_lowercase().replace('-', "") == b.trim().to_lowercase().replace('-', "")
+}
 struct Operation {
     bank: bool,
     id: u64,
@@ -3170,7 +3175,7 @@ impl Coordinator {
                 // caller for permission. Execute now and speak a message that tells
                 // them the team has been informed; never expose the ticket id/reference.
                 if call.name == "create_ticket"
-                    && self.c.agent_context.business_id.as_str() == MOMO_PSB_BUSINESS_ID
+                    && business_matches(&self.c.agent_context.business_id, MOMO_PSB_BUSINESS_ID)
                 {
                     let Some(services) = self.services.clone() else {
                         self.fail("action services unavailable".into()).await;
