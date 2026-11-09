@@ -4231,6 +4231,10 @@ async fn generate(g: Generation) -> Result<(), String> {
     let llm_p = p.clone();
     let tts_p = p.clone();
     let trace = p.trace.clone();
+    // Denoise synthesized speech for MoMo PSB only: the TTS model re-adds a
+    // faint broadband hiss on every synthesis, independent of the clone
+    // reference, so we clean the output PCM before playout.
+    let denoise_output = business_matches(&p.config.agent_context.business_id, MOMO_PSB_BUSINESS_ID);
     let token_events = events.clone();
     let g_events = events.clone();
     let producer = async move {
@@ -4358,10 +4362,31 @@ async fn generate(g: Generation) -> Result<(), String> {
         let mut samples = 0;
         let mut closed = false;
         let mut started = false;
+        let mut out_denoise = if denoise_output {
+            let d = super::output_noise::OutputDenoise::new();
+            if d.is_some() {
+                trace.emit(
+                    "tts_output_denoise_ready",
+                    turn,
+                    id,
+                    json!({"implementation":"rnnoise-24k"}),
+                );
+            }
+            d
+        } else {
+            None
+        };
         loop {
             if *auth.borrow() {
-                while let Some(pcm) = held.pop_front() {
-                    samples -= pcm.len();
+                while let Some(held_pcm) = held.pop_front() {
+                    samples -= held_pcm.len();
+                    let pcm = match out_denoise.as_mut() {
+                        Some(d) => d.process(&held_pcm),
+                        None => held_pcm,
+                    };
+                    if pcm.is_empty() {
+                        continue;
+                    }
                     playout
                         .push(id, pcm)
                         .await
@@ -4381,6 +4406,15 @@ async fn generate(g: Generation) -> Result<(), String> {
             tokio::select! {biased;
                 r=auth.changed()=>{r.map_err(|_|"attempt cancelled")?;},
                 pcm=audio_rx.recv(),if !closed&&samples<24000*12=>match pcm{Some(pcm)=>{samples+=pcm.len();held.push_back(pcm);},None=>closed=true},
+            }
+        }
+        if let Some(d) = out_denoise.as_mut() {
+            let tail = d.finish();
+            if !tail.is_empty() {
+                playout
+                    .push(id, tail)
+                    .await
+                    .map_err(|e| format!("playout {e:?}"))?;
             }
         }
         let completion = playout
