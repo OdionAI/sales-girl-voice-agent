@@ -477,7 +477,7 @@ pub fn start_with_services(
             super::conversation::Store::start(
                 svc.clone(),
                 super::conversation::Meta {
-                    caller: super::conversation::caller_from_identity(
+                    caller: super::conversation::trusted_caller(
                         svc.scope().claims(),
                         svc.scope().room(),
                     ),
