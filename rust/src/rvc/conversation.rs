@@ -95,6 +95,24 @@ pub(crate) fn caller_from_identity(value: &Value, room: &str) -> String {
         .map(|m| to_e164(m.as_str()))
         .unwrap_or_default()
 }
+/// The caller number to trust when we identify the conversation.
+///
+/// For a verified AICC inbound call the SIP `From` is authoritative: AICC has
+/// already verified it against the reservation, and it survives room-naming
+/// changes. Only fall back to the best-effort identity/room recovery when the
+/// session is not a verified SIP call. The old room parse required a double
+/// underscore (`...__<number>_`) while AICC rooms use a single one
+/// (`aicc-lara-_<number>_<token>`), so it silently produced synthetic ids and
+/// the caller's number never reached the conversation.
+pub(crate) fn trusted_caller(claims: &Value, room: &str) -> String {
+    if claims["sip_caller_verified"] == true {
+        let verified = super::sip::phone(claims["caller_number"].as_str().unwrap_or(""));
+        if !verified.is_empty() {
+            return verified;
+        }
+    }
+    caller_from_identity(claims, room)
+}
 pub(crate) fn contact_identity(
     business: &str,
     agent: &str,
@@ -720,6 +738,34 @@ mod tests {
             "+2348012345678"
         );
     }
+    #[test]
+    fn trusted_caller_prefers_the_verified_sip_from() {
+        // A verified AICC inbound call: the SIP `From` wins even though the room
+        // name (`aicc-lara-_<number>_<token>`) never matched the legacy
+        // double-underscore room pattern, which used to yield a synthetic id.
+        let verified = trusted_caller(
+            &json!({"sip_caller_verified":true,"caller_number":"07039844223"}),
+            "aicc-lara-_07039844223_GDAn6YHbnxtk",
+        );
+        assert!(verified.starts_with("+234"), "got {verified}");
+        assert!(verified.ends_with("44223"), "got {verified}");
+
+        // Not a verified SIP session: unchanged best-effort fallback.
+        assert_eq!(
+            trusted_caller(&json!({}), "room__08012345678_"),
+            caller_from_identity(&json!({}), "room__08012345678_")
+        );
+
+        // Verified flag but an unusable number: still fall back, never panic.
+        assert_eq!(
+            trusted_caller(
+                &json!({"sip_caller_verified":true,"caller_number":""}),
+                "room__08012345678_"
+            ),
+            caller_from_identity(&json!({}), "room__08012345678_")
+        );
+    }
+
     #[tokio::test]
     async fn storage_is_nonblocking_ordered_idempotent_and_uses_canonical_session() {
         let fake = Arc::new(Fake::default());
