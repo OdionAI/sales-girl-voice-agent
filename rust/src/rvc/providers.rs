@@ -513,8 +513,31 @@ impl Providers {
             }
             for (call_index, (id, name, raw)) in calls {
                 if !name.is_empty() {
-                    let arguments = serde_json::from_str(&raw)
-                        .map_err(|_| "invalid structured tool arguments")?;
+                    // A single malformed argument blob must not fail the whole
+                    // turn: doing so discarded every tool call and left the
+                    // caller in silence. Skip only the bad call, keep the
+                    // usable ones, and record why it was dropped.
+                    let trimmed = raw.trim();
+                    let arguments: serde_json::Value = if trimmed.is_empty() {
+                        json!({})
+                    } else {
+                        match serde_json::from_str(trimmed) {
+                            Ok(value) => value,
+                            Err(err) => {
+                                self.trace.emit(
+                                    "tool_call_rejected",
+                                    turn,
+                                    attempt,
+                                    json!({
+                                        "tool": name,
+                                        "error": err.to_string(),
+                                        "raw_chars": trimmed.chars().count(),
+                                    }),
+                                );
+                                continue;
+                            }
+                        }
+                    };
                     self.trace
                         .emit("tool_call_prepared", turn, attempt, json!({}));
                     tx.send(LlmEvent::Tool {
