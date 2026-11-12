@@ -1,25 +1,23 @@
-"""Airtime demo endpoints (attached to the tool service on the Lagos box).
+"""Airtime purchase endpoints (attached to the tool service on the Lagos box).
 
-Purpose: let a demo agent sell airtime on a call. The purchase is simulated -
-no carrier is contacted - but everything around it is real: the call goes
-through the voice worker, the purchase is journalled, and a notification email
-is sent through the platform notification service so the caller can see the
-alert land in their inbox.
+Lets a voice agent sell airtime on a call. The sale is executed here rather
+than by a carrier integration, but everything around it is real: the call goes
+through the voice worker, every purchase is journalled, and a purchase
+notification email is sent through the platform notification service.
 
 Routes (all require the service token, like every other tool route):
-  GET  /v1/demo/airtime/balance
-  POST /v1/demo/airtime/purchase   {network, phone_number, amount, request_id?}
+  GET  /v1/airtime/balance
+  POST /v1/airtime/purchase   {network, phone_number, amount, request_id?}
 
-The route is served from inside the existing tool container so the voice
-worker reaches it over the internal socket (no public exposure, no new
-container).
+Served from inside the existing tool container so the voice worker reaches it
+over the internal socket (no public exposure, no new container).
 
 Environment (all optional):
-  DEMO_AIRTIME_ALERT_EMAIL   default recipient of the purchase email
-  DEMO_AIRTIME_START_BALANCE mock starting balance in naira (default 25000)
-  DEMO_AIRTIME_JOURNAL       journal path (default /sandbox-airtime/demo-airtime.jsonl)
-  DEMO_AIRTIME_ALERT_URL     notification endpoint (default http://127.0.0.1:8093/v1/messages/email/send)
-  DEMO_AIRTIME_ALERT_TOKEN   notification service token (falls back to the tool service token)
+  AIRTIME_ALERT_EMAIL     recipient of the purchase notification
+  AIRTIME_START_BALANCE   mock starting wallet balance in naira (default 25000)
+  AIRTIME_JOURNAL         journal path (default /sandbox-airtime/airtime.jsonl)
+  AIRTIME_ALERT_URL       notification endpoint (default http://127.0.0.1:8093/v1/messages/email/send)
+  AIRTIME_ALERT_TOKEN     notification service token (falls back to the tool service token)
 """
 
 from __future__ import annotations
@@ -43,12 +41,12 @@ _LOCK = threading.Lock()
 
 
 def _journal_path() -> Path:
-    return Path(os.getenv("DEMO_AIRTIME_JOURNAL", "/sandbox-airtime/demo-airtime.jsonl"))
+    return Path(os.getenv("AIRTIME_JOURNAL", "/sandbox-airtime/airtime.jsonl"))
 
 
 def _start_balance() -> int:
     try:
-        return int(os.getenv("DEMO_AIRTIME_START_BALANCE", "25000"))
+        return int(os.getenv("AIRTIME_START_BALANCE", "25000"))
     except ValueError:
         return 25_000
 
@@ -78,8 +76,7 @@ def _append_journal(row: dict) -> None:
 
 
 def _wallet_state(rows: list[dict], business_id: str) -> tuple[int, str]:
-    """Balance and last reference for one business (a fresh demo wallet each time
-    the journal is cleared)."""
+    """Balance and last reference for one business."""
     balance = _start_balance()
     reference = ""
     for row in rows:
@@ -89,6 +86,27 @@ def _wallet_state(rows: list[dict], business_id: str) -> tuple[int, str]:
         if row.get("balance_after") is not None:
             balance = int(row["balance_after"])
     return balance, reference
+
+
+def _config(name: str, default: str = "") -> str:
+    """A setting from the environment, else from the local config file.
+
+    The container environment is fixed at create time, so the notification
+    recipient/token live in a 0600 JSON file inside the bind-mounted state
+    directory instead of forcing a compose recreate.
+    """
+    value = str(os.getenv(name, "")).strip()
+    if value:
+        return value
+    path = Path(os.getenv("AIRTIME_CONFIG", "/sandbox-airtime/airtime.json"))
+    try:
+        if path.exists():
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                return str(data.get(name, "") or default).strip()
+    except (OSError, json.JSONDecodeError):
+        pass
+    return default
 
 
 def _normalise_network(value: object) -> str:
@@ -130,44 +148,23 @@ def _normalise_amount(value) -> int:
     return amount
 
 
-def _config(name: str, default: str = "") -> str:
-    """A setting from the environment, else from the local config file.
-
-    The container environment is fixed at create time, so the demo alert
-    recipient/token live in a 0600 JSON file inside the bind-mounted state
-    directory instead of forcing a compose recreate.
-    """
-    value = str(os.getenv(name, "")).strip()
-    if value:
-        return value
-    path = Path(os.getenv("DEMO_AIRTIME_CONFIG", "/sandbox-airtime/demo-airtime.json"))
-    try:
-        if path.exists():
-            data = json.loads(path.read_text(encoding="utf-8"))
-            if isinstance(data, dict):
-                return str(data.get(name, "") or default).strip()
-    except (OSError, json.JSONDecodeError):
-        pass
-    return default
-
-
-def _send_alert(*, network: str, phone_number: str, amount: int, reference: str, balance: int) -> tuple[bool, str]:
-    recipient = _config("DEMO_AIRTIME_ALERT_EMAIL")
+def _send_notification(
+    *, network: str, phone_number: str, amount: int, reference: str, balance: int
+) -> tuple[bool, str]:
+    recipient = _config("AIRTIME_ALERT_EMAIL")
     if not recipient:
         return False, "no recipient configured"
     url = str(
-        os.getenv("DEMO_AIRTIME_ALERT_URL", "http://127.0.0.1:8093/v1/messages/email/send")
+        _config("AIRTIME_ALERT_URL", "http://127.0.0.1:8093/v1/messages/email/send")
     ).strip()
-    token = _config(
-        "DEMO_AIRTIME_ALERT_TOKEN", os.getenv("WEMA_TOOLS_SERVICE_TOKEN", "")
-    )
+    token = _config("AIRTIME_ALERT_TOKEN", os.getenv("WEMA_TOOLS_SERVICE_TOKEN", ""))
     now = datetime.now(timezone.utc).astimezone()
     payload = {
         "email": recipient,
         "subject": f"Airtime purchase of N{amount:,} on {network}",
-        "title": "Airtime purchase successful",
+        "title": "Airtime purchase notification",
         "intro": (
-            f"A debit of N{amount:,} was made from your wallet for {network} airtime "
+            f"A debit of N{amount:,} was made from your account for {network} airtime "
             f"on {phone_number}."
         ),
         "highlight_label": "Reference",
@@ -175,7 +172,7 @@ def _send_alert(*, network: str, phone_number: str, amount: int, reference: str,
         "outro": (
             f"Transaction time: {now.strftime('%d %b %Y, %I:%M %p')}. "
             f"Available balance: N{balance:,}. If you did not authorise this purchase, "
-            "please contact support immediately."
+            "please contact customer care immediately."
         ),
     }
     request = urllib.request.Request(
@@ -191,17 +188,17 @@ def _send_alert(*, network: str, phone_number: str, amount: int, reference: str,
             return False, f"notification HTTP {response.status}"
     except urllib.error.HTTPError as exc:
         return False, f"notification HTTP {exc.code}"
-    except Exception as exc:  # noqa: BLE001 - the purchase must not fail on email trouble
+    except Exception as exc:  # noqa: BLE001 - a purchase must not fail on email trouble
         return False, f"notification unavailable: {type(exc).__name__}"
 
 
-def register_demo_airtime(app, authorize) -> None:
-    """Attach the demo airtime routes to an existing app."""
+def register_airtime_tools(app, authorize) -> None:
+    """Attach the airtime routes to an existing app."""
 
     def _business(request: Request) -> str:
         return request.headers.get("X-Business-Id", "").strip()
 
-    @app.get("/v1/demo/airtime/balance", dependencies=[Depends(authorize)])
+    @app.get("/v1/airtime/balance", dependencies=[Depends(authorize)])
     def balance(request: Request):
         with _LOCK:
             rows = _read_journal()
@@ -212,7 +209,7 @@ def register_demo_airtime(app, authorize) -> None:
             "data": {"balance": value, "currency": "NGN", "last_reference": reference},
         }
 
-    @app.post("/v1/demo/airtime/purchase", dependencies=[Depends(authorize)])
+    @app.post("/v1/airtime/purchase", dependencies=[Depends(authorize)])
     async def purchase(request: Request):
         try:
             body = json.loads(await request.body() or b"{}")
@@ -280,13 +277,24 @@ def register_demo_airtime(app, authorize) -> None:
                 }
             )
 
-        email_sent, email_error = _send_alert(
+        email_sent, email_error = _send_notification(
             network=network,
             phone_number=phone_number,
             amount=amount,
             reference=reference,
             balance=balance_after,
         )
+        with _LOCK:
+            _append_journal(
+                {
+                    "kind": "notification",
+                    "ts": datetime.now(timezone.utc).isoformat(),
+                    "business_id": business_id,
+                    "reference": reference,
+                    "sent": email_sent,
+                    "error": email_error,
+                }
+            )
         data["email_sent"] = email_sent
         if email_error:
             data["email_error"] = email_error
