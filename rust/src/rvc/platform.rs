@@ -422,6 +422,64 @@ impl Services {
         }
         serde_json::from_slice(&bytes).map_err(|_| "invalid service response".into())
     }
+    /// POSTs a caller-scoped payload to an operator-configured tool endpoint
+    /// (an `agent_tools` row carrying an absolute http(s) URL). Only used for
+    /// explicitly configured tools such as the airtime demo: the URL and
+    /// headers come from the agent's own tool configuration, never from model
+    /// arguments.
+    pub(crate) async fn configured_post(
+        &self,
+        url: &str,
+        headers: Option<&serde_json::Map<String, Value>>,
+        body: Value,
+    ) -> Result<Value, String> {
+        let parsed = reqwest::Url::parse(url.trim()).map_err(|_| "invalid tool endpoint")?;
+        if !matches!(parsed.scheme(), "http" | "https") {
+            return Err("invalid tool endpoint".into());
+        }
+        let mut request = self
+            .http
+            .post(parsed)
+            .header("X-Service-Name", &self.config.client_id)
+            .header("X-Business-Id", self.scope.business_id())
+            .header("X-Agent-Id", self.scope.agent_id())
+            .header("X-End-User-Id", self.scope.end_user_id())
+            .header("X-Session-Id", self.scope.room())
+            .timeout(Duration::from_secs_f64(self.config.action_timeout_seconds))
+            .json(&body);
+        if let Some(headers) = headers {
+            for (name, value) in headers {
+                if let Some(value) = value.as_str() {
+                    let Ok(name) = reqwest::header::HeaderName::from_bytes(name.as_bytes()) else {
+                        return Err("invalid tool header".into());
+                    };
+                    let Ok(value) = reqwest::header::HeaderValue::from_str(value) else {
+                        return Err("invalid tool header".into());
+                    };
+                    request = request.header(name, value);
+                }
+            }
+        }
+        let mut response = request
+            .send()
+            .await
+            .map_err(|_| "service transport unavailable")?;
+        if !response.status().is_success() {
+            return Err(format!("service HTTP {}", response.status().as_u16()));
+        }
+        let mut bytes = Vec::new();
+        while let Some(chunk) = response
+            .chunk()
+            .await
+            .map_err(|_| "service body interrupted")?
+        {
+            if bytes.len() + chunk.len() > 2 * 1024 * 1024 {
+                return Err("service response exceeds bound".into());
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        serde_json::from_slice(&bytes).map_err(|_| "invalid service response".into())
+    }
     pub async fn load_agent(&self) -> Result<AgentContext, String> {
         self.trace.emit("agent_config_load_start", 0, 0, json!({}));
         let body = self
