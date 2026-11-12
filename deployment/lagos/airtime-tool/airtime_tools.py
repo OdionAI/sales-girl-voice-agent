@@ -248,8 +248,9 @@ def register_airtime_tools(app, authorize) -> None:
             balance_after = value - amount
             reference = f"AIR-{secrets.token_hex(3).upper()}"
             message = (
-                f"{amount} naira of {network} airtime is now on {phone_number}. "
-                f"Reference {reference}. Your balance is {balance_after} naira."
+                f"That's done — {amount} naira of {network} airtime has been sent. "
+                "You should receive the notification shortly. "
+                "Is there anything else I can help you with?"
             )
             data = {
                 "reference": reference,

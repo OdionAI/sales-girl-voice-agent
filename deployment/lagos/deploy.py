@@ -44,7 +44,12 @@ LAGOS_ASR_ENV = {
         'ccc440c5-452d-4690-abc0-61758c11cebd '
         'ccc440c5452d4690abc061758c11cebd '
         'f2ff0fe3-d56c-4688-9048-9a76a6310d4a '
-        'f2ff0fe3d56c468890489a76a6310d4a'
+        'f2ff0fe3d56c468890489a76a6310d4a '
+        # Zuri Bank airtime agent: digit + network vocabulary hint on the chat final.
+        'dbcdf2c4-b53d-4ad9-a8f1-8d65ae0811a6 '
+        'dbcdf2c4b53d4ad9a8f18d65ae0811a6 '
+        '9757fc1a-8785-4991-9744-0234d94f1d22 '
+        '9757fc1a8785499197440234d94f1d22'
     ),
 }
 LEADWAY_CALLER_ROUTES = {
