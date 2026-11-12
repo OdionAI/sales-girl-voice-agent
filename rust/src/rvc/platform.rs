@@ -260,6 +260,7 @@ pub(crate) fn resolve_call(
     super::profiles::for_inactivity_pilot(&mut config, &context.agent_id, browser, sip);
     config.agent_context = context;
     super::profiles::apply_stt_scope(&mut config);
+    super::profiles::apply_agent_dialogue_limits(&mut config);
     config.validate()?;
     Ok(PreparedCall {
         config,

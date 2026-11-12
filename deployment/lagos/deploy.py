@@ -414,6 +414,14 @@ def deploy(release, revision, enable_hausa_research=False, momo_feedback_agent_i
     # Lagos ASR is shared by the voice worker. Reassert Qwen realtime + batch
     # endpoints each release so stale Whisper overrides cannot persist.
     updates = dict(LAGOS_ASR_ENV)
+    # A caller reading a phone number out slowly pauses longer than the 150 ms
+    # stack default, which closes the turn mid-number and delivers fragments.
+    # Only the listed agents get the longer end-of-utterance pause.
+    updates['RVC_LAB_END_SILENCE_AGENT_IDS'] = (
+        '9757fc1a-8785-4991-9744-0234d94f1d22 '
+        '9757fc1a8785499197440234d94f1d22'
+    )
+    updates['RVC_LAB_END_SILENCE_AGENT_MS'] = '600'
     updates['ODION_CHINEDU_IGBO'] = '1'
     updates['ODION_IGBO_QWEN_PHONE_CANDIDATE'] = '1'
     updates['ODION_SANFRID_PIDGIN'] = '1'

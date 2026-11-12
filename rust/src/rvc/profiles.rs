@@ -158,6 +158,25 @@ pub fn apply_stt_scope(config: &mut Config) {
         config.stt_context.clear();
     }
 }
+/// Per-agent end-of-utterance silence. The stack default
+/// (`RVC_LAB_END_SILENCE_MS`) is tuned for the bank agents, where a fast reply
+/// matters more than letting the caller pause mid-detail. An agent listed here
+/// waits longer before closing the turn, so a phone number read out slowly
+/// stays one utterance instead of arriving as fragments.
+pub fn apply_agent_dialogue_limits(config: &mut Config) {
+    let agent_id = config.agent_context.agent_id.trim();
+    if agent_id.is_empty() || config.end_silence_agent_ms <= 0.0 || config.end_silence_agent_ids.is_empty() {
+        return;
+    }
+    if config
+        .end_silence_agent_ids
+        .iter()
+        .any(|value| value.trim() == agent_id)
+    {
+        config.end_silence_ms = config.end_silence_agent_ms;
+    }
+}
+
 pub fn end_call_definition() -> Value {
     serde_json::json!({"type":"function","function":{"name":"end_call","description":"End the live phone call only when the caller explicitly says goodbye, asks to end or hang up, says there is nothing else, or confirms the conversation is finished. The application speaks the final goodbye before sending SIP BYE. Do not use this for a mere thank-you while the conversation may continue.","parameters":{"type":"object","properties":{},"additionalProperties":false}}})
 }

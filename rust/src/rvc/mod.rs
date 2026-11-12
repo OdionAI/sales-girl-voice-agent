@@ -60,6 +60,12 @@ pub struct Config {
     pub transport: String,
     #[serde(default)]
     pub reply_grace_agent_ids: Vec<String>,
+    /// Agents that get their own end-of-utterance silence (see
+    /// `profiles::apply_agent_dialogue_limits`). Empty = the stack default.
+    #[serde(default)]
+    pub end_silence_agent_ids: Vec<String>,
+    #[serde(default)]
+    pub end_silence_agent_ms: f64,
     #[serde(default)]
     pub reply_grace_ms: f64,
     #[serde(default = "profiles::default_voice_allowlist")]
