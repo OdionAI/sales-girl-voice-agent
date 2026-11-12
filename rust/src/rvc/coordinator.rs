@@ -275,6 +275,23 @@ impl Drop for TransferCleanupWatch {
     }
 }
 const MOMO_PSB_BUSINESS_ID: &str = "f2ff0fe3d56c468890489a76a6310d4a";
+/// Businesses whose synthesized speech is passed through the output denoise
+/// stage. MoMo PSB was the original case; the Wema-side banking tenants hit the
+/// same TTS hiss/onset artefact, so they are included too. Override with
+/// `RVC_OUTPUT_DENOISE_BUSINESS_IDS` (comma separated ids, or `*` for all).
+const OUTPUT_DENOISE_BUSINESS_IDS: &str = "f2ff0fe3d56c468890489a76a6310d4a,\
+a0c8cda23b464ee0898c48f9a4d3a444,\
+fb6132f4f63f4ec7bfa5bc31e06e4242,\
+e723015dfc1b4c5ba4e0c78581272cb6,\
+17bfa91a790345da86a47b5ef4de158c";
+fn output_denoise_enabled(business_id: &str) -> bool {
+    let list = std::env::var("RVC_OUTPUT_DENOISE_BUSINESS_IDS")
+        .unwrap_or_else(|_| OUTPUT_DENOISE_BUSINESS_IDS.to_string());
+    list.split(',')
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+        .any(|entry| entry == "*" || business_matches(business_id, entry))
+}
 /// Business ids arrive either hyphenated (canonical UUID, e.g. from the auth
 /// scope) or bare; compare them hyphen- and case-insensitively.
 fn business_matches(a: &str, b: &str) -> bool {
@@ -4231,10 +4248,11 @@ async fn generate(g: Generation) -> Result<(), String> {
     let llm_p = p.clone();
     let tts_p = p.clone();
     let trace = p.trace.clone();
-    // Denoise synthesized speech for MoMo PSB only: the TTS model re-adds a
-    // faint broadband hiss on every synthesis, independent of the clone
-    // reference, so we clean the output PCM before playout.
-    let denoise_output = business_matches(&p.config.agent_context.business_id, MOMO_PSB_BUSINESS_ID);
+    // Denoise synthesized speech for the businesses that hear the TTS model's
+    // own broadband hiss and onset artefact (MoMo PSB originally, now the
+    // Wema-side banking tenants too). Config-driven via
+    // RVC_OUTPUT_DENOISE_BUSINESS_IDS so a new tenant needs no code change.
+    let denoise_output = output_denoise_enabled(&p.config.agent_context.business_id);
     let token_events = events.clone();
     let g_events = events.clone();
     let producer = async move {
