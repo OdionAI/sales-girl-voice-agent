@@ -417,8 +417,9 @@ def deploy(release, revision, enable_hausa_research=False, momo_feedback_agent_i
     # A caller reading a phone number out slowly pauses longer than the 150 ms
     # stack default, which closes the turn mid-number and delivers fragments.
     # Only the listed agents get the longer end-of-utterance pause.
+    # Comma-separated: the worker's id-list parser splits on commas only.
     updates['RVC_LAB_END_SILENCE_AGENT_IDS'] = (
-        '9757fc1a-8785-4991-9744-0234d94f1d22 '
+        '9757fc1a-8785-4991-9744-0234d94f1d22,'
         '9757fc1a8785499197440234d94f1d22'
     )
     updates['RVC_LAB_END_SILENCE_AGENT_MS'] = '600'
