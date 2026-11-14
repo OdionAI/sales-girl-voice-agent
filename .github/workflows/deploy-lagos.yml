@@ -1,9 +1,7 @@
 name: Deploy Lagos voice worker
 
 on:
-  workflow_run:
-    workflows: [Voice Agent CI]
-    types: [completed]
+  push:
     branches: [main]
   workflow_dispatch:
     inputs:
@@ -25,15 +23,15 @@ jobs:
     uses: ./.github/workflows/rust-unit-tests.yml
   lagos:
     needs: rust-tests
-    if: always() && !cancelled() && ((github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main' && !contains(github.event.workflow_run.head_commit.message, '[skip deploy]')) || (github.event_name == 'workflow_dispatch' && inputs.verify_only && needs.rust-tests.result == 'skipped') || (github.event_name == 'workflow_dispatch' && !inputs.verify_only && needs.rust-tests.result == 'success'))
+    if: always() && !cancelled() && ((github.event_name == 'push' && github.ref == 'refs/heads/main' && !contains(github.event.head_commit.message, '[skip deploy]')) || (github.event_name == 'workflow_dispatch' && inputs.verify_only && needs.rust-tests.result == 'skipped') || (github.event_name == 'workflow_dispatch' && !inputs.verify_only && needs.rust-tests.result == 'success'))
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
-      RELEASE_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+      RELEASE_SHA: ${{ github.sha }}
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          ref: ${{ github.sha }}
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
@@ -58,7 +56,7 @@ jobs:
           ssh-keygen -y -f ~/.ssh/lagos_deploy_key >/dev/null
           ssh lagos-app python3 - --verify-only < deployment/lagos/deploy.py
       - name: Build and deploy exact Git revision
-        if: (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success') || (github.event_name == 'workflow_dispatch' && !inputs.verify_only)
+        if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && !inputs.verify_only)
         env:
           ENABLE_HAUSA_RESEARCH: ${{ vars.ENABLE_HAUSA_TWB_VOICES || 'false' }}
           MOMO_FEEDBACK_AGENT_ID: ${{ vars.AICC_MOMO_FEEDBACK_AGENT_ID }}
