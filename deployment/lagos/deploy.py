@@ -44,7 +44,12 @@ LAGOS_ASR_ENV = {
         'ccc440c5-452d-4690-abc0-61758c11cebd '
         'ccc440c5452d4690abc061758c11cebd '
         'f2ff0fe3-d56c-4688-9048-9a76a6310d4a '
-        'f2ff0fe3d56c468890489a76a6310d4a'
+        'f2ff0fe3d56c468890489a76a6310d4a '
+        # Zuri Bank airtime agent: digit + network vocabulary hint on the chat final.
+        'dbcdf2c4-b53d-4ad9-a8f1-8d65ae0811a6 '
+        'dbcdf2c4b53d4ad9a8f18d65ae0811a6 '
+        '9757fc1a-8785-4991-9744-0234d94f1d22 '
+        '9757fc1a8785499197440234d94f1d22'
     ),
 }
 LEADWAY_CALLER_ROUTES = {
@@ -409,6 +414,15 @@ def deploy(release, revision, enable_hausa_research=False, momo_feedback_agent_i
     # Lagos ASR is shared by the voice worker. Reassert Qwen realtime + batch
     # endpoints each release so stale Whisper overrides cannot persist.
     updates = dict(LAGOS_ASR_ENV)
+    # A caller reading a phone number out slowly pauses longer than the 150 ms
+    # stack default, which closes the turn mid-number and delivers fragments.
+    # Only the listed agents get the longer end-of-utterance pause.
+    # Comma-separated: the worker's id-list parser splits on commas only.
+    updates['RVC_LAB_END_SILENCE_AGENT_IDS'] = (
+        '9757fc1a-8785-4991-9744-0234d94f1d22,'
+        '9757fc1a8785499197440234d94f1d22'
+    )
+    updates['RVC_LAB_END_SILENCE_AGENT_MS'] = '600'
     updates['ODION_CHINEDU_IGBO'] = '1'
     updates['ODION_IGBO_QWEN_PHONE_CANDIDATE'] = '1'
     updates['ODION_SANFRID_PIDGIN'] = '1'
