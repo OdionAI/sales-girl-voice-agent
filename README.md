@@ -104,6 +104,12 @@ playout drains.
 
 ### Banking and passkey journey diagnostics
 
+For the current SAW test, the worker temporarily bypasses voice verification
+only for Agent Config ID `f90e2db3-6e12-4b4f-94fa-905b83a2adfd` (public ID
+`agt_73099afb71`). The trace reports `wema_saw_test_override` when a banking
+request reaches the authorization gate. Remove this override after the signed
+public session policy is reconciled with the agent's saved setting.
+
 The native RVC worker writes one append-only JSONL trace per session under
 `/app/latency_lab/artifacts/traces`. Banking events share the session-based
 `journey_id` and the bank `request_id` (also sent as `X-Request-Id`) so a

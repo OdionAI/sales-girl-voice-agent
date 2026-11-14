@@ -33,6 +33,10 @@ const AUTH_FIELDS: &[&str] = &[
 ];
 const AUDIO_SAMPLES: usize = 8 * 16000;
 const MIN_SAMPLES: usize = 19200;
+// Temporary Wema SAW test policy. The saved agent setting is false, but the
+// public session currently arrives with voice_auth_required=true.
+const WEMA_SAW_TEST_AGENT_IDS: &[&str] =
+    &["f90e2db3-6e12-4b4f-94fa-905b83a2adfd", "agt_73099afb71"];
 pub(crate) type EventSink = Arc<dyn Fn(Value) + Send + Sync>;
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(default)]
@@ -252,6 +256,7 @@ struct Inner {
     records: Vec<Record>,
     http: reqwest::Client,
     voice_required: bool,
+    voice_policy_reason: &'static str,
     device_required: std::sync::atomic::AtomicBool,
     voice: Mutex<VoiceState>,
     check: AsyncMutex<()>,
@@ -313,8 +318,15 @@ impl Banking {
         {
             return Err("banking context scope mismatch".into());
         }
-        let voice_required =
-            identity.claims()["voice_auth_required"] != false && !config.voice_auth_disabled;
+        let saw_test_override = WEMA_SAW_TEST_AGENT_IDS.contains(&context.agent_id.as_str());
+        let voice_required = identity.claims()["voice_auth_required"] != false
+            && !config.voice_auth_disabled
+            && !saw_test_override;
+        let voice_policy_reason = if saw_test_override {
+            "wema_saw_test_override"
+        } else {
+            "policy_disabled_for_signed_session"
+        };
         let records = records(&context);
         let http = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
@@ -329,6 +341,7 @@ impl Banking {
                 records,
                 http,
                 voice_required,
+                voice_policy_reason,
                 device_required: std::sync::atomic::AtomicBool::new(false),
                 voice: Default::default(),
                 check: Default::default(),
@@ -1083,7 +1096,7 @@ async fn check_session(inner: &Inner, generation: u64, clip: &[i16]) {
 }
 async fn authorize(inner: &Inner, request_id: &str) -> bool {
     if !inner.voice_required {
-        inner.trace.emit("banking_authorization_result", 0, 0, json!({"journey_id":inner.session_id,"request_id":request_id,"stage":"voice_authorization","status":"not_required","reason_code":"policy_disabled_for_signed_session"}));
+        inner.trace.emit("banking_authorization_result", 0, 0, json!({"journey_id":inner.session_id,"request_id":request_id,"stage":"voice_authorization","status":"not_required","reason_code":inner.voice_policy_reason}));
         return true;
     }
     let Some((generation, clip)) =
