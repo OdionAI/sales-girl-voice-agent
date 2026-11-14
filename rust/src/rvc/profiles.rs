@@ -176,7 +176,84 @@ pub fn apply_agent_dialogue_limits(config: &mut Config) {
         config.end_silence_ms = config.end_silence_agent_ms;
     }
 }
-
+pub fn phone_number_capture_enabled(config: &Config) -> bool {
+    let agent_id = config.agent_context.agent_id.trim();
+    !agent_id.is_empty()
+        && config
+            .phone_number_capture_agent_ids
+            .iter()
+            .any(|id| id.trim() == agent_id)
+}
+pub fn phone_number_capture_silence_ms(config: &Config, waiting: bool) -> f64 {
+    if waiting && phone_number_capture_enabled(config) {
+        config
+            .end_silence_ms
+            .max(config.phone_number_capture_end_silence_ms)
+    } else {
+        config.end_silence_ms
+    }
+}
+pub fn asks_for_phone_number(text: &str) -> bool {
+    let normalized = text.to_lowercase();
+    let asks = [
+        "what is",
+        "what's",
+        "what number",
+        "which",
+        "please provide",
+        "please share",
+        "tell me",
+        "may i have",
+        "could i have",
+        "can i get",
+        "could i get",
+        "can you provide",
+    ];
+    let number_fields = [
+        "phone number",
+        "mobile number",
+        "cell number",
+        "recipient number",
+        "recipient's number",
+        "beneficiary number",
+        "beneficiary's number",
+    ];
+    let ask_phrase = asks.iter().any(|phrase| normalized.contains(phrase));
+    let number_field = number_fields
+        .iter()
+        .any(|phrase| normalized.contains(phrase));
+    let number_to_use = [
+        "number should i use",
+        "number can i use",
+        "number may i use",
+        "number could i use",
+        "digits should i use",
+        "digits can i use",
+        "digits may i use",
+        "digits could i use",
+    ]
+    .iter()
+    .any(|phrase| normalized.contains(phrase));
+    (ask_phrase && number_field) || number_to_use
+}
+pub fn has_complete_phone_number(text: &str) -> bool {
+    let digit_words = [
+        "zero", "oh", "o", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine",
+    ];
+    let count: usize = text
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .map(|part| {
+            if part.chars().all(|c| c.is_ascii_digit()) {
+                part.len()
+            } else if digit_words.contains(&part.to_lowercase().as_str()) {
+                1
+            } else {
+                0
+            }
+        })
+        .sum();
+    count >= 7
+}
 pub fn end_call_definition() -> Value {
     serde_json::json!({"type":"function","function":{"name":"end_call","description":"End the live phone call only when the caller explicitly says goodbye, asks to end or hang up, says there is nothing else, or confirms the conversation is finished. The application speaks the final goodbye before sending SIP BYE. Do not use this for a mere thank-you while the conversation may continue.","parameters":{"type":"object","properties":{},"additionalProperties":false}}})
 }
@@ -384,6 +461,36 @@ mod resolved_surface_tests {
     use super::*;
     fn config() -> Config {
         serde_json::from_str(include_str!("../../fixtures/reference-config.json")).unwrap()
+    }
+    #[test]
+    fn phone_number_capture_extends_only_the_selected_wema_agent_while_waiting() {
+        let mut c = config();
+        c.end_silence_ms = 400.0;
+        c.phone_number_capture_agent_ids = vec!["wema-agent".into()];
+        c.phone_number_capture_end_silence_ms = 900.0;
+        c.agent_context.agent_id = "wema-agent".into();
+        assert_eq!(phone_number_capture_silence_ms(&c, false), 400.0);
+        assert_eq!(phone_number_capture_silence_ms(&c, true), 900.0);
+        c.agent_context.agent_id = "other-agent".into();
+        assert_eq!(phone_number_capture_silence_ms(&c, true), 400.0);
+    }
+    #[test]
+    fn phone_capture_question_and_complete_number_detection_are_bounded() {
+        assert!(asks_for_phone_number(
+            "Please provide the recipient phone number."
+        ));
+        assert!(asks_for_phone_number(
+            "What is the beneficiary's mobile number?"
+        ));
+        assert!(asks_for_phone_number(
+            "What number should I use for the recipient?"
+        ));
+        assert!(!asks_for_phone_number("Your phone number was updated."));
+        assert!(!has_complete_phone_number("zero eight one four"));
+        assert!(has_complete_phone_number(
+            "zero eight one four six five eight two one zero"
+        ));
+        assert!(has_complete_phone_number("0814658210"));
     }
     #[test]
     fn sip_yoruba_agent_uses_one_explicit_named_opening() {

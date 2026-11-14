@@ -105,6 +105,9 @@ class EngagementTests(unittest.IsolatedAsyncioTestCase):
         self.pipe.phone_number_capture_turns_remaining = 2
         self.assertEqual(self.pipe._phone_capture_silence_ms(), 900)
         self.pipe._consume_phone_number_capture_turn("zero eight one four")
+        self.assertTrue(self.pipe.waiting_for_phone_number)
+        self.assertEqual(self.pipe._phone_capture_silence_ms(), 900)
+        self.pipe._consume_phone_number_capture_turn("six five eight two one zero")
         self.assertFalse(self.pipe.waiting_for_phone_number)
         self.assertEqual(self.pipe._phone_capture_silence_ms(), 400)
 
