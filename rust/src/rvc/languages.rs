@@ -561,6 +561,25 @@ mod tests {
         serde_json::from_str(include_str!("../../fixtures/reference-config.json")).unwrap()
     }
     #[test]
+    fn swahili_profile_uses_batch_buzz_and_bookbot_without_realtime() {
+        let mut c = config();
+        let agent = AgentContext {
+            tts_language_hint: "Kiswahili".into(),
+            ..Default::default()
+        };
+        apply(&mut c, &agent, &serde_json::json!({})).unwrap();
+        assert_eq!(c.tts_language, "Swahili");
+        assert_eq!(c.tts_model, "bookbot/vits-base-sw-KE-OpenBible");
+        assert!(c.tts_url.ends_with("/tts-swahili-vits/v1/audio/speech"));
+        assert_eq!(c.stt_model, "BuzzASR/swahili");
+        assert!(c.stt_ws_url.is_empty());
+        assert!(c
+            .stt_batch_url
+            .ends_with("/asr-swahili-buzz/v1/audio/transcriptions"));
+        assert!(c.max_utterance_seconds <= 29.0);
+        c.validate().unwrap();
+    }
+    #[test]
     fn native_yoruba_uses_stable_model_alias_for_saved_balogun() {
         let mut config = config();
         let context = AgentContext {
