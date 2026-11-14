@@ -221,6 +221,9 @@ Current stable contract:
   when the base host is a Runpod load-balancer URL
 - LiveKit room recording is the supported conversation-audio capture path when
   enabled for the environment
+- the Egress audio codec must match `LIVEKIT_RECORDING_FORMAT` (`mp3` uses MP3,
+  `mp4` uses AAC, and `ogg` uses Opus); keep capture environment-wide unless a
+  future product requirement adds agent-specific recording scope
 - the recording target can be GCS or S3-compatible object storage such as
   Huawei OBS, depending on the recording env configuration
 - new recordings should prefer a browser-friendly format such as `mp3` so
