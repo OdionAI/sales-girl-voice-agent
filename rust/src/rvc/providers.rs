@@ -674,6 +674,19 @@ impl Providers {
         attempt: u64,
         tx: &mpsc::Sender<Vec<i16>>,
     ) -> Result<(), String> {
+        for part in super::languages::split_text(text, 240)? {
+            self.tts_swahili_segment(part.trim(), turn, attempt, tx)
+                .await?;
+        }
+        Ok(())
+    }
+    async fn tts_swahili_segment(
+        &self,
+        text: &str,
+        turn: u64,
+        attempt: u64,
+        tx: &mpsc::Sender<Vec<i16>>,
+    ) -> Result<(), String> {
         self.trace.emit(
             "tts_request_start",
             turn,
