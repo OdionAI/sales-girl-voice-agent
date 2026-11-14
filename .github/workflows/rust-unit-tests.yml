@@ -35,9 +35,7 @@ jobs:
             /usr/local/cargo/registry
             /usr/local/cargo/git
             rust/target
-          key: lagos-rust-1.99-clang21-${{ runner.os }}-${{ hashFiles('rust/Cargo.lock') }}-${{ github.sha }}
-          restore-keys: |
-            lagos-rust-1.99-clang21-${{ runner.os }}-${{ hashFiles('rust/Cargo.lock') }}-
+          key: lagos-rust-1.99-clang21-${{ runner.os }}-${{ hashFiles('rust/Cargo.lock') }}
       - uses: actions/cache@v4
         with:
           path: /opt/rnnoise/rnnoise_data-0a8755f8e2d834eff6a54714ecc7d75f9932e845df35f8b59bc52a7cfe6e8b37.tar.gz
