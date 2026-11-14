@@ -232,6 +232,8 @@ class ConversationPipeline:
         self.turn_number = 0
         self.speech_ms = 0.0
         self.silence_ms = 0.0
+        self.waiting_for_phone_number = False
+        self.phone_number_capture_turns_remaining = 0
         self.last_partial = ""
         self.final_text = ""
         self.attempt: Attempt | None = None
@@ -272,6 +274,49 @@ class ConversationPipeline:
             return
         self._compaction_task = asyncio.create_task(
             self.memory.compact(self.llm), name=f"{self.trace.session_id}-memory"
+        )
+
+    def _phone_number_capture_enabled(self) -> bool:
+        return bool(
+            self.agent_context.agent_id
+            and self.agent_context.agent_id in self.config.phone_number_capture_agent_ids
+        )
+
+    @staticmethod
+    def _asks_for_phone_number(text: str) -> bool:
+        text = " ".join(str(text or "").lower().split())
+        return bool(re.search(
+            r"\b(phone|mobile|cell)\s+(number|no\.?|line)\b|"
+            r"\b(number|digits)\s+(should|can|may|could)\s+i\s+use\b|"
+            r"\bwhat(?:'s| is)\s+(?:the\s+)?(?:recipient|beneficiary|other person|their)\s+number\b",
+            text,
+        ))
+
+    def _phone_capture_silence_ms(self) -> float:
+        if self.waiting_for_phone_number and self._phone_number_capture_enabled():
+            return max(self.config.end_silence_ms, self.config.phone_number_capture_end_silence_ms)
+        return self.config.end_silence_ms
+
+    def _consume_phone_number_capture_turn(self, text: str) -> None:
+        if not self.waiting_for_phone_number or not self._phone_number_capture_enabled():
+            return
+        # Keep the extended window through fragmented number turns. A complete
+        # digit run ends capture immediately; otherwise cap it at four turns.
+        digit_tokens = re.findall(
+            r"\d|\b(?:zero|one|two|three|four|five|six|seven|eight|nine|oh|o)\b",
+            str(text or ""), re.IGNORECASE,
+        )
+        complete_number = len(digit_tokens) >= 7
+        self.phone_number_capture_turns_remaining -= 1
+        if complete_number or self.phone_number_capture_turns_remaining <= 0:
+            self.waiting_for_phone_number = False
+            self.phone_number_capture_turns_remaining = 0
+        self.trace.record(
+            "phone_number_capture_state",
+            turn_id=self.turn_id,
+            reason="caller_turn_received",
+            active=self.waiting_for_phone_number,
+            complete_number_detected=complete_number,
         )
 
     async def _memory_loop(self) -> None:
@@ -719,7 +764,7 @@ class ConversationPipeline:
                     client_network_ms=client_network_ms,
                 )
             self.silence_ms += duration_ms
-            if self.silence_ms >= self.config.end_silence_ms:
+            if self.silence_ms >= self._phone_capture_silence_ms():
                 await self._speech_ended()
         elif self.state == "idle":
             self.speech_ms = 0.0
@@ -845,6 +890,8 @@ class ConversationPipeline:
             turn_id=self.turn_id,
             reason="server_energy_vad_silence_window_elapsed",
             silence_ms=round(self.silence_ms, 2),
+            required_silence_ms=self._phone_capture_silence_ms(),
+            phone_number_capture=self.waiting_for_phone_number,
         )
         self._transition("awaiting_final", "application_turn_owner_requested_stt_final")
         self.speech_ms = 0.0
@@ -1123,6 +1170,7 @@ class ConversationPipeline:
             self.final_timeout_task.cancel()
             self.final_timeout_task = None
         self.final_text = text
+        self._consume_phone_number_capture_turn(text)
         self.engagement.caller_final(text)
         # Retain input before any response decision, including when the model is
         # slow or the caller asks us to listen without speaking.
@@ -2919,6 +2967,20 @@ class ConversationPipeline:
             self.memory.user(turn_id, self.final_text or attempt.hypothesis)
         self.memory.answer(turn_id, attempt.answer.strip(),
                            reasoning_content=attempt.reasoning_content)
+        if (self._phone_number_capture_enabled()
+                and self._asks_for_phone_number(attempt.answer)):
+            self.waiting_for_phone_number = True
+            self.phone_number_capture_turns_remaining = 4
+            self.trace.record(
+                "phone_number_capture_state",
+                turn_id=turn_id,
+                reason="assistant_requested_phone_number",
+                active=True,
+                end_silence_ms=max(
+                    self.config.end_silence_ms,
+                    self.config.phone_number_capture_end_silence_ms,
+                ),
+            )
         self.conversations.spawn(self.conversations.add_assistant(attempt.answer.strip(), turn_id=turn_id))
         await self.send({"type": "final_assistant_answer", "content": attempt.answer.strip()})
 
