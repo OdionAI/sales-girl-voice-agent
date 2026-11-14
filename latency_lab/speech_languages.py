@@ -12,7 +12,7 @@ from .providers import is_wema_voice
 LANGUAGES = {
     "yo": {"name": "Yoruba", "model": "coqui-yoruba-vits", "voice": "balogun",
            "url": "http://102.88.137.124:8080/tts-yoruba/v1/audio/speech",
-           "opening": "Ẹ káàbọ̀. Báwo ni mo ṣe lè ràn yín lọ́wọ́ lónìí?",
+           "opening": "Ẹ káàbọ̀ sí MoMo. Jọ̀wọ́, ẹ sọ orúkọ yín fún mi.",
            "goodbye": "Ẹ ṣé gan-an. Ó dàbọ̀.",
            "inactivity_checkin": "Ṣé ẹ ṣì wà níbẹ̀? Ṣé mo tún lè ràn yín lọ́wọ́?",
            "inactivity_goodbye": "Mi ò gbọ́ ìdáhùn yín, nítorí náà màá parí ìpè yìí báyìí. Ó dàbọ̀.",

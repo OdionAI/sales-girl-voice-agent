@@ -494,7 +494,7 @@ mod resolved_surface_tests {
         );
         assert_eq!(
             opening_text(&c, &AgentContext::default()),
-            "Ẹ káàbọ̀. Báwo ni mo ṣe lè ràn yín lọ́wọ́ lónìí?"
+            "Ẹ káàbọ̀ sí MoMo. Jọ̀wọ́, ẹ sọ orúkọ yín fún mi."
         );
     }
     #[test]
