@@ -97,7 +97,7 @@ class EngagementTests(unittest.IsolatedAsyncioTestCase):
         self.pipe.config = replace(
             self.pipe.config,
             end_silence_ms=400,
-            phone_number_capture_end_silence_ms=900,
+            phone_number_capture_end_silence_ms=1100,
             phone_number_capture_agent_ids=(agent_id,),
         )
         self.pipe.agent_context = type("Agent", (), {"agent_id": agent_id})()

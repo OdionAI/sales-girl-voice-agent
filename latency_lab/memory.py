@@ -43,6 +43,17 @@ never leave the caller in silence. If the caller goes quiet for a few seconds, y
 may add one short, natural nudge rather than staying silent.
 """
 
+PHONE_NUMBER_CAPTURE_RULES = """
+
+WEMA PHONE NUMBER CAPTURE:
+When asking this caller for a phone number, collect all 11 digits before acting.
+Treat a short pause as part of the number. If the caller's number sounds incomplete
+or unclear, do not call a purchase tool and do not guess missing digits. Say
+naturally: “I may have missed a few digits. Could you say the number again a little
+faster so I can get it right?”
+Then read the complete number back digit by digit and wait for the caller to confirm.
+"""
+
 SUMMARY_PROMPT = """Summarize older conversation data for a continuing voice call.
 Return ONLY a compact JSON object with exactly these keys, each an array of strings:
 topics, facts, corrections, open_questions. Keep the whole summary below 350 words.

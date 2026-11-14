@@ -48,7 +48,7 @@ from .speech_languages import CoquiTTSClient, LANGUAGES, apply_language_stack, l
 from .trace import TraceRecorder
 from .banking_tools import BankingTools, BANK_TOOLS
 from . import provider_directory, directory_email, directory_locations
-from .memory import ConversationMemory, CONVERSATION_RULES
+from .memory import ConversationMemory, CONVERSATION_RULES, PHONE_NUMBER_CAPTURE_RULES
 from .engagement import Engagement, ENGAGEMENT_RULES, SPEECH_GATE_RULES, SPEECH_GATE_TOOL
 from .conversation_persist import ConversationStore, caller_from_identity
 from .usage import UsageCollector, UsageReporter
@@ -181,6 +181,9 @@ class ConversationPipeline:
         self.agent_context = agent_context or AgentRuntimeContext()
         self.banking = BankingTools(self.http, self.agent_context, trace.session_id, send, session_identity)
         self.system_prompt = self.agent_context.system_prompt(config.system_prompt) + self.banking.prompt() + CONVERSATION_RULES
+        if (self.agent_context.agent_id
+                and self.agent_context.agent_id in config.phone_number_capture_agent_ids):
+            self.system_prompt += PHONE_NUMBER_CAPTURE_RULES
         self.system_prompt += language_rules(config.tts_language)
         self.knowledge = KnowledgeClient(config, self.http, self.agent_context)
         self.passkey_demo = None  # Provisioned only by the trusted call worker.
