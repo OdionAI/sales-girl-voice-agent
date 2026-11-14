@@ -54,8 +54,8 @@ Agents should pull GitHub `main`, make changes on a branch, and promote through
   agent only, the worker enters a phone-number capture state when the agent
   asks for a phone/mobile number. That caller response uses a 1,100 ms silence
   window, retaining short pauses between spoken digits. The Wema-only runtime
-  prompt asks the caller to repeat an incomplete or unclear number at a steady,
-  slightly quicker pace with short pauses between digit groups, then reads back
+  prompt asks the caller to repeat an incomplete or unclear number a little
+  faster, then reads back
   all 11 digits and waits for confirmation. The state expires once
   a complete number is recognized or after four caller turns. These settings are
   `RVC_LAB_PHONE_NUMBER_CAPTURE_AGENT_IDS` and

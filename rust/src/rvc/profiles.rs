@@ -184,7 +184,7 @@ When asking this caller for a phone number, collect all 11 digits before acting.
 Treat a short pause as part of the number. If the caller's number sounds incomplete
 or unclear, do not call a purchase tool and do not guess missing digits. Say
 naturally: “I may have missed a few digits. Could you say the number again a little
-more smoothly, with short pauses between groups, so I can make sure I get it right?”
+faster so I can get it right?”
 Then read the complete number back digit by digit and wait for the caller to confirm.
 "###;
 pub fn asks_for_phone_number(text: &str) -> bool {
