@@ -58,6 +58,16 @@ Agents should pull GitHub `main`, make changes on a branch, and promote through
   require merge and a Lagos rollout before the live SAW worker applies the
   saved short voice IDs.
 
+- Caller endpointing uses a 400 ms silence window by default. For the Wema SAW
+  agent only, the worker enters a phone-number capture state when the agent
+  asks for a phone/mobile number. That caller response uses a 900 ms silence
+  window, retaining short pauses between spoken digits. The state expires once
+  number-like text is received or after two caller turns. These settings are
+  `RVC_LAB_PHONE_NUMBER_CAPTURE_AGENT_IDS` and
+  `RVC_LAB_PHONE_NUMBER_END_SILENCE_MS`; other agents and ordinary turns keep
+  the global 400 ms window. This gives the ASR more continuous audio during
+  number collection; it cannot guarantee that ASR recognizes every spoken digit.
+
 The shared Lagos LLM can be switched for all agents through the repository
 variable `RVC_LAB_LLM_PROVIDER` (`qwen` or `deepseek`; defaults to `qwen`).
 DeepSeek uses `deepseek-flash` with thinking disabled. This is required for
@@ -252,7 +262,8 @@ Rollback restores the previous image, entrypoint, command, user and healthcheck.
 
 ## Native production cutover
 
-The native release retains the staging-tested 150 ms caller endpointing threshold,
+The native release uses a 400 ms caller endpointing threshold, with the scoped
+Wema phone-number capture window described above,
 final ASR validation, speculative generation and RNNoise speech-probability gating.
 BuildKit attestations are disabled to compare platform image IDs consistently.
 Verification accepts image-added environment defaults and compares mounts without
