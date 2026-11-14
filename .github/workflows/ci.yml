@@ -41,12 +41,13 @@ jobs:
           python-version: "3.12"
       - name: Install isolated worker dependencies
         run: pip install -r latency_lab/requirements.txt
-      - name: Verify passkey flows, demo proofs, intent gates and worker regressions
-        run: python -m unittest latency_lab.tests.test_passkey latency_lab.tests.test_passkey_app_message latency_lab.tests.test_passkey_demo latency_lab.tests.test_passkey_diagnostics latency_lab.tests.test_engagement latency_lab.tests.test_livekit_transport latency_lab.tests.test_pidgin latency_lab.tests.test_speech_languages -v
-      - name: Verify provider timing and transfer release invariants
-        run: python -m unittest latency_lab.tests.test_llm_observability latency_lab.tests.test_llm_stall_timeout latency_lab.tests.test_live_metrics latency_lab.tests.test_tts_seed -v
+      - name: Run latency worker regression suite
+        run: python -m unittest discover -s latency_lab/tests -p 'test_*.py' -v
 
-  native-worker:
+  rust-tests:
+    uses: ./.github/workflows/rust-unit-tests.yml
+
+  native-image:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -59,7 +60,21 @@ jobs:
           file: deployment/lagos/Dockerfile
           load: true
           tags: sg-rvc-native:ci
+          build-args: RUN_NATIVE_TESTS=false
           cache-from: type=gha,scope=sg-rvc-native
           cache-to: type=gha,mode=max,scope=sg-rvc-native
       - name: Verify native registration and health across reconnect
         run: bash deployment/lagos/test-native-runtime.sh sg-rvc-native:ci
+
+  native-worker:
+    needs: [rust-tests, native-image]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require Rust tests and native image checks
+        env:
+          RUST_RESULT: ${{ needs.rust-tests.result }}
+          IMAGE_RESULT: ${{ needs.native-image.result }}
+        run: |
+          test "$RUST_RESULT" = success
+          test "$IMAGE_RESULT" = success

@@ -1,7 +1,9 @@
 name: Deploy Lagos voice worker
 
 on:
-  push:
+  workflow_run:
+    workflows: [Voice Agent CI]
+    types: [completed]
     branches: [main]
   workflow_dispatch:
     inputs:
@@ -19,67 +21,24 @@ concurrency:
 
 jobs:
   rust-tests:
-    if: github.ref_name == 'main' && ((github.event_name == 'push' && !contains(github.event.head_commit.message, '[skip deploy]')) || (github.event_name == 'workflow_dispatch' && !inputs.verify_only))
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-    container:
-      image: rust:1.99.0-bookworm@sha256:114c7a4425406451c2866b6aafe69fe29b1b298832db1277d411ac73c82d04d6
-    # Jobs that run inside a container default to `sh` (dash), which does not
-    # support `set -euo pipefail`. Pin bash so the toolchain-install step works.
-    defaults:
-      run:
-        shell: bash
-    steps:
-      - uses: actions/checkout@v5
-      - name: Install native build toolchain
-        run: |
-          set -euo pipefail
-          apt-get update
-          apt-get install -y --no-install-recommends curl gnupg ca-certificates
-          curl --fail --silent --show-error https://apt.llvm.org/llvm-snapshot.gpg.key -o /tmp/llvm-key.asc
-          gpg --show-keys --with-colons /tmp/llvm-key.asc | grep '^fpr:.*:6084F3CF814B57C1CF12EFD515CF4D18AF4F7421:'
-          gpg --dearmor -o /usr/share/keyrings/llvm.gpg /tmp/llvm-key.asc
-          echo 'deb [signed-by=/usr/share/keyrings/llvm.gpg] https://apt.llvm.org/bookworm/ llvm-toolchain-bookworm-21 main' > /etc/apt/sources.list.d/llvm.list
-          apt-get update
-          apt-get install -y --no-install-recommends cmake clang-21 libclang-21-dev pkg-config libssl-dev unzip
-          rm -rf /var/lib/apt/lists/* /tmp/llvm-key.asc
-      - uses: actions/cache@v4
-        with:
-          path: |
-            /usr/local/cargo/registry
-            /usr/local/cargo/git
-            rust/target
-          key: lagos-rust-1.99-clang21-${{ runner.os }}-${{ hashFiles('rust/Cargo.lock') }}
-      - name: Run Rust unit tests
-        working-directory: rust
-        env:
-          CC: clang-21
-          CXX: clang++-21
-          LIBCLANG_PATH: /usr/lib/llvm-21/lib
-          RNNOISE_MODEL_PATH: /opt/rnnoise/rnnoise_data-0a8755f8e2d834eff6a54714ecc7d75f9932e845df35f8b59bc52a7cfe6e8b37.tar.gz
-        run: |
-          set -euo pipefail
-          # rnnoise2-sys downloads this model with a blocking reqwest client in
-          # its build script, which is flaky (times out). Fetch the pinned,
-          # checksum-verified archive once with curl and let it unpack locally.
-          mkdir -p /opt/rnnoise
-          curl --fail --location --retry 8 --retry-delay 5 --connect-timeout 30 \
-            -o "$RNNOISE_MODEL_PATH" \
-            "https://media.xiph.org/rnnoise/models/rnnoise_data-0a8755f8e2d834eff6a54714ecc7d75f9932e845df35f8b59bc52a7cfe6e8b37.tar.gz"
-          echo "0a8755f8e2d834eff6a54714ecc7d75f9932e845df35f8b59bc52a7cfe6e8b37  $RNNOISE_MODEL_PATH" | sha256sum -c -
-          cargo test --locked --release --all-features --lib -- --test-threads=1
+    if: github.event_name == 'workflow_dispatch' && !inputs.verify_only
+    uses: ./.github/workflows/rust-unit-tests.yml
   lagos:
     needs: rust-tests
-    if: always() && !cancelled() && ((github.ref_name == 'main' && needs.rust-tests.result == 'success' && ((github.event_name == 'push' && !contains(github.event.head_commit.message, '[skip deploy]')) || (github.event_name == 'workflow_dispatch' && !inputs.verify_only))) || (github.event_name == 'workflow_dispatch' && inputs.verify_only && needs.rust-tests.result == 'skipped'))
+    if: always() && !cancelled() && ((github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main' && !contains(github.event.workflow_run.head_commit.message, '[skip deploy]')) || (github.event_name == 'workflow_dispatch' && inputs.verify_only && needs.rust-tests.result == 'skipped') || (github.event_name == 'workflow_dispatch' && !inputs.verify_only && needs.rust-tests.result == 'success'))
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    env:
+      RELEASE_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
       - name: Test worker release
-        if: github.event_name == 'push' || !inputs.verify_only
+        if: github.event_name == 'workflow_dispatch' && !inputs.verify_only
         run: |
           python -m pip install -r requirements.txt -r latency_lab/requirements.txt
           python -m unittest discover -s tests -p 'test_*.py'
@@ -99,7 +58,7 @@ jobs:
           ssh-keygen -y -f ~/.ssh/lagos_deploy_key >/dev/null
           ssh lagos-app python3 - --verify-only < deployment/lagos/deploy.py
       - name: Build and deploy exact Git revision
-        if: github.event_name == 'push' || !inputs.verify_only
+        if: (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success') || (github.event_name == 'workflow_dispatch' && !inputs.verify_only)
         env:
           ENABLE_HAUSA_RESEARCH: ${{ vars.ENABLE_HAUSA_TWB_VOICES || 'false' }}
           MOMO_FEEDBACK_AGENT_ID: ${{ vars.AICC_MOMO_FEEDBACK_AGENT_ID }}
@@ -133,18 +92,18 @@ jobs:
             true) number_capture_args+=(--balogun-number-capture-enabled) ;;
             false) ;;
           esac
-          release="/opt/attentive/releases/voice-ci/${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          release="/opt/attentive/releases/voice-ci/${RELEASE_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           ssh lagos-app "install -d -m 700 '$release'"
           git archive HEAD | ssh lagos-app "tar -xf - --no-same-owner -C '$release'"
           test -n "$WEMA_BLOB_CONNECTION_STRING"
-          printf '%s' "$WEMA_BLOB_CONNECTION_STRING" | ssh lagos-app python3 "$release/deployment/lagos/deploy_voice_auth.py" --release "$release" --revision "$GITHUB_SHA" --threshold "$WEMA_VOICE_AUTH_COSINE_THRESHOLD"
+          printf '%s' "$WEMA_BLOB_CONNECTION_STRING" | ssh lagos-app python3 "$release/deployment/lagos/deploy_voice_auth.py" --release "$release" --revision "$RELEASE_SHA" --threshold "$WEMA_VOICE_AUTH_COSINE_THRESHOLD"
           if [[ "$LLM_PROVIDER" == deepseek ]]; then
             test -n "$DEEPSEEK_API_KEY"
-            printf '%s' "$DEEPSEEK_API_KEY" | ssh lagos-app python3 "$release/deployment/lagos/deploy.py" --release "$release" --revision "$GITHUB_SHA" --momo-feedback-agent-id "$MOMO_FEEDBACK_AGENT_ID" --reply-grace-ms "$REPLY_GRACE_MS" --reply-grace-agent-ids "$REPLY_GRACE_AGENT_IDS" "${research_args[@]}" "${number_capture_args[@]}" "${llm_args[@]}" --deepseek-api-key-stdin
+            printf '%s' "$DEEPSEEK_API_KEY" | ssh lagos-app python3 "$release/deployment/lagos/deploy.py" --release "$release" --revision "$RELEASE_SHA" --momo-feedback-agent-id "$MOMO_FEEDBACK_AGENT_ID" --reply-grace-ms "$REPLY_GRACE_MS" --reply-grace-agent-ids "$REPLY_GRACE_AGENT_IDS" "${research_args[@]}" "${number_capture_args[@]}" "${llm_args[@]}" --deepseek-api-key-stdin
           else
-            ssh lagos-app python3 "$release/deployment/lagos/deploy.py" --release "$release" --revision "$GITHUB_SHA" --momo-feedback-agent-id "$MOMO_FEEDBACK_AGENT_ID" --reply-grace-ms "$REPLY_GRACE_MS" --reply-grace-agent-ids "$REPLY_GRACE_AGENT_IDS" "${research_args[@]}" "${number_capture_args[@]}" "${llm_args[@]}"
+            ssh lagos-app python3 "$release/deployment/lagos/deploy.py" --release "$release" --revision "$RELEASE_SHA" --momo-feedback-agent-id "$MOMO_FEEDBACK_AGENT_ID" --reply-grace-ms "$REPLY_GRACE_MS" --reply-grace-agent-ids "$REPLY_GRACE_AGENT_IDS" "${research_args[@]}" "${number_capture_args[@]}" "${llm_args[@]}"
           fi
-          printf 'Lagos voice revision `%s` is deployed.\n' "$GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"
+          printf 'Lagos voice revision `%s` is deployed.\n' "$RELEASE_SHA" >> "$GITHUB_STEP_SUMMARY"
       - name: Remove runner SSH key
         if: always()
         run: rm -f ~/.ssh/lagos_deploy_key
