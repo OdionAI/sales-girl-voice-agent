@@ -41,9 +41,11 @@ The voice CI runs Python regressions, Rust unit tests, and the native image
 build as parallel jobs. The existing `native-worker` required check passes only
 when the Rust tests and native image check both finish. CI builds the native
 image with `RUN_NATIVE_TESTS=false` because the same Rust tests run in their own
-job. The Lagos release starts only after successful `Voice Agent CI` on the
-exact main SHA, so it does not repeat those Python and Rust tests. It then
-rebuilds and recreates only the Lagos `voice` service. Cargo build output and
+job. PR merge is blocked until the Python tests, passkey regression, and
+`native-worker` aggregate check pass. The Lagos release starts immediately on
+that protected main push while post-merge CI runs independently; it checks out
+and deploys the exact pushed SHA without rerunning those tests. It then rebuilds
+and recreates only the Lagos `voice` service. Cargo build output and
 the checksum-verified RNNoise model are cached across CI runs; the Lagos Docker
 build already reuses unchanged layers and its persistent Cargo target cache.
 Prompt or Rust source changes still compile the changed worker code.
