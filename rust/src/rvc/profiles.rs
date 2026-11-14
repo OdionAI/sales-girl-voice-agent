@@ -178,6 +178,15 @@ pub fn phone_number_capture_silence_ms(config: &Config, waiting: bool) -> f64 {
         config.end_silence_ms
     }
 }
+pub const PHONE_NUMBER_CAPTURE_RULES: &str = r###"
+WEMA PHONE NUMBER CAPTURE:
+When asking this caller for a phone number, collect all 11 digits before acting.
+Treat a short pause as part of the number. If the caller's number sounds incomplete
+or unclear, do not call a purchase tool and do not guess missing digits. Say
+naturally: “I may have missed a few digits. Could you say the number again a little
+faster so I can get it right?”
+Then read the complete number back digit by digit and wait for the caller to confirm.
+"###;
 pub fn asks_for_phone_number(text: &str) -> bool {
     let normalized = text.to_lowercase();
     let asks = [
@@ -452,10 +461,10 @@ mod resolved_surface_tests {
         let mut c = config();
         c.end_silence_ms = 400.0;
         c.phone_number_capture_agent_ids = vec!["wema-agent".into()];
-        c.phone_number_capture_end_silence_ms = 900.0;
+        c.phone_number_capture_end_silence_ms = 1100.0;
         c.agent_context.agent_id = "wema-agent".into();
         assert_eq!(phone_number_capture_silence_ms(&c, false), 400.0);
-        assert_eq!(phone_number_capture_silence_ms(&c, true), 900.0);
+        assert_eq!(phone_number_capture_silence_ms(&c, true), 1100.0);
         c.agent_context.agent_id = "other-agent".into();
         assert_eq!(phone_number_capture_silence_ms(&c, true), 400.0);
     }

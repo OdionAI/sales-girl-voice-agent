@@ -373,7 +373,7 @@ mod tests {
                 "RVC_LAB_PHONE_NUMBER_CAPTURE_AGENT_IDS",
                 "f90e2db3-6e12-4b4f-94fa-905b83a2adfd",
             ),
-            ("RVC_LAB_PHONE_NUMBER_END_SILENCE_MS", "900"),
+            ("RVC_LAB_PHONE_NUMBER_END_SILENCE_MS", "1100"),
             (
                 "PROVIDER_DIRECTORY_ENDPOINT",
                 "https://script.google.com/macros/s/fixture/exec",
@@ -408,7 +408,7 @@ mod tests {
             config.voice.phone_number_capture_agent_ids,
             vec!["f90e2db3-6e12-4b4f-94fa-905b83a2adfd"]
         );
-        assert_eq!(config.voice.phone_number_capture_end_silence_ms, 900.0);
+        assert_eq!(config.voice.phone_number_capture_end_silence_ms, 1100.0);
         assert_eq!(config.voice.transfer.outbound_trunk_id, "ST_fixture");
         assert!(config.voice.recording.gcp_credentials.contains('\n'));
         let platform = config.voice.platform.unwrap();

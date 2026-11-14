@@ -2358,6 +2358,9 @@ impl Coordinator {
             .next_system
             .take()
             .unwrap_or_else(|| self.c.base_system_prompt.clone());
+        if super::profiles::phone_number_capture_enabled(&self.c) {
+            system.push_str(super::profiles::PHONE_NUMBER_CAPTURE_RULES);
+        }
         let knowledge_offered = !followup
             && direct.is_none()
             && self.turn > 0

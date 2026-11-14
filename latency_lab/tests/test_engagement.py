@@ -97,16 +97,16 @@ class EngagementTests(unittest.IsolatedAsyncioTestCase):
         self.pipe.config = replace(
             self.pipe.config,
             end_silence_ms=400,
-            phone_number_capture_end_silence_ms=900,
+            phone_number_capture_end_silence_ms=1100,
             phone_number_capture_agent_ids=(agent_id,),
         )
         self.pipe.agent_context = type("Agent", (), {"agent_id": agent_id})()
         self.pipe.waiting_for_phone_number = True
         self.pipe.phone_number_capture_turns_remaining = 2
-        self.assertEqual(self.pipe._phone_capture_silence_ms(), 900)
+        self.assertEqual(self.pipe._phone_capture_silence_ms(), 1100)
         self.pipe._consume_phone_number_capture_turn("zero eight one four")
         self.assertTrue(self.pipe.waiting_for_phone_number)
-        self.assertEqual(self.pipe._phone_capture_silence_ms(), 900)
+        self.assertEqual(self.pipe._phone_capture_silence_ms(), 1100)
         self.pipe._consume_phone_number_capture_turn("six five eight two one zero")
         self.assertFalse(self.pipe.waiting_for_phone_number)
         self.assertEqual(self.pipe._phone_capture_silence_ms(), 400)
