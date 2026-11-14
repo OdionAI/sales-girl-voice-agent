@@ -7,8 +7,31 @@ on:
       - dev
       - staging
 
+permissions:
+  contents: read
+
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      python: ${{ steps.scope.outputs.python }}
+      passkey: ${{ steps.scope.outputs.passkey }}
+      native: ${{ steps.scope.outputs.native }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Detect affected components
+        id: scope
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          python3 .github/scripts/detect_ci_scope.py
+
   test:
+    needs: changes
+    if: needs.changes.outputs.python == 'true'
     runs-on: ubuntu-latest
 
     steps:
@@ -19,6 +42,8 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
 
       - name: Install dependencies
         run: |
@@ -28,25 +53,41 @@ jobs:
       - name: Run tests
         run: python -m unittest discover -s tests -p 'test_*.py' -v
 
-      - name: Build Docker image
-        run: docker build -t sales-girl-voice-agent:ci .
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Build cached Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: sales-girl-voice-agent:ci
+          cache-from: type=gha,scope=sg-voice-python
+          cache-to: type=gha,mode=max,scope=sg-voice-python
 
   passkey-demo:
+    needs: changes
+    if: needs.changes.outputs.passkey == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
+          cache: pip
+          cache-dependency-path: latency_lab/requirements.txt
       - name: Install isolated worker dependencies
         run: pip install -r latency_lab/requirements.txt
       - name: Run latency worker regression suite
         run: python -m unittest discover -s latency_lab/tests -p 'test_*.py' -v
 
   rust-tests:
+    needs: changes
+    if: needs.changes.outputs.native == 'true'
     uses: ./.github/workflows/rust-unit-tests.yml
 
   native-image:
+    needs: changes
+    if: needs.changes.outputs.native == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -66,14 +107,23 @@ jobs:
         run: bash deployment/lagos/test-native-runtime.sh sg-rvc-native:ci
 
   native-worker:
-    needs: [rust-tests, native-image]
+    needs: [changes, rust-tests, native-image]
     if: always()
     runs-on: ubuntu-latest
     steps:
       - name: Require Rust tests and native image checks
         env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          NATIVE_REQUIRED: ${{ needs.changes.outputs.native }}
           RUST_RESULT: ${{ needs.rust-tests.result }}
           IMAGE_RESULT: ${{ needs.native-image.result }}
         run: |
-          test "$RUST_RESULT" = success
-          test "$IMAGE_RESULT" = success
+          set -euo pipefail
+          test "$CHANGES_RESULT" = success
+          if [[ "$NATIVE_REQUIRED" == true ]]; then
+            test "$RUST_RESULT" = success
+            test "$IMAGE_RESULT" = success
+          else
+            test "$RUST_RESULT" = skipped
+            test "$IMAGE_RESULT" = skipped
+          fi
