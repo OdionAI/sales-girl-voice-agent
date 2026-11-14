@@ -1539,6 +1539,56 @@ mod swahili_wav_tests {
         assert!(swahili_wav(&b).is_err());
     }
 }
+
+#[cfg(test)]
+mod swahili_provider_tests {
+    use super::*;
+    use axum::{body::Bytes, routing::post, Json, Router};
+    #[tokio::test]
+    async fn batch_asr_and_wav_tts_deliver_a_call_rate_turn() {
+        let mut audio = wav(&vec![3000; 4410]);
+        audio[24..28].copy_from_slice(&44100u32.to_le_bytes());
+        audio[28..32].copy_from_slice(&88200u32.to_le_bytes());
+        let app = Router::new()
+            .route(
+                "/tts",
+                post(move |Json(body): Json<Value>| {
+                    let audio = audio.clone();
+                    async move {
+                        assert_eq!(body["model"], "bookbot/vits-base-sw-KE-OpenBible");
+                        assert_eq!(body["response_format"], "wav");
+                        Bytes::from(audio)
+                    }
+                }),
+            )
+            .route(
+                "/asr",
+                post(|_body: Bytes| async { Json(json!({"text":"Habari"})) }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let mut c: Config =
+            serde_json::from_str(include_str!("../../fixtures/reference-config.json")).unwrap();
+        c.tts_language = "Swahili".into();
+        c.tts_url = format!("http://{address}/tts");
+        c.stt_batch_url = format!("http://{address}/asr");
+        c.tts_ref_audio.clear();
+        let providers = Providers::new(Arc::new(c), Trace::default()).unwrap();
+        let mut asr = start_asr(providers.clone());
+        assert!(matches!(asr.events.recv().await, Some(AsrEvent::Ready)));
+        asr.commit(1, vec![3000; 1600]).await.unwrap();
+        let event = tokio::time::timeout(Duration::from_secs(3), asr.events.recv())
+            .await
+            .unwrap();
+        assert!(matches!(event,Some(AsrEvent::Final{turn:1,ref text,..}) if text=="Habari"));
+        let (tx, mut rx) = mpsc::channel(4);
+        providers.tts("Habari", 1, 1, &tx).await.unwrap();
+        assert_eq!(rx.recv().await.unwrap().len(), 2400);
+        asr.task.abort();
+        server.abort();
+    }
+}
 pub fn start_asr(p: Providers) -> Asr {
     let (tx, mut rx) = mpsc::channel(8);
     let (out, events) = mpsc::channel(64);
