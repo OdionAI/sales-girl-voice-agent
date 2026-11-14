@@ -274,6 +274,12 @@ impl Drop for TransferCleanupWatch {
         self.task.abort();
     }
 }
+const MOMO_PSB_BUSINESS_ID: &str = "f2ff0fe3d56c468890489a76a6310d4a";
+/// Business ids arrive either hyphenated (canonical UUID, e.g. from the auth
+/// scope) or bare; compare them hyphen- and case-insensitively.
+fn business_matches(a: &str, b: &str) -> bool {
+    a.trim().to_lowercase().replace('-', "") == b.trim().to_lowercase().replace('-', "")
+}
 struct Operation {
     bank: bool,
     id: u64,
@@ -474,7 +480,7 @@ pub fn start_with_services(
             super::conversation::Store::start(
                 svc.clone(),
                 super::conversation::Meta {
-                    caller: super::conversation::caller_from_identity(
+                    caller: super::conversation::trusted_caller(
                         svc.scope().claims(),
                         svc.scope().room(),
                     ),
@@ -3239,6 +3245,59 @@ impl Coordinator {
                     return;
                 };
                 let owner = a.owner;
+                // MoMo PSB: create the support ticket automatically — never ask the
+                // caller for permission. Execute now and speak a message that tells
+                // them the team has been informed; never expose the ticket id/reference.
+                if call.name == "create_ticket"
+                    && business_matches(&self.c.agent_context.business_id, MOMO_PSB_BUSINESS_ID)
+                {
+                    let Some(services) = self.services.clone() else {
+                        self.fail("action services unavailable".into()).await;
+                        return;
+                    };
+                    self.next_operation += 1;
+                    let operation = self.next_operation;
+                    let (context, events) = (self.c.agent_context.clone(), self.events.clone());
+                    let permit = super::actions::direct_permit(call.clone());
+                    let op_call = call.clone();
+                    let task = tokio::spawn(async move {
+                        let mut result = super::actions::execute(&services, &context, permit).await;
+                        if result.status == "success" {
+                            result.message = "I've informed the team about this and they will reach out to you to resolve it.".into();
+                            result.data = json!({});
+                            result.extra.clear();
+                        }
+                        let _ = events
+                            .send(Internal::ActionExecuted { operation, result })
+                            .await;
+                    });
+                    self.operation = Some(Operation {
+                        bank: false,
+                        id: operation,
+                        owner,
+                        call: op_call,
+                        task,
+                        result: None,
+                        delivered: false,
+                        delivery_queued: false,
+                        next_check: tokio::time::Instant::now()
+                            + Duration::from_secs_f64(self.c.engagement_ack_seconds),
+                        updates: 0,
+                        completion_revision: None,
+                    });
+                    if let Some(a) = &mut self.attempt {
+                        a.waiting_operation = Some(operation);
+                        a.task = None;
+                    }
+                    self.trace.emit(
+                        "tool_execution_start",
+                        owner,
+                        operation,
+                        json!({"auto_executed": true}),
+                    );
+                    self.transition(State::Releasing, "auto_ticket_execution");
+                    return;
+                }
                 if let Some(question) = question {
                     self.pending_action = Some(super::actions::Pending {
                         call,
@@ -4248,6 +4307,10 @@ async fn generate(g: Generation) -> Result<(), String> {
     let llm_p = p.clone();
     let tts_p = p.clone();
     let trace = p.trace.clone();
+    // Denoise synthesized speech for MoMo PSB only: the TTS model re-adds a
+    // faint broadband hiss on every synthesis, independent of the clone
+    // reference, so we clean the output PCM before playout.
+    let denoise_output = business_matches(&p.config.agent_context.business_id, MOMO_PSB_BUSINESS_ID);
     let token_events = events.clone();
     let g_events = events.clone();
     let producer = async move {
@@ -4375,10 +4438,31 @@ async fn generate(g: Generation) -> Result<(), String> {
         let mut samples = 0;
         let mut closed = false;
         let mut started = false;
+        let mut out_denoise = if denoise_output {
+            let d = super::output_noise::OutputDenoise::new();
+            if d.is_some() {
+                trace.emit(
+                    "tts_output_denoise_ready",
+                    turn,
+                    id,
+                    json!({"implementation":"rnnoise-24k"}),
+                );
+            }
+            d
+        } else {
+            None
+        };
         loop {
             if *auth.borrow() {
-                while let Some(pcm) = held.pop_front() {
-                    samples -= pcm.len();
+                while let Some(held_pcm) = held.pop_front() {
+                    samples -= held_pcm.len();
+                    let pcm = match out_denoise.as_mut() {
+                        Some(d) => d.process(&held_pcm),
+                        None => held_pcm,
+                    };
+                    if pcm.is_empty() {
+                        continue;
+                    }
                     playout
                         .push(id, pcm)
                         .await
@@ -4398,6 +4482,15 @@ async fn generate(g: Generation) -> Result<(), String> {
             tokio::select! {biased;
                 r=auth.changed()=>{r.map_err(|_|"attempt cancelled")?;},
                 pcm=audio_rx.recv(),if !closed&&samples<24000*12=>match pcm{Some(pcm)=>{samples+=pcm.len();held.push_back(pcm);},None=>closed=true},
+            }
+        }
+        if let Some(d) = out_denoise.as_mut() {
+            let tail = d.finish();
+            if !tail.is_empty() {
+                playout
+                    .push(id, tail)
+                    .await
+                    .map_err(|e| format!("playout {e:?}"))?;
             }
         }
         let completion = playout

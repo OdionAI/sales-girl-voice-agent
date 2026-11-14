@@ -5,6 +5,12 @@ use serde_json::Value;
 use std::sync::OnceLock;
 pub const SBPN_MODEL: &str = "ogunlao/SBPN_multilingual_base";
 pub const SBPN_LARGE_MODEL: &str = "ogunlao/SBPN_multilingual_large";
+pub fn swahili(language: &str) -> bool {
+    matches!(
+        language.trim().to_lowercase().as_str(),
+        "sw" | "swa" | "swahili" | "kiswahili"
+    )
+}
 pub fn data() -> &'static Value {
     static DATA: OnceLock<Value> = OnceLock::new();
     DATA.get_or_init(|| {
@@ -27,6 +33,9 @@ pub fn french(language: &str) -> bool {
     )
 }
 pub fn normalize(language: &str) -> String {
+    if swahili(language) {
+        return "Swahili".into();
+    }
     let code = code(language);
     if !code.is_empty() {
         return match code {
@@ -118,6 +127,26 @@ pub fn apply(config: &mut Config, context: &AgentContext, overrides: &Value) -> 
     .unwrap_or("English")
     .to_string();
     let language = code(&selected);
+    if swahili(&selected) {
+        config.tts_language = "Swahili".into();
+        config.tts_model = "bookbot/vits-base-sw-KE-OpenBible".into();
+        config.tts_voice.clear();
+        config.tts_ref_audio.clear();
+        config.tts_url = gateway(
+            config,
+            "http://102.88.137.124:8080/tts-swahili-vits/v1/audio/speech",
+        )?;
+        config.stt_model = "BuzzASR/swahili".into();
+        config.stt_ws_url.clear();
+        config.stt_chat_url.clear();
+        config.stt_batch_url = gateway(
+            config,
+            "http://102.88.137.124:8080/asr-swahili-buzz/v1/audio/transcriptions",
+        )?;
+        config.stt_batch_timeout_seconds = 30.0;
+        config.max_utterance_seconds = config.max_utterance_seconds.min(29.0);
+        return Ok(());
+    }
     if language.is_empty() {
         let selected = selected.trim().to_lowercase().replace('_', " ");
         let saved = context.tts_voice_id.trim();
@@ -280,6 +309,9 @@ pub fn apply(config: &mut Config, context: &AgentContext, overrides: &Value) -> 
     Ok(())
 }
 pub fn rules(language: &str) -> String {
+    if swahili(language) {
+        return "\n\nSpeak natural Swahili throughout this call. Preserve names, values and facts.\n".into();
+    }
     if french(language) {
         return "\n\nCALL LANGUAGE: French (fr). Speak natural French throughout the call, including greetings, questions, acknowledgements, progress, answers and goodbyes. Preserve all factual meaning, names, values and identifiers. Keep tool names, JSON keys and numeric arguments unchanged. Use one or two short spoken sentences and one question at a time.\n".into();
     }
@@ -527,6 +559,25 @@ mod tests {
     }
     fn config() -> Config {
         serde_json::from_str(include_str!("../../fixtures/reference-config.json")).unwrap()
+    }
+    #[test]
+    fn swahili_profile_uses_batch_buzz_and_bookbot_without_realtime() {
+        let mut c = config();
+        let agent = AgentContext {
+            tts_language_hint: "Kiswahili".into(),
+            ..Default::default()
+        };
+        apply(&mut c, &agent, &serde_json::json!({})).unwrap();
+        assert_eq!(c.tts_language, "Swahili");
+        assert_eq!(c.tts_model, "bookbot/vits-base-sw-KE-OpenBible");
+        assert!(c.tts_url.ends_with("/tts-swahili-vits/v1/audio/speech"));
+        assert_eq!(c.stt_model, "BuzzASR/swahili");
+        assert!(c.stt_ws_url.is_empty());
+        assert!(c
+            .stt_batch_url
+            .ends_with("/asr-swahili-buzz/v1/audio/transcriptions"));
+        assert!(c.max_utterance_seconds <= 29.0);
+        c.validate().unwrap();
     }
     #[test]
     fn native_yoruba_uses_stable_model_alias_for_saved_balogun() {

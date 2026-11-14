@@ -55,6 +55,27 @@ impl VerifiedSession {
     pub fn room(&self) -> &str {
         self.claims["room_name"].as_str().unwrap_or("")
     }
+
+    /// Return a copy of this session bound to a different agent (language
+    /// routing). Only the pinned-SIP bootstrap may call it; the caller and the
+    /// business are unchanged, so the capacity/knowledge scope still holds.
+    pub(super) fn with_agent(&self, agent_id: &str, agent_name: &str) -> Self {
+        let mut session = self.clone();
+        session.agent_id = agent_id.trim().to_string();
+        if let Some(claims) = session.claims.as_object_mut() {
+            claims.insert(
+                "config_agent_id".into(),
+                Value::String(agent_id.trim().to_string()),
+            );
+            if !agent_name.trim().is_empty() {
+                claims.insert(
+                    "configured_agent_name".into(),
+                    Value::String(agent_name.trim().to_string()),
+                );
+            }
+        }
+        session
+    }
 }
 #[derive(Default)]
 pub struct Verifier {
@@ -189,6 +210,29 @@ mod tests {
     fn claims() -> Value {
         serde_json::json!({"aud":"odion-rvc-tools","exp":1100,"nonce":"a-local-nonce-12345","business_id":"business-a","config_agent_id":"agent-a","end_user_id":"caller-a","room_name":"room-a","participant_identity":"caller"})
     }
+    #[test]
+    fn with_agent_rebinds_the_agent_and_keeps_the_business() {
+        let session = VerifiedSession::from_pinned_sip(serde_json::json!({
+            "entry_surface": "aicc_inbound",
+            "sip_caller_verified": true,
+            "business_id": "biz-momo",
+            "config_agent_id": "agent-old",
+            "configured_agent_name": "Old",
+            "end_user_id": "+2348012345678",
+            "participant_identity": "sip-caller",
+            "room_name": "room-1"
+        }))
+        .unwrap();
+        let rebound = session.with_agent(" agent-new ", " Abdul ");
+        assert_eq!(rebound.agent_id(), "agent-new");
+        assert_eq!(rebound.claims()["config_agent_id"], "agent-new");
+        assert_eq!(rebound.claims()["configured_agent_name"], "Abdul");
+        assert_eq!(rebound.business_id(), "biz-momo");
+        assert_eq!(rebound.caller(), "sip-caller");
+        // the original session is untouched
+        assert_eq!(session.agent_id(), "agent-old");
+    }
+
     #[test]
     fn scoped_once_only_and_expiry_bounds() {
         let v = Verifier::default();
