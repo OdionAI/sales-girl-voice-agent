@@ -31,16 +31,24 @@ Agents should pull GitHub `main`, make changes on a branch, and promote through
 
 The voice CI runs Python regressions, Rust unit tests, and the native image
 build as parallel jobs. The existing `native-worker` required check passes only
-when the Rust tests and native image check both finish. CI builds the native
-image with `RUN_NATIVE_TESTS=false` because the same Rust tests run in their own
-job. PR merge is blocked until the Python tests, passkey regression, and
+when the Rust tests and native image check both finish. CI detects changed
+components before running tests. Python changes run Python regressions and build
+the Python image with pip and BuildKit caches; latency/passkey changes run the
+passkey suite; Rust/native build inputs run Rust unit tests and the native image
+contract. Docs and deploy-workflow-only changes skip application builds. The
+`native-worker` required check passes for a non-native change only when both
+native jobs were correctly skipped; for a native change it passes only when
+both checks succeed. Changes to the CI workflow or scope detector run the full
+matrix. CI builds the native image with `RUN_NATIVE_TESTS=false` because the
+same Rust tests run in their own job.
+
+PR merge is blocked until the Python tests, passkey regression, and
 `native-worker` aggregate check pass. The Lagos release starts immediately on
-that protected main push while post-merge CI runs independently; it checks out
-and deploys the exact pushed SHA without rerunning those tests. It then rebuilds
-and recreates only the Lagos `voice` service. Cargo build output and
-the checksum-verified RNNoise model are cached across CI runs; the Lagos Docker
-build already reuses unchanged layers and its persistent Cargo target cache.
-Prompt or Rust source changes still compile the changed worker code.
+that protected main push and checks out the exact pushed SHA; it does not repeat
+those checks. It then recreates only the Lagos `voice` service. Cargo build
+output, pip downloads, the checksum-verified RNNoise model, and unchanged Docker
+layers are cached across runs. Prompt changes compile the changed Python worker
+layer; Rust source changes compile the native worker.
 
 ## Must-not-lose behavior (verify on every release)
 - **RNNoise input-noise suppression** — `latency_lab/input_noise.py` (with the `*` global
