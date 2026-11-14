@@ -1,7 +1,7 @@
 # Lagos production reconciliation — 2026-11-14
 
-This records the read-only production comparison and the source reconciliation
-prepared for review. No production deployment was made during this audit.
+This records the read-only production comparison, source reconciliation, and
+successful production release on 2026-11-14.
 
 ## Source comparison
 
@@ -56,11 +56,17 @@ and rolls back on a failed release. This is the mechanism that carries the
 host's direct runtime configuration forward; do not replace it with a deploy
 that starts from only the repository's base Compose file.
 
-## Release status
+## Release result
 
-This reconciliation is intended to put the already-live source changes and the
-recording codec fix under the canonical `main` history. Production remains on
-the existing `f1d5a8d` image until the reviewed PR passes required checks and the
-normal main release succeeds. After release, verify the image revision,
-container health, preserved Compose/environment/mount state, and a new MP3
-recording through Egress.
+PR #262 merged to `main` at `0398b12607bd3f3a5c0291fd68f02a4b8c1c2dd1`.
+The pull-request checks (`test`, `passkey-demo`, `native-worker`), the main CI
+workflow, and the Lagos deployment workflow all passed. The Lagos workflow
+deployed that exact revision. Post-release inspection confirmed the live image
+revision matches `main`, the container is healthy, recording remains enabled
+with MP3 output, the four existing mounts are retained, and the 18 host-managed
+overrides remain in the Compose chain. The chain now has 101 files because the
+new immutable release override was appended to the previous 100-file chain.
+
+The code and deployment state are reconciled. A fresh call is still needed to
+verify the complete recording lifecycle produces a playable MP3 through Egress
+and the dashboard playback path.
