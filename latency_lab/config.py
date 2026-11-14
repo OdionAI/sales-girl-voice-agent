@@ -200,7 +200,7 @@ This test agent can provide guidance only. It cannot see accounts, verify identi
     min_speech_ms: float = _float("RVC_LAB_MIN_SPEECH_MS", 240.0)
     end_silence_ms: float = _float("RVC_LAB_END_SILENCE_MS", 300.0)
     phone_number_capture_agent_ids: tuple[str, ...] = _ids("RVC_LAB_PHONE_NUMBER_CAPTURE_AGENT_IDS")
-    phone_number_capture_end_silence_ms: float = _float("RVC_LAB_PHONE_NUMBER_END_SILENCE_MS", 900.0)
+    phone_number_capture_end_silence_ms: float = _float("RVC_LAB_PHONE_NUMBER_END_SILENCE_MS", 1100.0)
     # Speech-probability VAD gate. RNNoise reports a per-frame speech
     # probability (0..1). When the input filter supplies it, a frame must ALSO
     # clear this floor to count as speech, so a loud non-speech burst (TV,
