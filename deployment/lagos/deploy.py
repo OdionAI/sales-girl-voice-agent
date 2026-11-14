@@ -32,7 +32,7 @@ LAGOS_ASR_ENV = {
     # A longer caller pause window is enabled only after the Wema SAW agent
     # explicitly asks for a phone number. All other turns use the 400 ms base.
     'RVC_LAB_PHONE_NUMBER_CAPTURE_AGENT_IDS': 'f90e2db3-6e12-4b4f-94fa-905b83a2adfd',
-    'RVC_LAB_PHONE_NUMBER_END_SILENCE_MS': '900',
+    'RVC_LAB_PHONE_NUMBER_END_SILENCE_MS': '1100',
     'RVC_LAB_STT_PROVIDER': 'self_hosted',
     'RVC_LAB_STT_MODEL': 'Qwen3-ASR',
     'RVC_LAB_STT_WS_URL': 'ws://102.88.137.124:8080/asr-rt/v1/realtime',
