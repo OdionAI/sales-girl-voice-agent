@@ -26,6 +26,14 @@ docker build -f deployment/lagos/Dockerfile \
 The Lagos stack is a Compose project on the private app VM reached through the jump host:
 `odion-recovery-lagos`, release dir `/opt/attentive/releases/recovery-20261009`, service `voice`.
 
+The production source/runtime reconciliation observed on 2026-11-14 is recorded
+in [`production-reconciliation-2026-11-14.md`](production-reconciliation-2026-11-14.md).
+The live image was built from `f1d5a8d`; the reconciliation branch merges that
+exact production source history into current `main` and includes the recording
+codec fix. The deployer carries forward the current container environment,
+mounts, and Compose file chain when building a release; preserve this behavior
+and the documented host overrides during future releases.
+
 Agents should pull GitHub `main`, make changes on a branch, and promote through
 `dev` and `staging` before merging to `main`. Do not deploy directly to the VM.
 

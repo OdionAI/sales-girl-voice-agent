@@ -54,6 +54,13 @@ class LagosReleaseTests(unittest.TestCase):
             previous_env = dict(item.split('=', 1) for item in base_env)
 
             updates = dict(release.LAGOS_ASR_ENV)
+            # Keep the live Zuri end-of-utterance settings in the expected
+            # release environment so deploy verification covers this scope.
+            updates['RVC_LAB_END_SILENCE_AGENT_IDS'] = (
+                '9757fc1a-8785-4991-9744-0234d94f1d22,'
+                '9757fc1a8785499197440234d94f1d22'
+            )
+            updates['RVC_LAB_END_SILENCE_AGENT_MS'] = '600'
             updates['ODION_CHINEDU_IGBO'] = '1'
             updates['ODION_IGBO_QWEN_PHONE_CANDIDATE'] = '1'
             updates['ODION_SANFRID_PIDGIN'] = '1'
@@ -174,6 +181,10 @@ class LagosReleaseTests(unittest.TestCase):
                         'ccc440c5452d4690abc061758c11cebd',
                         'f2ff0fe3-d56c-4688-9048-9a76a6310d4a',
                         'f2ff0fe3d56c468890489a76a6310d4a',
+                        'dbcdf2c4-b53d-4ad9-a8f1-8d65ae0811a6',
+                        'dbcdf2c4b53d4ad9a8f18d65ae0811a6',
+                        '9757fc1a-8785-4991-9744-0234d94f1d22',
+                        '9757fc1a8785499197440234d94f1d22',
                     },
                 )
                 self.assertEqual(
