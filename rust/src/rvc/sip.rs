@@ -210,6 +210,14 @@ impl Dispatch {
             headers.get("to").map(String::as_str).unwrap_or(""),
         )
     }
+    pub fn caller(&self, participant: &RemoteParticipant) -> String {
+        let lower = lowered(&participant.attributes());
+        CALLER
+            .iter()
+            .find_map(|key| lower.get(*key).filter(|v| !v.is_empty()))
+            .cloned()
+            .unwrap_or_else(|| participant.identity().as_str().to_string())
+    }
     pub fn scope(
         &self,
         participant: &RemoteParticipant,
@@ -328,7 +336,7 @@ fn parse_headers(raw: &str) -> HashMap<String, String> {
         })
         .unwrap_or_default()
 }
-pub async fn dashboard_route(endpoint: &Endpoint, number: &str) -> Option<Value> {
+pub async fn dashboard_route(endpoint: &Endpoint, number: &str, caller: &str) -> Option<Value> {
     if endpoint.base_url.is_empty() || endpoint.token.is_empty() || number.trim().is_empty() {
         return None;
     }
@@ -348,6 +356,9 @@ pub async fn dashboard_route(endpoint: &Endpoint, number: &str) -> Option<Value>
         "resolve",
     ]);
     url.query_pairs_mut().append_pair("number", number.trim());
+    if !caller.trim().is_empty() {
+        url.query_pairs_mut().append_pair("caller", caller.trim());
+    }
     let http = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .build()
@@ -376,9 +387,13 @@ pub async fn dashboard_route(endpoint: &Endpoint, number: &str) -> Option<Value>
     }
     let business = body["business_id"].as_str().filter(|v| !v.is_empty())?;
     let agent = body["agent_id"].as_str().filter(|v| !v.is_empty())?;
-    Some(
-        json!({"business_id":business,"config_agent_id":agent,"configured_agent_name":body["name"].as_str().unwrap_or("")}),
-    )
+    Some(json!({
+        "business_id": business,
+        "config_agent_id": agent,
+        "configured_agent_name": body["name"].as_str().unwrap_or(""),
+        "transfer_target_number": body["transfer_target_number"].as_str(),
+        "transfer_from_number": body["transfer_from_number"].as_str(),
+    }))
 }
 #[cfg(test)]
 mod tests {
@@ -581,15 +596,15 @@ mod tests {
         let server = tokio::spawn(async move {
             axum::serve(socket, app).await.unwrap();
         });
-        let result = dashboard_route(&endpoint, "<sip:0301051@aicc.example>")
+        let result = dashboard_route(&endpoint, "<sip:0301051@aicc.example>", "30105")
             .await
             .unwrap();
         assert_eq!(
             result,
-            json!({"business_id":"biz-momo","config_agent_id":"agent-hausa","configured_agent_name":"Abdul"})
+            json!({"business_id":"biz-momo","config_agent_id":"agent-hausa","configured_agent_name":"Abdul","transfer_target_number":null,"transfer_from_number":null})
         );
         mode.store(1, Ordering::SeqCst);
-        assert!(dashboard_route(&endpoint, "<sip:0301051@aicc.example>")
+        assert!(dashboard_route(&endpoint, "<sip:0301051@aicc.example>", "30105")
             .await
             .is_none());
         server.abort();
