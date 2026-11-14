@@ -37,6 +37,15 @@ and the documented host overrides during future releases.
 Agents should pull GitHub `main`, make changes on a branch, and promote through
 `dev` and `staging` before merging to `main`. Do not deploy directly to the VM.
 
+The voice CI runs Rust unit tests and the native image build in parallel. The
+existing `native-worker` required check passes only when both finish. CI builds
+the native image with `RUN_NATIVE_TESTS=false` because the same 262 Rust tests
+run in the dedicated job. The production release still runs the Rust test gate
+before building and recreating only the Lagos `voice` service. Cargo build output
+and the checksum-verified RNNoise model are cached across CI runs; the Lagos
+Docker build already reuses unchanged layers and its persistent Cargo target
+cache. Prompt or Rust source changes still compile the changed worker code.
+
 ## Must-not-lose behavior (verify on every release)
 - **RNNoise input-noise suppression** — `latency_lab/input_noise.py` (with the `*` global
   allowlist and `ListeningNoiseRoute`), wired in `latency_lab/livekit_worker.py`, and the
