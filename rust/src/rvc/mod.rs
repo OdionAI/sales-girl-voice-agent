@@ -131,6 +131,10 @@ pub struct Config {
     pub speech_rms: f64,
     pub min_speech_ms: f64,
     pub end_silence_ms: f64,
+    #[serde(default)]
+    pub phone_number_capture_agent_ids: Vec<String>,
+    #[serde(default)]
+    pub phone_number_capture_end_silence_ms: f64,
     #[serde(default = "default_speech_prob_min")]
     pub speech_prob_min: f64,
     #[serde(default)]
@@ -257,6 +261,11 @@ impl Config {
             if !n.is_finite() || n <= 0.0 {
                 return Err("invalid timing/energy configuration".into());
             }
+        }
+        if !self.phone_number_capture_end_silence_ms.is_finite()
+            || self.phone_number_capture_end_silence_ms < 0.0
+        {
+            return Err("invalid phone-number capture endpoint configuration".into());
         }
         if !self.stt_speculative_flush_ms.is_finite()
             || !self.reply_grace_ms.is_finite()

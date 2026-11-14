@@ -28,7 +28,11 @@ VOICE_AUTH_DISABLED_KEY = 'VOICE_AUTH_DISABLED'
 VOICE_AUTH_DISABLED = '1'
 DEFAULT_INACTIVITY_PILOT_AGENT_IDS = '*'
 LAGOS_ASR_ENV = {
-    'RVC_LAB_END_SILENCE_MS': '150',
+    'RVC_LAB_END_SILENCE_MS': '400',
+    # A longer caller pause window is enabled only after the Wema SAW agent
+    # explicitly asks for a phone number. All other turns use the 400 ms base.
+    'RVC_LAB_PHONE_NUMBER_CAPTURE_AGENT_IDS': 'f90e2db3-6e12-4b4f-94fa-905b83a2adfd',
+    'RVC_LAB_PHONE_NUMBER_END_SILENCE_MS': '900',
     'RVC_LAB_STT_PROVIDER': 'self_hosted',
     'RVC_LAB_STT_MODEL': 'Qwen3-ASR',
     'RVC_LAB_STT_WS_URL': 'ws://102.88.137.124:8080/asr-rt/v1/realtime',
@@ -566,7 +570,8 @@ if __name__ == '__main__':
                           'entrypoint': current['Config'].get('Entrypoint'),
                           'settings': {key: value for key, value in
                               (entry.split('=', 1) for entry in current['Config']['Env'] if '=' in entry)
-                              if key in {'RVC_LAB_END_SILENCE_MS', 'RVC_LAB_LLM_PROVIDER',
+                              if key in {'RVC_LAB_END_SILENCE_MS', 'RVC_LAB_PHONE_NUMBER_CAPTURE_AGENT_IDS',
+                                         'RVC_LAB_PHONE_NUMBER_END_SILENCE_MS', 'RVC_LAB_LLM_PROVIDER',
                                          'RVC_LAB_MAX_JOBS', 'MOMO_CALL_CAPACITY_BUSINESS_ID',
                                          'RVC_INPUT_NOISE_SUPPRESSION', 'RVC_INPUT_NOISE_AGENT_IDS',
                                          'RVC_INPUT_NOISE_IMPLEMENTATION'}},
