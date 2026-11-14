@@ -368,6 +368,9 @@ struct Coordinator {
     candidate: bool,
     speech_ms: f64,
     silence_ms: f64,
+    waiting_for_phone_number: bool,
+    phone_number_capture_turns_remaining: u8,
+    phone_number_capture_prompt_attempt: Option<u64>,
     pcm: Vec<i16>,
     preconfirm: Option<String>,
     flush_revision: u64,
@@ -595,6 +598,9 @@ pub fn start_with_services(
         candidate: false,
         speech_ms: 0.0,
         silence_ms: 0.0,
+        waiting_for_phone_number: false,
+        phone_number_capture_turns_remaining: 0,
+        phone_number_capture_prompt_attempt: None,
         pcm: Vec::new(),
         preconfirm: None,
         flush_revision: 0,
@@ -1348,6 +1354,62 @@ impl Coordinator {
         }
         self.state = state;
     }
+    fn phone_capture_silence_ms(&self) -> f64 {
+        super::profiles::phone_number_capture_silence_ms(&self.c, self.waiting_for_phone_number)
+    }
+    fn activate_phone_number_capture(&mut self, attempt_id: u64) {
+        if !super::profiles::phone_number_capture_enabled(&self.c)
+            || self.phone_number_capture_prompt_attempt == Some(attempt_id)
+        {
+            return;
+        }
+        let Some(attempt) = self
+            .attempt
+            .as_ref()
+            .filter(|attempt| attempt.id == attempt_id && attempt.authorized)
+        else {
+            return;
+        };
+        if !super::profiles::asks_for_phone_number(&attempt.answer) {
+            return;
+        }
+        let owner = attempt.owner;
+        self.phone_number_capture_prompt_attempt = Some(attempt_id);
+        self.waiting_for_phone_number = true;
+        self.phone_number_capture_turns_remaining = 4;
+        self.trace.emit(
+            "phone_number_capture_state",
+            owner,
+            attempt_id,
+            json!({
+                "reason":"assistant_requested_phone_number",
+                "active":true,
+                "end_silence_ms":self.phone_capture_silence_ms()
+            }),
+        );
+    }
+    fn consume_phone_number_capture_turn(&mut self, turn: u64, text: &str) {
+        if !self.waiting_for_phone_number {
+            return;
+        }
+        let complete = super::profiles::has_complete_phone_number(text);
+        self.phone_number_capture_turns_remaining =
+            self.phone_number_capture_turns_remaining.saturating_sub(1);
+        if complete || self.phone_number_capture_turns_remaining == 0 {
+            self.waiting_for_phone_number = false;
+            self.phone_number_capture_turns_remaining = 0;
+        }
+        self.trace.emit(
+            "phone_number_capture_state",
+            turn,
+            0,
+            json!({
+                "reason":"caller_turn_received",
+                "active":self.waiting_for_phone_number,
+                "complete_number_detected":complete
+            }),
+        );
+    }
     async fn cancel(&mut self, reason: &str) {
         if matches!(
             reason,
@@ -1629,7 +1691,18 @@ impl Coordinator {
                 }
             }
             self.silence_ms += duration;
-            if self.silence_ms >= self.c.end_silence_ms {
+            let required_silence_ms = self.phone_capture_silence_ms();
+            if self.silence_ms >= required_silence_ms {
+                self.trace.emit(
+                    "caller_endpoint_window_elapsed",
+                    self.turn,
+                    0,
+                    json!({
+                        "silence_ms":self.silence_ms,
+                        "required_silence_ms":required_silence_ms,
+                        "phone_number_capture":self.waiting_for_phone_number
+                    }),
+                );
                 // Safety net: never commit a near-empty buffer (a tap, cough or
                 // line blip) to ASR and freeze the turn on its empty result.
                 // 0 disables each floor; both default to off. The primary
@@ -1815,6 +1888,7 @@ impl Coordinator {
             self.new_messages.remove(0);
         }
         self.final_text = text.clone();
+        self.consume_phone_number_capture_turn(turn, &text);
         self.base_asr_candidate = base_candidate
             .filter(|base| {
                 base.len() <= 16 * 1024
@@ -3697,6 +3771,7 @@ impl Coordinator {
                             .try_send(Output::AnswerPartial(a.answer.clone()));
                     }
                 }
+                self.activate_phone_number_capture(attempt);
             }
             Internal::Tool {
                 attempt,
@@ -3730,6 +3805,7 @@ impl Coordinator {
                     .filter(|a| a.id == id && a.authorized)
                     .map(|a| a.owner)
                 {
+                    self.activate_phone_number_capture(id);
                     let from = self.state;
                     self.state = State::Playing;
                     self.trace.emit(

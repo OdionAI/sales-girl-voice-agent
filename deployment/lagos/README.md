@@ -54,11 +54,13 @@ Agents should pull GitHub `main`, make changes on a branch, and promote through
   agent only, the worker enters a phone-number capture state when the agent
   asks for a phone/mobile number. That caller response uses a 900 ms silence
   window, retaining short pauses between spoken digits. The state expires once
-  number-like text is received or after two caller turns. These settings are
+  a complete number is recognized or after four caller turns. These settings are
   `RVC_LAB_PHONE_NUMBER_CAPTURE_AGENT_IDS` and
   `RVC_LAB_PHONE_NUMBER_END_SILENCE_MS`; other agents and ordinary turns keep
   the global 400 ms window. This gives the ASR more continuous audio during
   number collection; it cannot guarantee that ASR recognizes every spoken digit.
+  The same state and trace events are implemented in both the Python fallback
+  pipeline and the active native Rust runtime.
 
 The shared Lagos LLM can be switched for all agents through the repository
 variable `RVC_LAB_LLM_PROVIDER` (`qwen` or `deepseek`; defaults to `qwen`).
