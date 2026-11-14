@@ -573,6 +573,9 @@ impl Providers {
         let cleaned = super::text::strip_internal_annotations(text);
         let text = cleaned.as_str();
         let c = &self.config;
+        if super::languages::swahili(&c.tts_language) {
+            return self.tts_swahili(text, turn, attempt, tx).await;
+        }
         if super::languages::uses_sbpn(&c.tts_language) {
             return self.tts_native(text, turn, attempt, tx).await;
         }
@@ -661,6 +664,83 @@ impl Providers {
             turn,
             attempt,
             json!({"bytes":bytes,"chunks":chunks,"audio_seconds":bytes as f64/(2.0*rate as f64)}),
+        );
+        Ok(())
+    }
+    async fn tts_swahili(
+        &self,
+        text: &str,
+        turn: u64,
+        attempt: u64,
+        tx: &mpsc::Sender<Vec<i16>>,
+    ) -> Result<(), String> {
+        for part in super::languages::split_text(text, 240)? {
+            self.tts_swahili_segment(part.trim(), turn, attempt, tx)
+                .await?;
+        }
+        Ok(())
+    }
+    async fn tts_swahili_segment(
+        &self,
+        text: &str,
+        turn: u64,
+        attempt: u64,
+        tx: &mpsc::Sender<Vec<i16>>,
+    ) -> Result<(), String> {
+        self.trace.emit(
+            "tts_request_start",
+            turn,
+            attempt,
+            json!({"text_chars":text.chars().count()}),
+        );
+        let response = self.client.post(&self.config.tts_url)
+            .json(&json!({"model":"bookbot/vits-base-sw-KE-OpenBible","input":text,"response_format":"wav"}))
+            .timeout(Duration::from_secs(30)).send().await.map_err(|_| "Swahili TTS connection failed")?
+            .error_for_status().map_err(|_| "Swahili TTS HTTP error")?;
+        if response
+            .content_length()
+            .is_some_and(|n| n > 44_100 * 2 * 60 + 4096)
+        {
+            return Err("Swahili WAV too large".into());
+        }
+        let mut stream = response.bytes_stream();
+        let mut bytes = Vec::new();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(|_| "Swahili TTS read failed")?;
+            if bytes.len() + chunk.len() > 44_100 * 2 * 60 + 4096 {
+                return Err("Swahili WAV too large".into());
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        let pcm = swahili_wav(&bytes)?;
+        self.usage.tts_accepted(text);
+        let mut resampler = livekit::webrtc::native::audio_resampler::AudioResampler::default();
+        let mut output = Vec::new();
+        for frame in pcm.chunks(441) {
+            let count = frame.len();
+            let mut padded = frame.to_vec();
+            padded.resize(441, 0);
+            let mut part = resampler
+                .remix_and_resample(&padded, 441, 1, 44100, 1, 24000)
+                .to_vec();
+            if count != 441 {
+                part.truncate((count * 24000).div_ceil(44100));
+            }
+            output.extend(part);
+        }
+        if output.is_empty() {
+            return Err("Swahili TTS returned no audio".into());
+        }
+        self.trace
+            .emit("tts_first_pcm", turn, attempt, json!({"sample_rate":24000}));
+        for part in output.chunks(2400) {
+            tx.send(part.to_vec()).await.map_err(|_| "TTS cancelled")?;
+        }
+        self.trace.emit(
+            "tts_request_complete",
+            turn,
+            attempt,
+            json!({"audio_seconds": output.len() as f64 / 24000.0}),
         );
         Ok(())
     }
@@ -810,6 +890,31 @@ impl Providers {
 
     async fn final_http(&self, pcm: Vec<i16>) -> Result<String, String> {
         let c = &self.config;
+        if super::languages::swahili(&c.tts_language) {
+            if pcm.len() > 30 * 16000 {
+                return Err("Swahili ASR audio exceeds 30 seconds".into());
+            }
+            let part = reqwest::multipart::Part::bytes(wav(&pcm))
+                .file_name("turn.wav")
+                .mime_str("audio/wav")
+                .map_err(|_| "ASR WAV encoding")?;
+            let response = self
+                .client
+                .post(&c.stt_batch_url)
+                .multipart(reqwest::multipart::Form::new().part("file", part))
+                .timeout(Duration::from_secs(30))
+                .send()
+                .await
+                .map_err(|_| "Swahili ASR request failed")?
+                .error_for_status()
+                .map_err(|_| "Swahili ASR HTTP error")?;
+            self.usage.stt_submitted(pcm.len() * 2);
+            let body: Value = response
+                .json()
+                .await
+                .map_err(|_| "Swahili ASR JSON error")?;
+            return Ok(body["text"].as_str().unwrap_or("").trim().to_owned());
+        }
         if super::languages::uses_sbpn(&c.tts_language) {
             if c.stt_model == super::languages::SBPN_LARGE_MODEL {
                 let mut parts = Vec::new();
@@ -1364,6 +1469,126 @@ async fn interruptible_asr<T>(
 ) -> Option<T> {
     tokio::select! {biased;command=rx.recv()=>{*deferred=command;None},result=future=>Some(result)}
 }
+fn swahili_wav(bytes: &[u8]) -> Result<Vec<i16>, String> {
+    if bytes.len() < 12 || &bytes[..4] != b"RIFF" || &bytes[8..12] != b"WAVE" {
+        return Err("invalid Swahili WAV".into());
+    }
+    let mut pos = 12usize;
+    let mut format_ok = false;
+    let mut samples = None;
+    while pos + 8 <= bytes.len() {
+        let len = u32::from_le_bytes(bytes[pos + 4..pos + 8].try_into().unwrap()) as usize;
+        let start = pos + 8;
+        let end = start
+            .checked_add(len)
+            .filter(|end| *end <= bytes.len())
+            .ok_or("truncated WAV chunk")?;
+        match &bytes[pos..pos + 4] {
+            b"fmt " if len >= 16 => {
+                let x = &bytes[start..end];
+                format_ok = u16::from_le_bytes([x[0], x[1]]) == 1
+                    && u16::from_le_bytes([x[2], x[3]]) == 1
+                    && u32::from_le_bytes(x[4..8].try_into().unwrap()) == 44100
+                    && u16::from_le_bytes([x[14], x[15]]) == 16;
+            }
+            b"data" => {
+                if len % 2 != 0 {
+                    return Err("incomplete WAV sample".into());
+                }
+                samples = Some(
+                    bytes[start..end]
+                        .chunks_exact(2)
+                        .map(|s| i16::from_le_bytes([s[0], s[1]]))
+                        .collect(),
+                );
+            }
+            _ => {}
+        }
+        pos = end + (len % 2);
+    }
+    if !format_ok {
+        return Err("unsupported Swahili WAV format".into());
+    }
+    samples.ok_or_else(|| "WAV has no audio".into())
+}
+
+#[cfg(test)]
+mod swahili_wav_tests {
+    use super::swahili_wav;
+    #[test]
+    fn accepts_mono_44100_pcm_and_rejects_wrong_rate_or_truncation() {
+        let mut b = Vec::new();
+        b.extend_from_slice(b"RIFF");
+        b.extend_from_slice(&40u32.to_le_bytes());
+        b.extend_from_slice(b"WAVEfmt ");
+        b.extend_from_slice(&16u32.to_le_bytes());
+        b.extend_from_slice(&1u16.to_le_bytes());
+        b.extend_from_slice(&1u16.to_le_bytes());
+        b.extend_from_slice(&44100u32.to_le_bytes());
+        b.extend_from_slice(&88200u32.to_le_bytes());
+        b.extend_from_slice(&2u16.to_le_bytes());
+        b.extend_from_slice(&16u16.to_le_bytes());
+        b.extend_from_slice(b"data");
+        b.extend_from_slice(&4u32.to_le_bytes());
+        b.extend_from_slice(&[1, 0, 255, 255]);
+        assert_eq!(swahili_wav(&b).unwrap(), vec![1, -1]);
+        let mut wrong = b.clone();
+        wrong[24..28].copy_from_slice(&16000u32.to_le_bytes());
+        assert!(swahili_wav(&wrong).is_err());
+        b.pop();
+        assert!(swahili_wav(&b).is_err());
+    }
+}
+
+#[cfg(test)]
+mod swahili_provider_tests {
+    use super::*;
+    use axum::{body::Bytes, routing::post, Json, Router};
+    #[tokio::test]
+    async fn batch_asr_and_wav_tts_deliver_a_call_rate_turn() {
+        let mut audio = wav(&vec![3000; 4410]);
+        audio[24..28].copy_from_slice(&44100u32.to_le_bytes());
+        audio[28..32].copy_from_slice(&88200u32.to_le_bytes());
+        let app = Router::new()
+            .route(
+                "/tts",
+                post(move |Json(body): Json<Value>| {
+                    let audio = audio.clone();
+                    async move {
+                        assert_eq!(body["model"], "bookbot/vits-base-sw-KE-OpenBible");
+                        assert_eq!(body["response_format"], "wav");
+                        Bytes::from(audio)
+                    }
+                }),
+            )
+            .route(
+                "/asr",
+                post(|_body: Bytes| async { Json(json!({"text":"Habari"})) }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let mut c: Config =
+            serde_json::from_str(include_str!("../../fixtures/reference-config.json")).unwrap();
+        c.tts_language = "Swahili".into();
+        c.tts_url = format!("http://{address}/tts");
+        c.stt_batch_url = format!("http://{address}/asr");
+        c.tts_ref_audio.clear();
+        let providers = Providers::new(Arc::new(c), Trace::default()).unwrap();
+        let mut asr = start_asr(providers.clone());
+        assert!(matches!(asr.events.recv().await, Some(AsrEvent::Ready)));
+        asr.commit(1, vec![3000; 1600]).await.unwrap();
+        let event = tokio::time::timeout(Duration::from_secs(3), asr.events.recv())
+            .await
+            .unwrap();
+        assert!(matches!(event,Some(AsrEvent::Final{turn:1,ref text,..}) if text=="Habari"));
+        let (tx, mut rx) = mpsc::channel(4);
+        providers.tts("Habari", 1, 1, &tx).await.unwrap();
+        assert_eq!(rx.recv().await.unwrap().len(), 2400);
+        asr.task.abort();
+        server.abort();
+    }
+}
 pub fn start_asr(p: Providers) -> Asr {
     let (tx, mut rx) = mpsc::channel(8);
     let (out, events) = mpsc::channel(64);
@@ -1376,6 +1601,62 @@ pub fn start_asr(p: Providers) -> Asr {
     }));
     let notify = Arc::new(tokio::sync::Notify::new());
     let (flag, audio, wake) = (busy.clone(), pending.clone(), notify.clone());
+    if super::languages::swahili(&p.config.tts_language) {
+        let task = tokio::spawn(async move {
+            let _ = out.send(AsrEvent::Ready).await;
+            let mut deferred = None;
+            loop {
+                let command = match deferred.take() {
+                    Some(c) => Some(c),
+                    None => rx.recv().await,
+                };
+                match command {
+                    Some(AsrCommand::Commit { turn, pcm, through }) => {
+                        flag.store(true, Ordering::SeqCst);
+                        p.trace
+                            .emit("asr_final_request", turn, 0, json!({"samples":pcm.len()}));
+                        let result =
+                            interruptible_asr(&mut rx, &mut deferred, p.final_http(pcm)).await;
+                        audio
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .discard_through(through);
+                        flag.store(false, Ordering::SeqCst);
+                        let event = match result {
+                            Some(Ok(text)) if !text.is_empty() => Some(AsrEvent::Final {
+                                turn,
+                                text,
+                                base_candidate: None,
+                                qwen_candidate: None,
+                            }),
+                            Some(_) => Some(AsrEvent::Unavailable(turn)),
+                            None => None,
+                        };
+                        if let Some(event) = event {
+                            let _ = out.send(event).await;
+                        }
+                    }
+                    Some(AsrCommand::Flush { through, .. })
+                    | Some(AsrCommand::Resume { through, .. }) => {
+                        audio
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .discard_through(through);
+                    }
+                    Some(AsrCommand::Recover) => {}
+                    Some(AsrCommand::Close) | None => break,
+                }
+            }
+        });
+        return Asr {
+            commands: tx,
+            pending,
+            notify,
+            events,
+            busy,
+            task,
+        };
+    }
     let task = tokio::spawn(async move {
         let mut sent_samples = 0;
         let mut capped = false;
