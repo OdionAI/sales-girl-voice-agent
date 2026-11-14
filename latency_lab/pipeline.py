@@ -300,14 +300,15 @@ class ConversationPipeline:
     def _consume_phone_number_capture_turn(self, text: str) -> None:
         if not self.waiting_for_phone_number or not self._phone_number_capture_enabled():
             return
-        # Keep the extended window across a short clarification, but expire it
-        # after two caller turns so it cannot affect unrelated later dialogue.
-        contains_number = bool(re.search(
-            r"\d|\b(?:zero|one|two|three|four|five|six|seven|eight|nine|oh)\b",
+        # Keep the extended window through fragmented number turns. A complete
+        # digit run ends capture immediately; otherwise cap it at four turns.
+        digit_tokens = re.findall(
+            r"\d|\b(?:zero|one|two|three|four|five|six|seven|eight|nine|oh|o)\b",
             str(text or ""), re.IGNORECASE,
-        ))
+        )
+        complete_number = len(digit_tokens) >= 7
         self.phone_number_capture_turns_remaining -= 1
-        if contains_number or self.phone_number_capture_turns_remaining <= 0:
+        if complete_number or self.phone_number_capture_turns_remaining <= 0:
             self.waiting_for_phone_number = False
             self.phone_number_capture_turns_remaining = 0
         self.trace.record(
@@ -315,7 +316,7 @@ class ConversationPipeline:
             turn_id=self.turn_id,
             reason="caller_turn_received",
             active=self.waiting_for_phone_number,
-            number_like_text_detected=contains_number,
+            complete_number_detected=complete_number,
         )
 
     async def _memory_loop(self) -> None:
@@ -2969,7 +2970,7 @@ class ConversationPipeline:
         if (self._phone_number_capture_enabled()
                 and self._asks_for_phone_number(attempt.answer)):
             self.waiting_for_phone_number = True
-            self.phone_number_capture_turns_remaining = 2
+            self.phone_number_capture_turns_remaining = 4
             self.trace.record(
                 "phone_number_capture_state",
                 turn_id=turn_id,
