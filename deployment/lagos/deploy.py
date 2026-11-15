@@ -427,6 +427,10 @@ def deploy(release, revision, enable_hausa_research=False, momo_feedback_agent_i
         '9757fc1a8785499197440234d94f1d22'
     )
     updates['RVC_LAB_END_SILENCE_AGENT_MS'] = '600'
+    context = previous_env.get('RVC_LAB_STT_CONTEXT', '').strip()
+    terms = 'Banking and data terms: Airtime, Transfer, Megabytes, Gigabytes.'
+    if terms not in context:
+        updates['RVC_LAB_STT_CONTEXT'] = f'{context} {terms}'.strip()
     updates['ODION_CHINEDU_IGBO'] = '1'
     updates['ODION_IGBO_QWEN_PHONE_CANDIDATE'] = '1'
     updates['ODION_SANFRID_PIDGIN'] = '1'

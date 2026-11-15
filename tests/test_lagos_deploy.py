@@ -61,6 +61,10 @@ class LagosReleaseTests(unittest.TestCase):
                 '9757fc1a8785499197440234d94f1d22'
             )
             updates['RVC_LAB_END_SILENCE_AGENT_MS'] = '600'
+            updates['RVC_LAB_STT_CONTEXT'] = (
+                'sample vocabulary hints Banking and data terms: '
+                'Airtime, Transfer, Megabytes, Gigabytes.'
+            )
             updates['ODION_CHINEDU_IGBO'] = '1'
             updates['ODION_IGBO_QWEN_PHONE_CANDIDATE'] = '1'
             updates['ODION_SANFRID_PIDGIN'] = '1'
@@ -191,7 +195,7 @@ class LagosReleaseTests(unittest.TestCase):
                     dict(item.split('=', 1) for item in current['Config']['Env'])[
                         'RVC_LAB_STT_CONTEXT'
                     ],
-                    'sample vocabulary hints',
+                    'sample vocabulary hints Banking and data terms: Airtime, Transfer, Megabytes, Gigabytes.',
                 )
                 for call in run.call_args_list:
                     if 'up' in call.args:
