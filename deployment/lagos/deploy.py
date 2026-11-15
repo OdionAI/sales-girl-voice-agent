@@ -41,19 +41,6 @@ LAGOS_ASR_ENV = {
     # failed chat transcripts automatically fall back to realtime Qwen finals.
     'RVC_LAB_STT_CHAT_URL': 'http://102.88.137.124:8080/asr-rt/v1/chat/completions',
     'RVC_LAB_STT_CHAT_MODEL': 'Qwen3-ASR',
-    'RVC_LAB_STT_CONTEXT': (
-        'Transcribe Nigerian English and spell names exactly as written. '
-        'Banks and wallets: Wema Bank (ALAT), OPay, PalmPay, Moniepoint, Kuda, '
-        'Access Bank, GTBank, Zenith Bank, UBA, First Bank, Polaris Bank, Union Bank, '
-        'Fidelity Bank, Providus Bank, Stanbic IBTC, FCMB, Ecobank. '
-        'Phone networks: MTN, Glo (spelled G-l-o, never glow or glue), Airtel, 9mobile. '
-        'Banking and data terms: Airtime, Transfer, Megabytes, Gigabytes. '
-        'Currency is naira. When a caller reads a phone number, account number, or amount, '
-        'output every digit as a numeral and keep the whole sequence: '
-        '0=zero 1=one 2=two 3=three 4=four 5=five 6=six 7=seven 8=eight 9=nine. '
-        'Transcribe each spoken digit as its matching numeral, one after another, '
-        'without dropping or merging digits.'
-    ),
     # Retain the existing Wema and MoMo chat-ASR scopes, including UUID aliases.
     'RVC_LAB_STT_CHAT_SCOPE': (
         'a0c8cda2-3b46-4ee0-898c-48f9a4d3a444 '
@@ -425,6 +412,10 @@ def deploy(release, revision, enable_hausa_research=False, momo_feedback_agent_i
     # Lagos ASR is shared by the voice worker. Reassert Qwen realtime + batch
     # endpoints each release so stale Whisper overrides cannot persist.
     updates = dict(LAGOS_ASR_ENV)
+    context = previous_env.get('RVC_LAB_STT_CONTEXT', '').strip()
+    terms = 'Banking and data terms: Airtime, Transfer, Megabytes, Gigabytes.'
+    if terms not in context:
+        updates['RVC_LAB_STT_CONTEXT'] = f'{context} {terms}'.strip()
     updates['ODION_CHINEDU_IGBO'] = '1'
     updates['ODION_IGBO_QWEN_PHONE_CANDIDATE'] = '1'
     updates['ODION_SANFRID_PIDGIN'] = '1'
