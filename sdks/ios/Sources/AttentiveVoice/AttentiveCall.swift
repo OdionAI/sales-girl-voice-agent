@@ -108,6 +108,31 @@ public final class AttentiveCall: ObservableObject {
                               voiceLanguage: voiceLanguage, voiceGender: voiceGender)
     }
 
+    #if DEBUG
+    // Internal-only injection for the staging integration harness. It is absent
+    // from release builds and does not change the customer-facing initializer.
+    convenience init(stagingClient: SDKClient) {
+        self.init(credentialProvider: nil, allowsInsecureDevelopmentConnections: false,
+                  audioInput: .standard, passkeys: .disabled)
+        sdkClient = stagingClient
+    }
+
+    // A disconnected, synthetic visual preview. No client or transport is configured.
+    convenience init(animatedThemePreview themeKey: String) {
+        self.init(credentialProvider: nil, allowsInsecureDevelopmentConnections: false,
+                  audioInput: .standard, passkeys: .disabled)
+        configuration = AgentConfiguration(agentId: "preview", agentName: "Preview assistant",
+                                           title: "Animated theme preview", themeKey: themeKey, callerRequired: false)
+        state = .connected
+        agentState = .speaking
+    }
+
+    func setAnimatedThemePreviewEnergy(_ energy: Float) {
+        guard sdkClient == nil, provider == nil else { return }
+        agentAudioLevel.update(energy)
+    }
+    #endif
+
     /// Refresh dashboard display settings without requesting microphone access or starting a call.
     public func loadConfiguration() async throws {
         guard let sdkClient else { throw CallError.invalidRequest }
