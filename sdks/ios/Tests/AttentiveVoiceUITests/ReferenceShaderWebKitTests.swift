@@ -1,5 +1,7 @@
 #if os(iOS)
 import Foundation
+import AttentiveVoice
+import SwiftUI
 import UIKit
 import WebKit
 import XCTest
@@ -7,6 +9,54 @@ import XCTest
 
 @MainActor
 final class ReferenceShaderWebKitTests: XCTestCase {
+    func testStartScreenWarmsSelectedAnimationWithoutStartingCall() async throws {
+        let rendered = expectation(description: "Selected shader is prepared on the start screen")
+        rendered.assertForOverFulfill = false
+        let observer = NotificationCenter.default.addObserver(
+            forName: Notification.Name("AttentiveVoiceUI.ReferenceShaderStatus"), object: nil, queue: .main
+        ) { note in
+            if note.userInfo?["rendered"] as? Bool == true { rendered.fulfill() }
+        }
+        defer { NotificationCenter.default.removeObserver(observer) }
+
+        let call = try AttentiveCall(endpoint: URL(string: "https://example.invalid/call")!)
+        let request = CallRequest(businessSlug: "test", agentPublicId: "agt_test", endUserContact: "test@example.invalid")
+        let view = CallerContent(call: call, request: .constant(request),
+            configuration: .init(themeKey: "animated:#EC653F:smooth"), enrollment: nil,
+            microphoneOnStart: false, onSettings: nil, startCall: { XCTFail("Call started before the user requested it") })
+        let window = UIWindow(frame: UIScreen.main.bounds)
+        window.rootViewController = UIHostingController(rootView: view)
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        await fulfillment(of: [rendered], timeout: 25)
+        XCTAssertEqual(call.state, .idle)
+    }
+
+    func testAutomaticCallStartsAfterSelectedAnimationIsReady() async throws {
+        let rendered = expectation(description: "Selected shader renders before the call")
+        rendered.assertForOverFulfill = false
+        let started = expectation(description: "Automatic call starts")
+        let observer = NotificationCenter.default.addObserver(
+            forName: Notification.Name("AttentiveVoiceUI.ReferenceShaderStatus"), object: nil, queue: .main
+        ) { note in
+            if note.userInfo?["rendered"] as? Bool == true,
+               note.userInfo?["mode"] as? String == "listening" { rendered.fulfill() }
+        }
+        defer { NotificationCenter.default.removeObserver(observer) }
+
+        let call = try AttentiveCall(endpoint: URL(string: "https://example.invalid/call")!)
+        let request = CallRequest(businessSlug: "test", agentPublicId: "agt_test", endUserContact: "test@example.invalid")
+        let view = CallerContent(call: call, request: .constant(request),
+            configuration: .init(themeKey: "animated:#2F6FED:grain"), enrollment: nil,
+            microphoneOnStart: false, onSettings: nil, startsAutomatically: true,
+            startCall: { started.fulfill() })
+        let window = UIWindow(frame: UIScreen.main.bounds)
+        window.rootViewController = UIHostingController(rootView: view)
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        await fulfillment(of: [rendered, started], timeout: 25, enforceOrder: true)
+    }
+
     func testBundledReferenceLoadsWebGLAndAppliesRealBridgeState() async throws {
         let script = try XCTUnwrap(ReferenceShaderView.referenceScript(), "The original shader and fallback assets must be bundled")
         let configuration = WKWebViewConfiguration()
