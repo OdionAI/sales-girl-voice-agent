@@ -11,25 +11,44 @@ struct ReferenceAnimatedAvatar: View {
     let energy: Float
     let reduceMotion: Bool
     let sceneActive: Bool
+    @Binding var ready: Bool
     @State private var visible = false
+    @State private var rendererFailed = false
 
     var body: some View {
         let state = ReferenceShaderState(theme: theme, speaking: speaking, connected: connected,
                                          energy: energy, reduceMotion: reduceMotion,
                                          sceneActive: sceneActive, visible: visible)
-        ReferenceShaderView(state: state)
-            .background(Color(.sRGB, red: Double((theme.rgb >> 16) & 255) / 255,
-                              green: Double((theme.rgb >> 8) & 255) / 255,
-                              blue: Double(theme.rgb & 255) / 255))
+        ZStack {
+            if !ready { ProgressView().tint(CallerTheme.muted) }
+            if rendererFailed {
+                LinearGradient(colors: theme.palette.map { value in
+                    Color(.sRGB, red: Double((value >> 16) & 255) / 255,
+                          green: Double((value >> 8) & 255) / 255, blue: Double(value & 255) / 255)
+                }, startPoint: .topLeading, endPoint: .bottomTrailing)
+            }
+            ReferenceShaderView(state: state, onReady: { available in
+                rendererFailed = !available
+                ready = true
+            })
+                .opacity(ready && !rendererFailed ? 1 : 0)
+        }
             .onAppear { visible = true }
-            .onDisappear { visible = false }
+            .onDisappear { visible = false; ready = false; rendererFailed = false }
+            .task {
+                try? await Task.sleep(for: .seconds(15))
+                guard !Task.isCancelled, !ready else { return }
+                rendererFailed = true
+                ready = true
+            }
     }
 }
 
 struct ReferenceShaderView: UIViewRepresentable {
     let state: ReferenceShaderState
+    let onReady: (Bool) -> Void
 
-    func makeCoordinator() -> Coordinator { Coordinator() }
+    func makeCoordinator() -> Coordinator { Coordinator(onReady: onReady) }
 
     func makeUIView(context: Context) -> WKWebView {
         let configuration = WKWebViewConfiguration()
@@ -37,6 +56,8 @@ struct ReferenceShaderView: UIViewRepresentable {
         if let script = Self.referenceScript() {
             configuration.userContentController.addUserScript(
                 WKUserScript(source: script, injectionTime: .atDocumentEnd, forMainFrameOnly: true))
+        } else {
+            DispatchQueue.main.async { context.coordinator.reportReady(false) }
         }
         let view = WKWebView(frame: .zero, configuration: configuration)
         view.navigationDelegate = context.coordinator
@@ -51,6 +72,7 @@ struct ReferenceShaderView: UIViewRepresentable {
     }
 
     func updateUIView(_ view: WKWebView, context: Context) {
+        context.coordinator.onReady = onReady
         context.coordinator.apply(state, to: view)
     }
 
@@ -110,8 +132,18 @@ struct ReferenceShaderView: UIViewRepresentable {
 
     final class Coordinator: NSObject, WKNavigationDelegate {
         var pending: ReferenceShaderState?
+        var onReady: (Bool) -> Void
         private var ready = false
+        private var reportedReady = false
         private var lastSent: ReferenceShaderState?
+
+        init(onReady: @escaping (Bool) -> Void) { self.onReady = onReady }
+
+        func reportReady(_ available: Bool) {
+            guard !reportedReady else { return }
+            reportedReady = true
+            onReady(available)
+        }
 
         func apply(_ state: ReferenceShaderState, to view: WKWebView) {
             pending = state
@@ -119,20 +151,31 @@ struct ReferenceShaderView: UIViewRepresentable {
                   let json = String(data: encoded, encoding: .utf8) else { return }
             lastSent = state
             let script = "window.attentiveSetAnimation && window.attentiveSetAnimation(\(json))"
-            #if DEBUG
-            view.evaluateJavaScript(script) { value, _ in
+            view.evaluateJavaScript(script) { [weak self] value, _ in
+                self?.reportReady(value is [String: Any])
+                #if DEBUG
                 let info = value as? [String: Any] ?? ["rendered": false]
                 NotificationCenter.default.post(name: Notification.Name("AttentiveVoiceUI.ReferenceShaderStatus"),
                                                 object: nil, userInfo: info)
+                #endif
             }
-            #else
-            view.evaluateJavaScript(script, completionHandler: nil)
-            #endif
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             ready = true
             if let pending { apply(pending, to: webView) }
+        }
+
+        func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+            reportReady(false)
+        }
+
+        func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+            reportReady(false)
+        }
+
+        func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+            onReady(false)
         }
 
         func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,

@@ -43,6 +43,7 @@ struct CallerAvatar: View {
     let image: Image?
     let themeKey: String?
     @ObservedObject var audioLevel: AgentAudioLevel
+    @Binding var animationReady: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
     private var scale: Double {
@@ -71,7 +72,7 @@ struct CallerAvatar: View {
             } else if let animated = AnimatedAgentTheme(key: themeKey) {
                 ReferenceAnimatedAvatar(theme: animated, speaking: speaking, connected: connected,
                                         energy: audioLevel.energy, reduceMotion: reduceMotion,
-                                        sceneActive: scenePhase == .active)
+                                        sceneActive: scenePhase == .active, ready: $animationReady)
             } else if let fillColor {
                 fillColor
             } else {

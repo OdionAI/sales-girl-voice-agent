@@ -54,10 +54,27 @@ struct CallerContent: View {
     let onCallEnded: (() -> Void)?
     @State private var panel: Panel?
     @State private var draft = ""
+    @State private var animationReady = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
 
     private enum Panel { case bank, transcript }
+
+    private var showsCall: Bool { controls.active || startsAutomatically }
+    private var needsAnimatedAvatar: Bool {
+        configuration.avatar == nil && AnimatedAgentTheme(key: configuration.themeKey) != nil
+    }
+
+    // Warm the selected animation before starting a call, but never prevent calling
+    // indefinitely if WebKit is unavailable or the view is dismissed.
+    private func waitForAnimation() async throws {
+        guard needsAnimatedAvatar else { return }
+        for _ in 0..<300 {
+            try Task.checkCancellation()
+            if animationReady { return }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+    }
 
     init(call: AttentiveCall, request: Binding<CallRequest>, configuration: CallerUIConfiguration,
          enrollment: VoiceEnrollment?, microphoneOnStart: Bool, onSettings: (() -> Void)?,
@@ -98,24 +115,27 @@ struct CallerContent: View {
                 CallerTheme.stage.ignoresSafeArea()
                 VStack {
                     Spacer(minLength: 12)
-                    if controls.active || startsAutomatically {
+                    ZStack {
                         VStack(spacing: 22) {
                             CallerAvatar(speaking: call.agentState == .speaking, connected: call.state == .connected,
                                          image: configuration.avatar, themeKey: configuration.themeKey,
-                                         audioLevel: call.agentAudioLevel)
+                                         audioLevel: call.agentAudioLevel, animationReady: $animationReady)
                                 .accessibilityElement(children: .ignore)
                                 .accessibilityLabel("\(configuration.agentName), \(status)")
                                 .accessibilityIdentifier("callerAvatar")
                             Text(status).font(.system(size: 13)).foregroundStyle(CallerTheme.muted)
                                 .accessibilityIdentifier("callStatus")
-                        }.offset(y: -16)
-                    } else {
-                        ScrollView {
+                        }
+                        .offset(y: -16)
+                        .opacity(showsCall ? 1 : 0)
+                        .allowsHitTesting(showsCall)
+                        .accessibilityHidden(!showsCall)
+                        if !showsCall { ScrollView {
                             StartCallCard(contact: $request.endUserContact, enrollment: controls.enrollment,
                                           enrollmentBusy: controls.enrollmentBusy, configuration: configuration,
                                           requiresContact: startCall == nil, starting: controls.starting) {
                                 if let startCall {
-                                    Task { await controls.start(startCall) }
+                                    Task { await controls.start { try await waitForAnimation(); try await startCall() } }
                                     return
                                 }
                                 if request.endUserContact.contains("@") {
@@ -123,12 +143,17 @@ struct CallerContent: View {
                                         .trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
                                 }
                                 let next = request
-                                Task { await controls.start(next, microphoneEnabled: microphoneOnStart) }
+                                Task {
+                                    await controls.start {
+                                        try await waitForAnimation()
+                                        try await call.start(next, microphoneEnabled: microphoneOnStart)
+                                    }
+                                }
                             }
                             .padding(.horizontal, 24).padding(.vertical, 20)
                             .frame(maxWidth: .infinity)
                             .frame(minHeight: max(0, geometry.size.height - 24))
-                        }.scrollBounceBehavior(.basedOnSize).scrollDismissesKeyboard(.interactively)
+                        }.scrollBounceBehavior(.basedOnSize).scrollDismissesKeyboard(.interactively) }
                     }
                     Spacer(minLength: 12)
                 }
@@ -190,7 +215,9 @@ struct CallerContent: View {
         .tint(configuration.accentColor)
         .onAppear { controls.appear() }
         .task {
-            if startsAutomatically, let startCall { await controls.startAutomatically(startCall) }
+            if startsAutomatically, let startCall {
+                await controls.startAutomatically { try await waitForAnimation(); try await startCall() }
+            }
         }
         .onChange(of: call.state) { _, state in
             if startsAutomatically, state == .ended { onCallEnded?() }
