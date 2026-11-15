@@ -67,6 +67,13 @@ final class SDKClientTests: XCTestCase {
         XCTAssertEqual(configuration.themeKey, "theme_3")
     }
 
+    func testAnimatedDashboardThemeKeysReachCallerConfigurationUnchanged() async throws {
+        let grain = try await makeClient("animated-grain").configuration()
+        let smooth = try await makeClient("animated-smooth").configuration()
+        XCTAssertEqual(grain.themeKey, "animated:#2F6FED:grain")
+        XCTAssertEqual(smooth.themeKey, "animated:#A1B2C3:smooth")
+    }
+
     private func makeClient(_ path: String = "success", customerID: String? = nil) -> SDKClient {
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [SDKProtocol.self]
@@ -113,6 +120,8 @@ private final class SDKProtocol: URLProtocol {
                         "agentName": "Example", "title": "Talk to Example Bank",
                         "callerRequired": false]
             if path == "theme" { response["themeKey"] = "theme_3" }
+            if path == "animated-grain" { response["themeKey"] = "animated:#2F6FED:grain" }
+            if path == "animated-smooth" { response["themeKey"] = "animated:#A1B2C3:smooth" }
         } else {
             response = ["serverUrl": path == "insecure" ? "ws://rtc.example.test" : "wss://rtc.example.test",
                         "roomName": "room", "participantToken": "test-token"]
