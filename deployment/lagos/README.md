@@ -58,7 +58,8 @@ layer; Rust source changes compile the native worker.
 - **STT** `Qwen3-ASR` chat transcription is authoritative for Wema SAW's
   business and the intended Amaka agent; an empty or failed chat transcript falls back to the
   realtime Qwen final. Other businesses remain on the existing realtime/batch
-  path. The vocabulary context is preserved from the active environment.
+  path. The deployment sets the existing vocabulary context and includes
+  Airtime, Transfer, Megabytes, and Gigabytes for the scoped chat ASR agents.
   **LLM** local `qwen3.8-27b`, **TTS** `Qwen3-TTS` — these are runtime env
   (`RVC_LAB_*`), not baked into the image.
 - Wema English voice selection is stored in Agent Config as `tts_voice_id`.

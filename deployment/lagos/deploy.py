@@ -41,6 +41,19 @@ LAGOS_ASR_ENV = {
     # failed chat transcripts automatically fall back to realtime Qwen finals.
     'RVC_LAB_STT_CHAT_URL': 'http://102.88.137.124:8080/asr-rt/v1/chat/completions',
     'RVC_LAB_STT_CHAT_MODEL': 'Qwen3-ASR',
+    'RVC_LAB_STT_CONTEXT': (
+        'Transcribe Nigerian English and spell names exactly as written. '
+        'Banks and wallets: Wema Bank (ALAT), OPay, PalmPay, Moniepoint, Kuda, '
+        'Access Bank, GTBank, Zenith Bank, UBA, First Bank, Polaris Bank, Union Bank, '
+        'Fidelity Bank, Providus Bank, Stanbic IBTC, FCMB, Ecobank. '
+        'Phone networks: MTN, Glo (spelled G-l-o, never glow or glue), Airtel, 9mobile. '
+        'Banking and data terms: Airtime, Transfer, Megabytes, Gigabytes. '
+        'Currency is naira. When a caller reads a phone number, account number, or amount, '
+        'output every digit as a numeral and keep the whole sequence: '
+        '0=zero 1=one 2=two 3=three 4=four 5=five 6=six 7=seven 8=eight 9=nine. '
+        'Transcribe each spoken digit as its matching numeral, one after another, '
+        'without dropping or merging digits.'
+    ),
     # Retain the existing Wema and MoMo chat-ASR scopes, including UUID aliases.
     'RVC_LAB_STT_CHAT_SCOPE': (
         'a0c8cda2-3b46-4ee0-898c-48f9a4d3a444 '
