@@ -532,12 +532,10 @@ impl Banking {
         Ok(args)
     }
     pub(crate) async fn read_or_prepare(&self, call: Call) -> ActionResult {
-        if call.name == "wema_execute_prepared" {
-            self.journey(&call, "banking_preflight_failed", json!({"stage":"execution_policy","reason_code":"execution_requires_separate_confirmation"}));
-            return ActionResult::failed(
-                "The latest preview must be confirmed in a separate caller turn.",
-            );
-        }
+        // The caller's spoken instruction is the intent and the device passkey is
+        // the authorisation, so an execute is allowed to follow its prepare in the
+        // same turn. execute_inner still binds the execute to the current prepared
+        // operation, so a stale or mismatched preview is refused.
         self.execute(call, None).await
     }
     pub(crate) async fn execute_confirmed(&self, permit: Permit) -> ActionResult {
@@ -824,8 +822,7 @@ impl Banking {
         if call.name == "wema_execute_prepared"
             && !self.prepared().is_some_and(|p| {
                 p["operation_id"] == args["operation_id"]
-                    && args["operation_id"].as_str() == confirmed
-                    && confirmed.is_some()
+                    && (confirmed.is_none() || args["operation_id"].as_str() == confirmed)
             })
         {
             self.journey(call, "banking_preflight_failed", json!({"stage":"execution_policy","reason_code":"prepared_operation_confirmation_mismatch"}));
@@ -1425,6 +1422,10 @@ mod tests {
         let (_, question) = h.bank.confirmation().unwrap();
         assert!(question.contains("0. 8. 0"));
         assert_eq!(
+            h.bank.execute_confirmed(permit("old")).await.status,
+            "failed"
+        );
+        assert_eq!(
             h.bank
                 .read_or_prepare(call(
                     "wema_execute_prepared",
@@ -1432,19 +1433,19 @@ mod tests {
                 ))
                 .await
                 .status,
-            "failed"
+            "ok",
+            "an execute may follow its prepare in the same caller turn"
         );
         assert_eq!(
-            h.bank.execute_confirmed(permit("old")).await.status,
-            "failed"
-        );
-        assert_eq!(
-            h.bank.execute_confirmed(permit("op-latest")).await.status,
-            "ok"
-        );
-        assert_eq!(
-            h.bank.execute_confirmed(permit("op-latest")).await.status,
-            "failed"
+            h.bank
+                .read_or_prepare(call(
+                    "wema_execute_prepared",
+                    json!({"operation_id":"op-latest"})
+                ))
+                .await
+                .status,
+            "failed",
+            "a consumed preview cannot execute twice"
         );
         assert_eq!(h.fake.posts.load(Ordering::SeqCst), 2);
         assert!(h.bank.prepared().is_none());
