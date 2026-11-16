@@ -1875,7 +1875,7 @@
           "recipient_account": "0012345678"
         }
       },
-      "question": "Transfer 5000 naira to Ada, Wema Bank, account 0. 0. 1. 2. 3. 4. 5. 6. 7. 8. Do you confirm?",
+      "question": "5000 naira to Ada, Wema Bank, account ending 5678. Just confirm the account number is correct.",
       "arguments": {
         "operation_id": "operation-a"
       }
@@ -1889,7 +1889,7 @@
           "phone_number": "08000000000"
         }
       },
-      "question": "1 GB on MTN, for 0. 8. 0. 0. 0. 0. 0. 0. 0. 0. 0. Do you confirm?",
+      "question": "1 GB on MTN to 08000000000. Just confirm that number is correct.",
       "arguments": {
         "operation_id": "operation-a"
       }

@@ -449,26 +449,41 @@ impl Banking {
                 )
             }
         };
-        let digits = |v: String| {
-            v.chars()
-                .map(|c| c.to_string())
-                .collect::<Vec<_>>()
-                .join(". ")
+        let last4 = |v: String| -> String {
+            let digits: Vec<char> = v.chars().filter(|c| c.is_ascii_digit()).collect();
+            digits.iter().rev().take(4).collect::<Vec<_>>()
+                .into_iter().rev().collect()
+        };
+        // Name the account we will use when the preview carries it, then ask only
+        // for the number to be confirmed. Never digit-by-digit, never "do you confirm?".
+        let prefix = match value("source_account").map(last4) {
+            Some(account) => format!("Using your account ending {} - ", account),
+            None => String::new(),
         };
         let details = if preview.contains_key("recipient_account") {
             format!(
-                "Transfer {} naira to {}, {}, account {}.",
+                "{}{} naira to {}, {}, account ending {}.",
+                prefix,
                 value("amount")?,
                 value("recipient_name")?,
                 value("bank_name")?,
-                digits(value("recipient_account")?)
+                last4(value("recipient_account")?)
+            )
+        } else if preview.contains_key("package_name") {
+            format!(
+                "{}{} on {} to {}.",
+                prefix,
+                value("package_name")?,
+                value("network")?,
+                value("phone_number")?
             )
         } else {
             format!(
-                "{} on {}, for {}.",
-                value("package_name")?,
+                "{}{} naira of {} airtime to {}.",
+                prefix,
+                value("amount")?,
                 value("network")?,
-                digits(value("phone_number")?)
+                value("phone_number")?
             )
         };
         let id = prepared["operation_id"].as_str()?.to_string();
@@ -479,7 +494,11 @@ impl Banking {
                 name: "wema_execute_prepared".into(),
                 arguments: json!({"operation_id":id}),
             },
-            format!("{details} Do you confirm?"),
+            if preview.contains_key("recipient_account") {
+                format!("{details} Just confirm the account number is correct.")
+            } else {
+                format!("{details} Just confirm that number is correct.")
+            },
         ))
     }
     pub(crate) fn arguments(&self, call: &Call) -> Result<Value, String> {
@@ -1420,7 +1439,8 @@ mod tests {
             "prepared"
         );
         let (_, question) = h.bank.confirmation().unwrap();
-        assert!(question.contains("0. 8. 0"));
+        assert!(question.contains("Just confirm that number is correct"));
+        assert!(!question.contains("Do you confirm"));
         assert_eq!(
             h.bank.execute_confirmed(permit("old")).await.status,
             "failed"
