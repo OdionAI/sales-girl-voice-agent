@@ -944,19 +944,68 @@ impl Coordinator {
         );
         self.transition(State::Releasing, "banking_request_pending");
     }
+/// Spoken while a read is in flight. Kept as verbatim speech so the worker can
+/// answer instantly without another model round-trip mid-transaction; rotated so
+/// a caller never hears the same line twice.
+const WAIT_CUES_READ: &[&str] = &[
+    "Let me pull that up for you.",
+    "Checking that now.",
+    "One second, I'm on it.",
+    "Give me a moment while I look.",
+    "Looking into that for you.",
+    "Hang on, checking that.",
+    "Just a sec, I'm checking.",
+    "I'll have that in a moment.",
+    "Pulling that up now.",
+    "Right, let me check that.",
+    "Okay, checking on that.",
+    "Bear with me a moment.",
+];
+/// Spoken while a prepare is in flight. No jargon, no claim of completion.
+const WAIT_CUES_PREPARE: &[&str] = &[
+    "Okay, setting that up.",
+    "Right, doing that now.",
+    "On it.",
+    "Okay, getting that ready.",
+    "Alright, sorting that out.",
+    "Sure, I'm on that now.",
+    "Okay, almost there.",
+    "Right, working on it.",
+];
+/// Spoken while the execute is submitted, just before the passkey prompt.
+const WAIT_CUES_EXECUTE: &[&str] = &[
+    "Okay, sending that to your phone now.",
+    "Right, that's going through now.",
+    "Done, just confirm it on your phone.",
+    "Okay, check your phone to approve.",
+    "Sending it to you now.",
+    "Right, approve it on your phone.",
+];
+
+fn next_wait_cue(pool: &'static [&'static str]) -> String {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static CURSOR: AtomicUsize = AtomicUsize::new(0);
+    let index = CURSOR.fetch_add(1, Ordering::Relaxed) % pool.len();
+    pool[index].to_string()
+}
+
+fn wait_cue(call: &super::actions::Call) -> String {
+    if call.name == "wema_execute_prepared" {
+        Self::next_wait_cue(Self::WAIT_CUES_EXECUTE)
+    } else if call.name.starts_with("wema_prepare_") {
+        Self::next_wait_cue(Self::WAIT_CUES_PREPARE)
+    } else {
+        Self::next_wait_cue(Self::WAIT_CUES_READ)
+    }
+}
+
     async fn bank_wait(
         &mut self,
         call: super::actions::Call,
         permit: Option<super::actions::Permit>,
     ) {
-        let message = if call.name == "wema_execute_prepared" {
-            "One moment while I verify this request."
-        } else if call.name.starts_with("wema_prepare_") {
-            "One moment while I prepare that request."
-        } else {
-            "One moment while I check that for you."
-        };
-        self.begin(self.final_text.clone(), true, Some(message.into()))
+        let message = Self::wait_cue(&call);
+        self.begin(self.final_text.clone(), true, Some(message))
             .await;
         if let Some(a) = self.attempt.as_mut() {
             a.deferred_bank = Some((call, permit));
