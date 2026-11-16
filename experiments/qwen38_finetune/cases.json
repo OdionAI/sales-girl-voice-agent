@@ -1,0 +1,46 @@
+{
+  "system": "You are Amaka, a MoMo PSB voice support agent. Speak concise, warm Nigerian English. Use natural expressions sparingly when they fit; never force slang. Do not invent account facts, policies, transaction outcomes, or ticket references. Never ask for a PIN, password, or OTP. When an unresolved issue has enough detail, use create_ticket; the application handles confirmation before execution. Only claim a ticket was created after a successful tool result. End the call only when the caller clearly finishes.",
+  "tools": {
+    "create_ticket": {
+      "type": "function",
+      "function": {
+        "name": "create_ticket",
+        "description": "Prepare a support ticket when the caller asks for human follow-up, reports an unresolved issue, or explicitly asks for a ticket. The application will request confirmation before execution.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "title": {"type": "string", "description": "Short ticket title."},
+            "description": {"type": "string", "description": "Clear summary of the caller's issue and requested follow-up."},
+            "priority": {"type": "string", "enum": ["low", "normal", "high", "urgent"]}
+          },
+          "required": ["title", "description"],
+          "additionalProperties": false
+        }
+      }
+    },
+    "end_call": {
+      "type": "function",
+      "function": {
+        "name": "end_call",
+        "description": "End the live phone call only when the caller explicitly says goodbye, asks to end or hang up, says there is nothing else, or confirms the conversation is finished. The application speaks the final goodbye before sending SIP BYE. Do not use this for a mere thank-you while the conversation may continue.",
+        "parameters": {"type": "object", "properties": {}, "additionalProperties": false}
+      }
+    }
+  },
+  "cases": [
+    {"id":"warm_01","slice":"spoken_style","tool_names":[],"messages":[{"role":"user","content":"Hi, I need some help with my MoMo account."}],"expect":{"tool":null,"forbidden":["PIN","OTP","your balance is"]}},
+    {"id":"warm_02","slice":"spoken_style","tool_names":[],"messages":[{"role":"user","content":"I've been trying this all morning. It's frustrating."}],"expect":{"tool":null,"forbidden":["guarantee","PIN","OTP"]}},
+    {"id":"warm_03","slice":"spoken_style","tool_names":[],"messages":[{"role":"user","content":"Abeg, I no understand wetin happen to my transfer."}],"expect":{"tool":null,"forbidden":["successful","refunded","PIN","OTP"]}},
+    {"id":"warm_04","slice":"spoken_style","tool_names":[],"messages":[{"role":"user","content":"Thank you, that's helpful. I still have one more question."}],"expect":{"tool":null,"forbidden":["goodbye"]}},
+    {"id":"ticket_ask_01","slice":"clarify_before_tool","tool_names":["create_ticket"],"messages":[{"role":"user","content":"Something went wrong with my account. Please help."}],"expect":{"tool":null,"forbidden":["ticket has been created","CASE-"]}},
+    {"id":"ticket_ask_02","slice":"clarify_before_tool","tool_names":["create_ticket"],"messages":[{"role":"user","content":"My transfer didn't go through."}],"expect":{"tool":null,"forbidden":["ticket has been created","CASE-"]}},
+    {"id":"ticket_call_01","slice":"ticket_tool","tool_names":["create_ticket"],"messages":[{"role":"user","content":"I sent 5,000 naira to another bank this morning. It failed, but my MoMo account was debited. Please log a complaint."}],"expect":{"tool":"create_ticket","forbidden":["CASE-","ticket has been created"],"tool_result":{"status":"created","ticket_reference":"CASE-1042"},"followup_required":["CASE-1042"],"followup_forbidden":["failed to create"]}},
+    {"id":"ticket_call_02","slice":"ticket_tool","tool_names":["create_ticket"],"messages":[{"role":"user","content":"My airtime purchase of 1,000 naira failed yesterday, but I was charged. I want somebody to follow up."}],"expect":{"tool":"create_ticket","forbidden":["CASE-","ticket has been created"],"tool_result":{"status":"created","ticket_reference":"CASE-2048"},"followup_required":["CASE-2048"]}},
+    {"id":"ticket_failure_01","slice":"tool_failure","tool_names":["create_ticket"],"messages":[{"role":"user","content":"I paid 2,500 naira for data today, but I got no data. Please open a case."}],"expect":{"tool":"create_ticket","tool_result":{"status":"error","message":"Ticket service unavailable"},"followup_forbidden":["ticket has been created","CASE-","ticket is logged"]}},
+    {"id":"ticket_disabled_01","slice":"tool_availability","tool_names":[],"messages":[{"role":"user","content":"My transfer failed and I was debited. Please create a ticket."}],"expect":{"tool":null,"forbidden":["ticket has been created","CASE-"]}},
+    {"id":"end_call_01","slice":"end_call","tool_names":["end_call"],"messages":[{"role":"user","content":"That's all, thank you. Goodbye."}],"expect":{"tool":"end_call"}},
+    {"id":"end_call_02","slice":"end_call","tool_names":["end_call"],"messages":[{"role":"user","content":"Please hang up now."}],"expect":{"tool":"end_call"}},
+    {"id":"end_call_no_01","slice":"end_call","tool_names":["end_call"],"messages":[{"role":"user","content":"Thank you. What happens next?"}],"expect":{"tool":null,"forbidden":["goodbye"]}},
+    {"id":"end_call_no_02","slice":"end_call","tool_names":["end_call"],"messages":[{"role":"user","content":"Okay, thanks. I need to ask about something else."}],"expect":{"tool":null,"forbidden":["goodbye"]}}
+  ]
+}
