@@ -55,6 +55,7 @@ pub struct Lease {
     services: Services,
     reservation: Mutex<Option<String>>,
     room: String,
+    language: Option<String>,
     stop: watch::Sender<bool>,
     task: Option<JoinHandle<()>>,
     trace: Trace,
@@ -159,6 +160,10 @@ impl Lease {
                     if body["status"] != "active" {
                         return Err("capacity caller claim was not active".to_string());
                     }
+                    let language = body["language"]
+                        .as_str()
+                        .map(|value| value.trim().to_string())
+                        .filter(|value| !value.is_empty());
                     let id = body["reservation_id"]
                         .as_str()
                         .filter(|s| {
@@ -169,7 +174,7 @@ impl Lease {
                         })
                         .ok_or("capacity caller claim returned no valid reservation")?
                         .to_string();
-                    let mut lease = Self::owned(services, id, room, trace);
+                    let mut lease = Self::owned(services, id, room, language, trace);
                     lease.start_heartbeat(config.heartbeat_seconds);
                     lease.trace.emit(
                         "capacity_claimed",
@@ -187,22 +192,33 @@ impl Lease {
         let id = config
             .reservation(services.scope().business_id(), headers)?
             .ok_or("capacity reservation missing")?;
-        let mut lease = Self::owned(services.clone(), id.clone(), room.into(), trace.clone());
+        let mut lease = Self::owned(services.clone(), id.clone(), room.into(), None, trace.clone());
         post(&services, &id, "claim", room).await?;
         trace.emit("capacity_claimed", 0, 0, json!({"source":"sip_header"}));
         lease.start_heartbeat(config.heartbeat_seconds);
         Ok(Some(lease))
     }
-    fn owned(services: Services, id: String, room: String, trace: Trace) -> Self {
+    fn owned(
+        services: Services,
+        id: String,
+        room: String,
+        language: Option<String>,
+        trace: Trace,
+    ) -> Self {
         let (stop, _) = watch::channel(false);
         Self {
             services,
             reservation: Mutex::new(Some(id)),
             room,
+            language,
             stop,
             task: None,
             trace,
         }
+    }
+    /// Reserved call language (canonical), when the caller-based claim carried one.
+    pub fn language(&self) -> Option<&str> {
+        self.language.as_deref()
     }
     fn start_heartbeat(&mut self, seconds: f64) {
         let services = self.services.clone();

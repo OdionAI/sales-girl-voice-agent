@@ -39,12 +39,16 @@ struct CallerIconStyle: ButtonStyle {
 
 struct CallerAvatar: View {
     let speaking: Bool
+    let connected: Bool
     let image: Image?
     let themeKey: String?
     @ObservedObject var audioLevel: AgentAudioLevel
+    @Binding var animationReady: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.scenePhase) private var scenePhase
     private var scale: Double {
-        speaking && !reduceMotion ? 1 + Double(audioLevel.energy) * 0.25 : 1
+        if image == nil, AnimatedAgentTheme(key: themeKey) != nil { return 1 }
+        return speaking && !reduceMotion ? 1 + Double(audioLevel.energy) * 0.25 : 1
     }
 
     private var assetName: String {
@@ -65,6 +69,10 @@ struct CallerAvatar: View {
         Group {
             if let image {
                 image.resizable().scaledToFill()
+            } else if let animated = AnimatedAgentTheme(key: themeKey) {
+                ReferenceAnimatedAvatar(theme: animated, speaking: speaking, connected: connected,
+                                        energy: audioLevel.energy, reduceMotion: reduceMotion,
+                                        sceneActive: scenePhase == .active, ready: $animationReady)
             } else if let fillColor {
                 fillColor
             } else {

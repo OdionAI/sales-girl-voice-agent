@@ -8,6 +8,7 @@ use super::{
 use crate::worker::ProductionConfig;
 use livekit::prelude::{RemoteParticipant, Room};
 use serde::Deserialize;
+use serde_json::json;
 use std::collections::HashMap;
 
 #[derive(Clone, Deserialize)]
@@ -110,6 +111,29 @@ impl OperatorConfig {
             trace.clone(),
         )
         .await?;
+        // AICC may pin the answering agent by the language the call was reserved
+        // with, instead of the number route resolved at SIP setup. Absent map or
+        // unmapped language leaves the number route in charge.
+        if let (Some(language), Some(sip)) = (
+            capacity.as_ref().and_then(|lease| lease.language()),
+            self.sip.as_ref(),
+        ) {
+            if let Some(route) = sip.language_route(language) {
+                let agent = route["config_agent_id"].as_str().unwrap_or("").trim();
+                let name = route["configured_agent_name"].as_str().unwrap_or("").trim();
+                if !agent.is_empty() && agent != services.scope().agent_id() {
+                    let from_agent = services.scope().agent_id().to_string();
+                    trace.emit(
+                        "agent_language_routed",
+                        0,
+                        0,
+                        json!({"language": language, "from_agent": from_agent, "to_agent": agent}),
+                    );
+                    let scope = services.scope().with_agent(agent, name);
+                    services = Services::new(services.config().clone(), scope, trace.clone())?;
+                }
+            }
+        }
         let outbound = if services.scope().claims()["outbound_required"] == true {
             let bound = outbound::Bound::claim(services.clone(), trace.clone()).await?;
             services = Services::new(services.config().clone(), bound.scope()?, trace)?;

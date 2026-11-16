@@ -3,7 +3,7 @@
 use super::{platform::Services, Trace};
 use chrono::{DateTime, Utc};
 use livekit_api::services::egress::{
-    EgressClient, EgressListFilter, EgressListOptions, EgressOutput, RoomCompositeOptions,
+    encoding, EgressClient, EgressListFilter, EgressListOptions, EgressOutput, RoomCompositeOptions,
 };
 use livekit_protocol::{self as proto, EgressStatus};
 use serde::{Deserialize, Serialize};
@@ -242,6 +242,13 @@ impl Config {
             output,
             ..Default::default()
         })
+    }
+    fn audio_codec(&self) -> proto::AudioCodec {
+        match self.format.as_str() {
+            "mp3" => proto::AudioCodec::AcMp3,
+            "mp4" => proto::AudioCodec::Aac,
+            _ => proto::AudioCodec::Opus,
+        }
     }
     fn client(&self) -> Result<EgressClient, String> {
         let url = reqwest::Url::parse(&self.api_url).map_err(|_| "recording_api_unavailable")?;
@@ -536,6 +543,10 @@ impl Recorder {
                 vec![EgressOutput::File(output)],
                 RoomCompositeOptions {
                     audio_only: true,
+                    encoding: encoding::EncodingOptions {
+                        audio_codec: self.config.audio_codec(),
+                        ..Default::default()
+                    },
                     ..Default::default()
                 },
             ),

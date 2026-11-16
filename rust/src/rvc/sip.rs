@@ -112,6 +112,7 @@ pub struct Config {
     pub configured_agent_name: String,
     pub did_routes: Map<String, Value>,
     pub caller_routes: Map<String, Value>,
+    pub language_routes: Map<String, Value>,
     pub voice_auth_required: Option<bool>,
 }
 pub struct Dispatch {
@@ -132,6 +133,23 @@ impl Config {
             Ok(())
         }
     }
+    /// The agent that must answer a call reserved with this language, or None
+    /// when the language is unmapped. Keys are the canonical reservation codes
+    /// (EN-NG/HAU/YOR/IGB/PGD); matching is case-insensitive. An absent or empty
+    /// map leaves today's number-based routing completely unchanged.
+    pub fn language_route(&self, language: &str) -> Option<&Value> {
+        let want = language.trim().to_ascii_uppercase();
+        if want.is_empty() {
+            return None;
+        }
+        self.language_routes.iter().find_map(|(key, value)| {
+            (key.trim().to_ascii_uppercase() == want
+                && value.is_object()
+                && !value.as_object().is_some_and(Map::is_empty))
+                .then_some(value)
+        })
+    }
+
     pub fn dispatch(&self, metadata: &str, room: &str) -> Result<Option<Dispatch>, String> {
         let data: Value =
             serde_json::from_str(metadata).map_err(|_| "invalid SIP dispatch metadata")?;
@@ -388,6 +406,22 @@ mod tests {
             .unwrap()
             .unwrap()
     }
+    #[test]
+    fn language_route_matches_canonical_codes_case_insensitively() {
+        let mut config = Config::default();
+        config.language_routes = serde_json::from_value(json!({
+            "EN-NG": {"config_agent_id": "amaka", "configured_agent_name": "Amaka"},
+            "hau":   {"config_agent_id": "abdul", "configured_agent_name": "Abdul"}
+        }))
+        .unwrap();
+        assert_eq!(config.language_route("HAU").unwrap()["config_agent_id"], "abdul");
+        assert_eq!(config.language_route(" en-ng ").unwrap()["config_agent_id"], "amaka");
+        assert!(config.language_route("YOR").is_none());
+        assert!(config.language_route("").is_none());
+        // an empty map -> no override, routing unchanged
+        assert!(Config::default().language_route("HAU").is_none());
+    }
+
     #[test]
     fn routes_trust_did_caller_and_outbound_flag_match_independent_python() {
         let reference = fixture();

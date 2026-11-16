@@ -40,6 +40,9 @@ pub fn opening_text(config: &Config, context: &AgentContext) -> String {
             }
         }
     }
+    if super::languages::swahili(&config.tts_language) {
+        return "Habari, karibu. Ninaweza kukusaidiaje leo?".into();
+    }
     let language = super::languages::code(&config.tts_language);
     if language == "pcm" {
         return if context.name.trim().is_empty() {
