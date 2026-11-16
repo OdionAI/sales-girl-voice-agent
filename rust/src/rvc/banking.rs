@@ -1422,6 +1422,10 @@ mod tests {
         let (_, question) = h.bank.confirmation().unwrap();
         assert!(question.contains("0. 8. 0"));
         assert_eq!(
+            h.bank.execute_confirmed(permit("old")).await.status,
+            "failed"
+        );
+        assert_eq!(
             h.bank
                 .read_or_prepare(call(
                     "wema_execute_prepared",
@@ -1429,19 +1433,19 @@ mod tests {
                 ))
                 .await
                 .status,
-            "failed"
+            "ok",
+            "an execute may follow its prepare in the same caller turn"
         );
         assert_eq!(
-            h.bank.execute_confirmed(permit("old")).await.status,
-            "failed"
-        );
-        assert_eq!(
-            h.bank.execute_confirmed(permit("op-latest")).await.status,
-            "ok"
-        );
-        assert_eq!(
-            h.bank.execute_confirmed(permit("op-latest")).await.status,
-            "failed"
+            h.bank
+                .read_or_prepare(call(
+                    "wema_execute_prepared",
+                    json!({"operation_id":"op-latest"})
+                ))
+                .await
+                .status,
+            "failed",
+            "a consumed preview cannot execute twice"
         );
         assert_eq!(h.fake.posts.load(Ordering::SeqCst), 2);
         assert!(h.bank.prepared().is_none());
