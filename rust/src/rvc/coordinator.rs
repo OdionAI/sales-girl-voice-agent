@@ -39,6 +39,23 @@ const RECOVERY_LINE: &str = "Sorry, I missed that. Could you say it again?";
 /// warm (5.5 s before the per-account reads were parallelised) for a customer with
 /// six accounts, and 7.4 s on the first call after a restart.
 const ACCOUNTS_PREFETCH_MS: f64 = 8000.0;
+/// How long a pause may last before the caller's words stop belonging to the
+/// same utterance. Inside this window a second segment is decoded WITH the
+/// first segment's audio (so "zero eight one … four six five" is understood as
+/// one number) and its transcript replaces the earlier one. Beyond it the
+/// caller has started a new thought and nothing is joined. `RVC_UTTERANCE_WINDOW_MS=0`
+/// turns the accumulation off and restores the old per-segment behaviour.
+const UTTERANCE_WINDOW_MS: f64 = 1500.0;
+/// Hard cap on the audio accumulated for one utterance (20 s at 16 kHz).
+const MAX_UTTERANCE_SAMPLES: usize = 20 * 16000;
+
+fn utterance_window_ms() -> f64 {
+    std::env::var("RVC_UTTERANCE_WINDOW_MS")
+        .ok()
+        .and_then(|value| value.trim().parse::<f64>().ok())
+        .filter(|value| value.is_finite() && *value >= 0.0)
+        .unwrap_or(UTTERANCE_WINDOW_MS)
+}
 
 fn accounts_prefetch_ms() -> f64 {
     std::env::var("RVC_ACCOUNTS_PREFETCH_MS")
@@ -531,6 +548,13 @@ struct Coordinator {
     last_spoken: Option<tokio::time::Instant>,
     /// When a spoken filler (wait cue) was last used.
     last_filler: Option<tokio::time::Instant>,
+    /// Audio of the whole current utterance, across pauses. A phone number
+    /// read with gaps is decoded from this, not from one orphaned segment.
+    utterance_pcm: Vec<i16>,
+    /// When the last segment of the utterance was committed.
+    utterance_at: Option<tokio::time::Instant>,
+    /// The turn whose segment continued an earlier one inside the window.
+    continuation_turn: Option<u64>,
     /// Prompt block built from the ring-time balance read.
     accounts: Option<String>,
     accounts_started: Option<tokio::time::Instant>,
@@ -768,6 +792,9 @@ pub fn start_with_services(
         unanswered: None,
         last_spoken: None,
         last_filler: None,
+        utterance_pcm: Vec::new(),
+        utterance_at: None,
+        continuation_turn: None,
         accounts: None,
         accounts_started: None,
         accounts_task: None,
@@ -1149,6 +1176,66 @@ fn wait_cue(call: &super::actions::Call) -> String {
             let _ = events.send(Internal::AccountsPrefetched(result)).await;
         }));
     }
+    /// True when the pause since the last segment is short enough that this
+    /// speech continues the same utterance.
+    fn utterance_continues(&self) -> bool {
+        let window = utterance_window_ms();
+        window > 0.0
+            && self
+                .utterance_at
+                .is_some_and(|at| at.elapsed().as_secs_f64() * 1000.0 <= window)
+    }
+    /// A transcript that arrived after the next segment opened is still the
+    /// caller's words: keep it, and answer the joined text once.
+    async fn recover_late_final(&mut self, text: String) {
+        let text = text.trim().to_string();
+        if text.is_empty() {
+            return;
+        }
+        let Some((owner, current)) = self.unanswered.clone() else {
+            self.trace
+                .emit("stt_final_late_superseded", self.turn, 0, json!({}));
+            return;
+        };
+        if owner != self.turn {
+            self.trace.emit(
+                "stt_final_late_superseded",
+                self.turn,
+                0,
+                json!({"owner":owner}),
+            );
+            return;
+        }
+        let (prior_key, next_key) = (normalize(&text), normalize(&current));
+        let merged = if next_key.contains(&prior_key) {
+            current.clone()
+        } else if prior_key.contains(&next_key) {
+            text.clone()
+        } else {
+            format!("{text} {current}")
+        };
+        if merged == current {
+            self.trace
+                .emit("stt_final_late_superseded", self.turn, 0, json!({}));
+            return;
+        }
+        self.trace.emit(
+            "stt_final_late_recovered",
+            self.turn,
+            0,
+            json!({"from_chars":current.len(),"to_chars":merged.len()}),
+        );
+        self.final_text = merged.clone();
+        self.unanswered = Some((self.turn, merged.clone()));
+        let unspoken = self
+            .attempt
+            .as_ref()
+            .is_none_or(|a| !a.authorized && a.answer.trim().is_empty());
+        if unspoken && !self.call_ending {
+            self.cancel("late_final_recovered").await;
+            self.begin(merged, true, None).await;
+        }
+    }
     /// True when a spoken filler is due (see `filler_due_at`).
     fn filler_due(&self) -> bool {
         filler_due_at(
@@ -1183,17 +1270,25 @@ fn wait_cue(call: &super::actions::Call) -> String {
         if owner >= turn {
             return None;
         }
+        // Beyond the continuation window the caller has started a new thought;
+        // joining the two would change the meaning of both.
+        if self.continuation_turn != Some(turn) {
+            return None;
+        }
         let (prior, next) = (prior.trim(), text.trim());
         if prior.is_empty() || next.is_empty() {
             return None;
         }
-        if normalize(prior) == normalize(next) {
+        let (prior_key, next_key) = (normalize(prior), normalize(next));
+        if prior_key == next_key {
             return Some(prior.to_string());
         }
-        if next.contains(prior) {
+        // An accumulated decode returns the whole utterance, so the later text
+        // supersedes the earlier one instead of repeating it.
+        if next_key.starts_with(&prior_key) || next_key.contains(&prior_key) {
             return Some(next.to_string());
         }
-        if prior.contains(next) {
+        if prior_key.contains(&next_key) {
             return Some(prior.to_string());
         }
         if prior.len() + next.len() > MAX_COALESCED_CHARS {
@@ -1988,7 +2083,11 @@ fn wait_cue(call: &super::actions::Call) -> String {
                     self.idle_checks = 0;
                     self.next_idle = tokio::time::Instant::now()
                         + Duration::from_secs_f64(self.c.engagement_idle_seconds);
+                    // A short pause is a pause, not a new thought: the next
+                    // segment keeps the utterance's audio and transcript.
+                    let continues = self.utterance_continues();
                     self.turn += 1;
+                    self.continuation_turn = continues.then_some(self.turn);
                     self.idle_close_at = None;
                     self.flush_suspended = false;
                     self.last_partial.clear();
@@ -2085,8 +2184,34 @@ fn wait_cue(call: &super::actions::Call) -> String {
                 if let Some(bank) = &self.banking {
                     bank.utterance(&self.pcm);
                 }
+                let segment = std::mem::take(&mut self.pcm);
+                let continued = self.continuation_turn == Some(self.turn);
+                // Keep the whole utterance's audio, not just this segment: a
+                // phone number read with pauses must be decoded with its own
+                // context. Beyond the window this starts a fresh utterance.
+                if continued {
+                    self.utterance_pcm.extend_from_slice(&segment);
+                } else {
+                    self.utterance_pcm = segment.clone();
+                }
+                if self.utterance_pcm.len() > MAX_UTTERANCE_SAMPLES {
+                    let excess = self.utterance_pcm.len() - MAX_UTTERANCE_SAMPLES;
+                    self.utterance_pcm.drain(..excess);
+                }
+                self.utterance_at = Some(tokio::time::Instant::now());
+                self.trace.emit(
+                    "utterance_audio_committed",
+                    self.turn,
+                    0,
+                    json!({"continued":continued,"segment_samples":segment.len(),"utterance_samples":self.utterance_pcm.len()}),
+                );
                 if let Some(asr) = &self.asr {
-                    let _ = asr.commit(self.turn, std::mem::take(&mut self.pcm)).await;
+                    let audio = if utterance_window_ms() > 0.0 {
+                        self.utterance_pcm.clone()
+                    } else {
+                        segment
+                    };
+                    let _ = asr.commit(self.turn, audio).await;
                 }
                 let (tx, turn) = (self.events.clone(), self.turn);
                 let timeout = Duration::from_secs_f64(
@@ -2216,7 +2341,13 @@ fn wait_cue(call: &super::actions::Call) -> String {
             return;
         }
         if turn != self.turn || self.state != State::AwaitingFinal || !self.final_text.is_empty() {
-            self.trace.emit("stt_final_rejected", turn, 0, json!({}));
+            // A transcript for an utterance that has already moved on is still
+            // the caller's words - fold it in rather than dropping it.
+            if turn < self.turn {
+                self.recover_late_final(text).await;
+            } else {
+                self.trace.emit("stt_final_rejected", turn, 0, json!({}));
+            }
             return;
         }
         if text.is_empty() {
