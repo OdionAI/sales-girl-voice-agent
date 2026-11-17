@@ -5103,3 +5103,176 @@ async fn provider_refusal_is_spoken_instead_of_going_quiet() {
     assert!(spoken, "the caller hears an apology instead of silence");
     h.close().await;
 }
+
+/// A pause inside a sentence must not orphan the audio: the second segment is
+/// committed together with the first, so a split phone number is decoded once.
+/// Harness shaped like a production call: a reply grace keeps the previous
+/// turn open while the caller keeps speaking, which is what a pause mid-number
+/// looks like to the worker.
+async fn continuity_harness() -> Harness {
+    Harness::configured(true, |c| {
+        c.agent_context.agent_id = "continuity-agent".into();
+        c.reply_grace_agent_ids = vec!["continuity-agent".into()];
+        c.reply_grace_ms = 1500.0;
+    })
+    .await
+}
+
+#[tokio::test]
+async fn paused_segments_keep_the_whole_utterance_audio() {
+    let h = continuity_harness().await;
+    h.voice().await;
+    h.end().await;
+    h.until("user_speech_end").await;
+    h.session
+        .input
+        .send(Input::Final {
+            turn: 1,
+            text: "zero eight one".into(),
+        })
+        .await
+        .unwrap();
+    // Second segment inside the continuation window.
+    h.voice().await;
+    h.end().await;
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while h
+            .trace
+            .events()
+            .iter()
+            .filter(|e| e.event == "utterance_audio_committed")
+            .count()
+            < 2
+        {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .await
+    .expect("both segments committed");
+    let events = h.trace.events();
+    let commits: Vec<_> = events
+        .iter()
+        .filter(|e| e.event == "utterance_audio_committed")
+        .collect();
+    let first = &commits[0].data;
+    let second = &commits[1].data;
+    assert_eq!(first["continued"], false, "{}", first);
+    assert_eq!(second["continued"], true, "{}", second);
+    let seg = second["segment_samples"].as_u64().unwrap();
+    let whole = second["utterance_samples"].as_u64().unwrap();
+    assert!(
+        whole > seg,
+        "the second commit carries the whole utterance: {second}"
+    );
+    assert_eq!(
+        whole,
+        first["segment_samples"].as_u64().unwrap() + seg,
+        "segment audio is appended, never replaced: {second}"
+    );
+    h.close().await;
+}
+
+/// A transcript that arrives after the next segment opened is folded in, not
+/// dropped: the caller's earlier words still reach the model.
+#[tokio::test]
+async fn late_final_is_folded_in_instead_of_dropped() {
+    let h = continuity_harness().await;
+    h.voice().await;
+    h.end().await;
+    h.until("user_speech_end").await;
+    h.session
+        .input
+        .send(Input::Final {
+            turn: 1,
+            text: "transfer five thousand".into(),
+        })
+        .await
+        .unwrap();
+    // Second segment opens turn 2 with new words before turn 1's digits land.
+    h.voice().await;
+    h.end().await;
+    h.until("user_speech_end").await;
+    h.session
+        .input
+        .send(Input::Final {
+            turn: 2,
+            text: "zero eight one four six five".into(),
+        })
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    h.session
+        .input
+        .send(Input::Final {
+            turn: 1,
+            text: "to my friend's account".into(),
+        })
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while !h
+            .trace
+            .events()
+            .iter()
+            .any(|e| e.event == "stt_final_late_recovered")
+        {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .await
+    .expect("the late transcript is kept");
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let requests = h.fixture.requests.lock().unwrap();
+    let last = requests
+        .iter()
+        .rev()
+        .find(|r| r.get("messages").is_some())
+        .expect("a chat request");
+    let user = last["messages"].as_array().unwrap().last().unwrap()["content"]
+        .as_str()
+        .unwrap();
+    assert!(
+        user.contains("zero eight one four six five") && user.contains("to my friend's account"),
+        "both parts reach the model: {user}"
+    );
+    drop(requests);
+    h.close().await;
+}
+
+/// Beyond the continuation window the two segments are different thoughts and
+/// must not be glued together.
+#[tokio::test]
+async fn segments_beyond_the_window_are_not_joined() {
+    let h = continuity_harness().await;
+    h.voice().await;
+    h.end().await;
+    h.until("user_speech_end").await;
+    h.session
+        .input
+        .send(Input::Final {
+            turn: 1,
+            text: "what is my balance".into(),
+        })
+        .await
+        .unwrap();
+    // Wait past the continuation window before the next utterance.
+    tokio::time::sleep(Duration::from_millis(1600)).await;
+    h.voice().await;
+    h.end().await;
+    h.until("user_speech_end").await;
+    h.session
+        .input
+        .send(Input::Final {
+            turn: 2,
+            text: "and send five thousand to Ada".into(),
+        })
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let events = h.trace.events();
+    assert!(
+        !events.iter().any(|e| e.event == "turn_final_coalesced"),
+        "a new thought is not merged into the previous one"
+    );
+    h.close().await;
+}
