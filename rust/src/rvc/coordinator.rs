@@ -34,10 +34,11 @@ const RECOVERY_LINE: &str = "Sorry, I missed that. Could you say it again?";
 /// account once, before the caller's first turn, so the agent can name the
 /// account it will use instead of waiting on a tool round-trip. Bounded and
 /// fail-soft: a slow or unauthorised read must never delay the greeting.
-/// `RVC_ACCOUNTS_PREFETCH_MS=0` disables it. Sized from live calls: the
-/// connector reads A1 plus one A2 per account, so a two-account list costs
-/// three bank round-trips and 1.5 s was not enough.
-const ACCOUNTS_PREFETCH_MS: f64 = 4000.0;
+/// `RVC_ACCOUNTS_PREFETCH_MS=0` disables it. Sized from the real connector: the
+/// account list costs one A1 plus one A2 per owned account, measured at 2.0-3.5 s
+/// warm (5.5 s before the per-account reads were parallelised) for a customer with
+/// six accounts, and 7.4 s on the first call after a restart.
+const ACCOUNTS_PREFETCH_MS: f64 = 8000.0;
 
 fn accounts_prefetch_ms() -> f64 {
     std::env::var("RVC_ACCOUNTS_PREFETCH_MS")
