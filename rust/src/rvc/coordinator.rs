@@ -21,6 +21,88 @@ enum State {
     Releasing,
     Playing,
 }
+/// Minimum spacing between two spoken fillers, and minimum spacing between the
+/// agent's own speech and a new filler. Fillers are gated on *speech*, not on
+/// the tool starting: a caller who just heard the agent must not hear another
+/// "one moment" two seconds later because two bank reads fired in a row.
+const FILLER_MIN_GAP: Duration = Duration::from_secs(9);
+const SPEECH_MIN_GAP: Duration = Duration::from_secs(6);
+/// Said when a caller turn produced no usable transcript at all. Silence is
+/// never an acceptable answer to a caller who just spoke.
+const RECOVERY_LINE: &str = "Sorry, I missed that. Could you say it again?";
+/// Ring-time balance prefetch deadline. The worker asks the connector for every
+/// account once, before the caller's first turn, so the agent can name the
+/// account it will use instead of waiting on a tool round-trip. Bounded and
+/// fail-soft: a slow or unauthorised read must never delay the greeting.
+/// `RVC_ACCOUNTS_PREFETCH_MS=0` disables it. Sized from the real connector: the
+/// account list costs one A1 plus one A2 per owned account, measured at 2.0-3.5 s
+/// warm (5.5 s before the per-account reads were parallelised) for a customer with
+/// six accounts, and 7.4 s on the first call after a restart.
+const ACCOUNTS_PREFETCH_MS: f64 = 8000.0;
+/// How long a pause may last before the caller's words stop belonging to the
+/// same utterance. Inside this window a second segment is decoded WITH the
+/// first segment's audio (so "zero eight one … four six five" is understood as
+/// one number) and its transcript replaces the earlier one. Beyond it the
+/// caller has started a new thought and nothing is joined. `RVC_UTTERANCE_WINDOW_MS=0`
+/// turns the accumulation off and restores the old per-segment behaviour.
+const UTTERANCE_WINDOW_MS: f64 = 1500.0;
+/// Hard cap on the audio accumulated for one utterance (20 s at 16 kHz).
+const MAX_UTTERANCE_SAMPLES: usize = 20 * 16000;
+
+fn utterance_window_ms() -> f64 {
+    std::env::var("RVC_UTTERANCE_WINDOW_MS")
+        .ok()
+        .and_then(|value| value.trim().parse::<f64>().ok())
+        .filter(|value| value.is_finite() && *value >= 0.0)
+        .unwrap_or(UTTERANCE_WINDOW_MS)
+}
+
+fn accounts_prefetch_ms() -> f64 {
+    std::env::var("RVC_ACCOUNTS_PREFETCH_MS")
+        .ok()
+        .and_then(|value| value.trim().parse::<f64>().ok())
+        .filter(|value| value.is_finite() && *value >= 0.0)
+        .unwrap_or(ACCOUNTS_PREFETCH_MS)
+}
+
+/// Render the prefetched account list into a prompt block. Returns None when
+/// the connector did not hand back a usable list, so the caller falls back to
+/// the ordinary tool path.
+fn accounts_block(data: &Value) -> Option<String> {
+    let rows = data.get("accounts").and_then(Value::as_array)?;
+    if rows.is_empty() {
+        return None;
+    }
+    let mut block = String::from(
+        "Accounts on this call (read from the bank when the call connected; treat as current for this call and do not call wema_get_balance again unless the caller asks for a fresh balance):\n",
+    );
+    for row in rows {
+        let number = row["account_number"].as_str().unwrap_or("");
+        let last4 = row["last4"]
+            .as_str()
+            .map(str::to_owned)
+            .unwrap_or_else(|| number.chars().rev().take(4).collect::<Vec<_>>().into_iter().rev().collect());
+        let balance = match &row["available_balance"] {
+            Value::String(text) => text.clone(),
+            Value::Number(number) => number.to_string(),
+            _ => "unknown".into(),
+        };
+        let currency = row["currency"].as_str().unwrap_or("NGN");
+        let preferred = if row["preferred"].as_bool() == Some(true) {
+            " - preferred, highest balance"
+        } else {
+            ""
+        };
+        block.push_str(&format!(
+            "- account ending {last4}: available balance {balance} {currency}{preferred}\n"
+        ));
+    }
+    block.push_str(
+        "Pick the account with the highest available balance that covers the amount, tell the caller which account you used, and never ask the caller which account to use.",
+    );
+    Some(block)
+}
+
 /// Percent of 10 ms frames whose RMS clears the loudness floor. Used by the
 /// optional min-utterance safety net before committing audio to ASR.
 fn voiced_frame_percent(pcm: &[i16], speech_rms: f64) -> f64 {
@@ -52,6 +134,17 @@ fn counts_as_speech(level: f64, speech_prob: Option<f64>, c: &Config) -> bool {
             _ => true,
         }
 }
+/// Whether a filler (wait cue) may be spoken now, given the last filler and
+/// the agent's own last speech.
+pub(super) fn filler_due_at(
+    last_filler: Option<tokio::time::Instant>,
+    last_spoken: Option<tokio::time::Instant>,
+    now: tokio::time::Instant,
+) -> bool {
+    last_filler.map_or(true, |t| now.duration_since(t) >= FILLER_MIN_GAP)
+        && last_spoken.map_or(true, |t| now.duration_since(t) >= SPEECH_MIN_GAP)
+}
+
 #[derive(Debug)]
 pub enum Output {
     Ready,
@@ -207,6 +300,7 @@ enum Internal {
         operation: Option<u64>,
     },
     FinalTimeout(u64),
+    AccountsPrefetched(Result<super::actions::ActionResult, String>),
     Compacted {
         revision: u64,
         snapshot: Snapshot,
@@ -275,6 +369,23 @@ impl Drop for TransferCleanupWatch {
     }
 }
 const MOMO_PSB_BUSINESS_ID: &str = "f2ff0fe3d56c468890489a76a6310d4a";
+/// Businesses whose synthesized speech is passed through the output denoise
+/// stage. MoMo PSB was the original case; the Wema-side banking tenants hit the
+/// same TTS hiss/onset artefact, so they are included too. Override with
+/// `RVC_OUTPUT_DENOISE_BUSINESS_IDS` (comma separated ids, or `*` for all).
+const OUTPUT_DENOISE_BUSINESS_IDS: &str = "f2ff0fe3d56c468890489a76a6310d4a,\
+a0c8cda23b464ee0898c48f9a4d3a444,\
+fb6132f4f63f4ec7bfa5bc31e06e4242,\
+e723015dfc1b4c5ba4e0c78581272cb6,\
+17bfa91a790345da86a47b5ef4de158c";
+fn output_denoise_enabled(business_id: &str) -> bool {
+    let list = std::env::var("RVC_OUTPUT_DENOISE_BUSINESS_IDS")
+        .unwrap_or_else(|_| OUTPUT_DENOISE_BUSINESS_IDS.to_string());
+    list.split(',')
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+        .any(|entry| entry == "*" || business_matches(business_id, entry))
+}
 /// Business ids arrive either hyphenated (canonical UUID, e.g. from the auth
 /// scope) or bare; compare them hyphen- and case-insensitively.
 fn business_matches(a: &str, b: &str) -> bool {
@@ -368,6 +479,9 @@ struct Coordinator {
     candidate: bool,
     speech_ms: f64,
     silence_ms: f64,
+    waiting_for_phone_number: bool,
+    phone_number_capture_turns_remaining: u8,
+    phone_number_capture_prompt_attempt: Option<u64>,
     pcm: Vec<i16>,
     preconfirm: Option<String>,
     flush_revision: u64,
@@ -425,6 +539,29 @@ struct Coordinator {
     demo: Option<super::passkey_demo::Demo>,
     demo_task: Option<JoinHandle<()>>,
     demo_run: u64,
+    /// Caller text the agent has heard but not yet answered: (turn, text).
+    /// Fragment churn, a silent barge-in or a lost ASR final all kill a turn
+    /// before any speech; this is what the machine falls back to instead of
+    /// going quiet.
+    unanswered: Option<(u64, String)>,
+    /// When the agent last produced audible speech; drives the filler gate.
+    last_spoken: Option<tokio::time::Instant>,
+    /// When a spoken filler (wait cue) was last used.
+    last_filler: Option<tokio::time::Instant>,
+    /// Audio of the whole current utterance, across pauses. A phone number
+    /// read with gaps is decoded from this, not from one orphaned segment.
+    utterance_pcm: Vec<i16>,
+    /// When the last segment of the utterance was committed.
+    utterance_at: Option<tokio::time::Instant>,
+    /// Digits the caller actually said, copied verbatim from their words. The
+    /// model must copy these instead of transcribing digit words itself.
+    caller_digits: Option<String>,
+    /// The turn whose segment continued an earlier one inside the window.
+    continuation_turn: Option<u64>,
+    /// Prompt block built from the ring-time balance read.
+    accounts: Option<String>,
+    accounts_started: Option<tokio::time::Instant>,
+    accounts_task: Option<JoinHandle<()>>,
 }
 /// The actor is the sole owner of turn/final/attempt authority. Provider streaming
 /// and paced playout run outside it, so held-audio release cannot stop input.
@@ -596,6 +733,9 @@ pub fn start_with_services(
         candidate: false,
         speech_ms: 0.0,
         silence_ms: 0.0,
+        waiting_for_phone_number: false,
+        phone_number_capture_turns_remaining: 0,
+        phone_number_capture_prompt_attempt: None,
         pcm: Vec::new(),
         preconfirm: None,
         flush_revision: 0,
@@ -653,11 +793,22 @@ pub fn start_with_services(
         demo,
         demo_task: None,
         demo_run: 0,
+        unanswered: None,
+        last_spoken: None,
+        last_filler: None,
+        caller_digits: None,
+        utterance_pcm: Vec::new(),
+        utterance_at: None,
+        continuation_turn: None,
+        accounts: None,
+        accounts_started: None,
+        accounts_task: None,
     };
     let task = tokio::spawn(async move {
         if !with_asr {
             let _ = s.output.send(Output::Ready).await;
         }
+        s.prefetch_accounts();
         let mut maintenance = tokio::time::interval(Duration::from_millis(100));
         maintenance.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
@@ -665,7 +816,7 @@ pub fn start_with_services(
                 _=maintenance.tick()=>s.maintenance(),
                 event=internal.recv()=>if let Some(e)=event{s.internal(e).await;},
                 event=async{match s.asr.as_mut(){Some(a)=>a.events.recv().await,None=>std::future::pending().await}}=>{
-                    match event{Some(AsrEvent::Ready)=>{s.asr_ready=true;s.trace.emit("session_ready",0,0,json!({}));let _=s.output.send(Output::Ready).await;s.maybe_opening().await;},Some(AsrEvent::Partial(t))=>s.partial(t).await,Some(AsrEvent::Hypothesis{turn,revision,text})=>s.hypothesis(turn,revision,text).await,Some(AsrEvent::Final{turn,text,base_candidate,qwen_candidate})=>s.final_text(turn,text,base_candidate,qwen_candidate).await,Some(AsrEvent::Unavailable(t))=>s.unavailable(t).await,Some(AsrEvent::Degraded(e))=>{s.trace.emit("stt_realtime_degraded",s.turn,0,json!({"detail":e}));let _=s.output.send(Output::Status(e)).await;},Some(AsrEvent::Error(e))=>{s.fail(e).await;break;},None=>{s.fail("ASR task closed".into()).await;break;}}
+                    match event{Some(AsrEvent::Ready)=>{s.asr_ready=true;s.trace.emit("session_ready",0,0,json!({}));let _=s.output.send(Output::Ready).await;s.maybe_opening().await;},Some(AsrEvent::Partial(t))=>s.partial(t).await,Some(AsrEvent::Hypothesis{turn,revision,text})=>s.hypothesis(turn,revision,text).await,Some(AsrEvent::Final{turn,text,base_candidate,qwen_candidate})=>s.final_text(turn,text,base_candidate,qwen_candidate).await,Some(AsrEvent::Unavailable(t))=>s.unavailable(t,"asr_unavailable").await,Some(AsrEvent::Degraded(e))=>{s.trace.emit("stt_realtime_degraded",s.turn,0,json!({"detail":e}));let _=s.output.send(Output::Status(e)).await;},Some(AsrEvent::Error(e))=>{s.fail(e).await;break;},None=>{s.fail("ASR task closed".into()).await;break;}}
                 },
                 command=rx.recv()=>match command{
                     Some(Input::Pcm(pcm))=>s.audio(pcm).await,
@@ -674,7 +825,7 @@ pub fn start_with_services(
                     Some(Input::Partial(t))=>s.partial(t).await,
                     Some(Input::Hypothesis{turn,revision,text})=>s.hypothesis(turn,revision,text).await,
                     Some(Input::Final{turn,text})=>s.final_text(turn,text,None,None).await,
-                    Some(Input::Unavailable(t))=>s.unavailable(t).await,
+                    Some(Input::Unavailable(t))=>s.unavailable(t,"asr_unavailable").await,
                     Some(Input::ClientReady)=>{s.opening_started=true;s.maybe_opening().await;},
                     Some(Input::EndCallFailed{reason})=>{
                         s.call_ending=false;
@@ -922,19 +1073,275 @@ impl Coordinator {
         );
         self.transition(State::Releasing, "banking_request_pending");
     }
+/// Spoken while a read is in flight. Kept as verbatim speech so the worker can
+/// answer instantly without another model round-trip mid-transaction; rotated so
+/// a caller never hears the same line twice.
+const WAIT_CUES_READ: &[&str] = &[
+    "Let me pull that up for you.",
+    "Checking that now.",
+    "One second, I'm on it.",
+    "Give me a moment while I look.",
+    "Looking into that for you.",
+    "Hang on, checking that.",
+    "Just a sec, I'm checking.",
+    "I'll have that in a moment.",
+    "Pulling that up now.",
+    "Right, let me check that.",
+    "Okay, checking on that.",
+    "Bear with me a moment.",
+    "Alright, let me see.",
+    "Okay, I'm looking.",
+    "Give me a second here.",
+    "Let me have a look.",
+];
+/// Spoken while a prepare is in flight. No jargon, no claim of completion.
+const WAIT_CUES_PREPARE: &[&str] = &[
+    "Okay, setting that up.",
+    "Right, doing that now.",
+    "On it.",
+    "Okay, getting that ready.",
+    "Alright, sorting that out.",
+    "Sure, I'm on that now.",
+    "Okay, almost there.",
+    "Right, working on it.",
+    "Okay, putting that together.",
+    "Right, I'm setting that up now.",
+    "Okay, arranging that.",
+    "Got it, getting that sorted.",
+    "Right, that's in progress.",
+    "Okay, I'm getting it done.",
+    "Alright, I'm on it.",
+    "Okay, processing that.",
+];
+/// Spoken while the execute is submitted, just before the passkey prompt.
+const WAIT_CUES_EXECUTE: &[&str] = &[
+    "Okay, sending that to your phone now.",
+    "Right, that's going through now.",
+    "Done, just confirm it on your phone.",
+    "Okay, check your phone to approve.",
+    "Sending it to you now.",
+    "Right, approve it on your phone.",
+    "Okay, I'm sending it through.",
+    "Right, sending that now.",
+    "Okay, it's on its way to your phone.",
+    "Check your phone and approve it.",
+    "Right, that's heading to you now.",
+    "Okay, approve it when it appears.",
+];
+
+fn next_wait_cue(pool: &'static [&'static str]) -> String {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static CURSOR: AtomicUsize = AtomicUsize::new(0);
+    let index = CURSOR.fetch_add(1, Ordering::Relaxed) % pool.len();
+    pool[index].to_string()
+}
+
+fn wait_cue(call: &super::actions::Call) -> String {
+    if call.name == "wema_execute_prepared" {
+        Self::next_wait_cue(Self::WAIT_CUES_EXECUTE)
+    } else if call.name.starts_with("wema_prepare_") {
+        Self::next_wait_cue(Self::WAIT_CUES_PREPARE)
+    } else {
+        Self::next_wait_cue(Self::WAIT_CUES_READ)
+    }
+}
+
+    /// Warm the account list before the caller's first turn. Runs once per
+    /// call, bounded by `accounts_prefetch_ms`, and never surfaces a failure to
+    /// the caller - a miss just leaves the ordinary `wema_get_balance` path.
+    fn prefetch_accounts(&mut self) {
+        let deadline = accounts_prefetch_ms();
+        let enabled = self
+            .banking
+            .as_ref()
+            .is_some_and(|bank| bank.available() && bank.enabled(super::banking::BALANCE_TOOL));
+        if deadline <= 0.0 || !enabled {
+            self.trace.emit(
+                "accounts_prefetch_skipped",
+                0,
+                0,
+                json!({"deadline_ms":deadline,"banking":enabled}),
+            );
+            return;
+        }
+        let Some(bank) = self.banking.clone() else {
+            return;
+        };
+        let events = self.events.clone();
+        self.accounts_started = Some(tokio::time::Instant::now());
+        self.trace
+            .emit("accounts_prefetch_start", 0, 0, json!({"deadline_ms":deadline}));
+        self.accounts_task = Some(tokio::spawn(async move {
+            let result = tokio::time::timeout(
+                Duration::from_millis(deadline as u64),
+                bank.all_accounts(),
+            )
+            .await
+            .map_err(|_| "timeout".to_string());
+            let _ = events.send(Internal::AccountsPrefetched(result)).await;
+        }));
+    }
+    /// True when the pause since the last segment is short enough that this
+    /// speech continues the same utterance.
+    fn utterance_continues(&self) -> bool {
+        let window = utterance_window_ms();
+        window > 0.0
+            && self
+                .utterance_at
+                .is_some_and(|at| at.elapsed().as_secs_f64() * 1000.0 <= window)
+    }
+    /// A transcript that arrived after the next segment opened is still the
+    /// caller's words: keep it, and answer the joined text once.
+    async fn recover_late_final(&mut self, text: String) {
+        let text = text.trim().to_string();
+        if text.is_empty() {
+            return;
+        }
+        let Some((owner, current)) = self.unanswered.clone() else {
+            self.trace
+                .emit("stt_final_late_superseded", self.turn, 0, json!({}));
+            return;
+        };
+        if owner != self.turn {
+            self.trace.emit(
+                "stt_final_late_superseded",
+                self.turn,
+                0,
+                json!({"owner":owner}),
+            );
+            return;
+        }
+        let (prior_key, next_key) = (normalize(&text), normalize(&current));
+        let merged = if next_key.contains(&prior_key) {
+            current.clone()
+        } else if prior_key.contains(&next_key) {
+            text.clone()
+        } else {
+            format!("{text} {current}")
+        };
+        if merged == current {
+            self.trace
+                .emit("stt_final_late_superseded", self.turn, 0, json!({}));
+            return;
+        }
+        self.trace.emit(
+            "stt_final_late_recovered",
+            self.turn,
+            0,
+            json!({"from_chars":current.len(),"to_chars":merged.len()}),
+        );
+        self.final_text = merged.clone();
+        self.unanswered = Some((self.turn, merged.clone()));
+        let unspoken = self
+            .attempt
+            .as_ref()
+            .is_none_or(|a| !a.authorized && a.answer.trim().is_empty());
+        if unspoken && !self.call_ending {
+            self.cancel("late_final_recovered").await;
+            self.begin(merged, true, None).await;
+        }
+    }
+    /// True when a spoken filler is due (see `filler_due_at`).
+    fn filler_due(&self) -> bool {
+        filler_due_at(
+            self.last_filler,
+            self.last_spoken,
+            tokio::time::Instant::now(),
+        )
+    }
+    /// The agent produced a reply for `turn` (text or a tool call), so that
+    /// utterance is answered and must not be folded into the next one.
+    fn note_answered(&mut self, turn: u64) {
+        if self
+            .unanswered
+            .as_ref()
+            .is_some_and(|(owner, _)| *owner <= turn)
+        {
+            self.unanswered = None;
+        }
+    }
+    /// The agent produced audible speech for `turn`, so nothing is owed to the
+    /// caller for that utterance any more.
+    fn note_spoken(&mut self, turn: u64) {
+        self.last_spoken = Some(tokio::time::Instant::now());
+        self.note_answered(turn);
+    }
+    /// Join a new final with caller text that has not been answered yet.
+    /// Returns None when there is nothing to join, or when the two are far
+    /// enough apart that treating them as one request would be wrong.
+    fn coalesce_final(&self, turn: u64, text: &str) -> Option<String> {
+        const MAX_COALESCED_CHARS: usize = 320;
+        let (owner, prior) = self.unanswered.clone()?;
+        if owner >= turn {
+            return None;
+        }
+        // Beyond the continuation window the caller has started a new thought;
+        // joining the two would change the meaning of both.
+        if self.continuation_turn != Some(turn) {
+            return None;
+        }
+        let (prior, next) = (prior.trim(), text.trim());
+        if prior.is_empty() || next.is_empty() {
+            return None;
+        }
+        let (prior_key, next_key) = (normalize(prior), normalize(next));
+        if prior_key == next_key {
+            return Some(prior.to_string());
+        }
+        // An accumulated decode returns the whole utterance, so the later text
+        // supersedes the earlier one instead of repeating it.
+        if next_key.starts_with(&prior_key) || next_key.contains(&prior_key) {
+            return Some(next.to_string());
+        }
+        if prior_key.contains(&next_key) {
+            return Some(prior.to_string());
+        }
+        if prior.len() + next.len() > MAX_COALESCED_CHARS {
+            return None;
+        }
+        Some(format!("{prior} {next}"))
+    }
+    /// The caller has said something we never answered. Re-open the turn on
+    /// that text rather than resting in Idle with dead air. Returns true when
+    /// it re-opened the turn.
+    async fn recover_unanswered(&mut self, reason: &str) -> bool {
+        let Some((owner, text)) = self.unanswered.take() else {
+            return false;
+        };
+        if text.trim().is_empty() {
+            return false;
+        }
+        self.trace.emit(
+            "turn_recovered_unanswered_final",
+            self.turn,
+            0,
+            json!({"owner":owner,"reason":reason,"chars":text.len()}),
+        );
+        self.final_text = text.clone();
+        self.transition(State::AwaitingFinal, "turn_recovered_unanswered_final");
+        self.begin(text, true, None).await;
+        true
+    }
     async fn bank_wait(
         &mut self,
         call: super::actions::Call,
         permit: Option<super::actions::Permit>,
     ) {
-        let message = if call.name == "wema_execute_prepared" {
-            "One moment while I verify this request."
-        } else if call.name.starts_with("wema_prepare_") {
-            "One moment while I prepare that request."
-        } else {
-            "One moment while I check that for you."
-        };
-        self.begin(self.final_text.clone(), true, Some(message.into()))
+        if !self.filler_due() {
+            // The caller heard us a moment ago. Run the tool straight away and
+            // stay quiet rather than stacking another "one moment".
+            self.trace.emit(
+                "filler_suppressed",
+                self.turn,
+                0,
+                json!({"tool":call.name,"stage":"wait_cue"}),
+            );
+            self.launch_bank(call, permit);
+            return;
+        }
+        self.last_filler = Some(tokio::time::Instant::now());
+        let message = Self::wait_cue(&call);
+        self.begin(self.final_text.clone(), true, Some(message))
             .await;
         if let Some(a) = self.attempt.as_mut() {
             a.deferred_bank = Some((call, permit));
@@ -1020,7 +1427,23 @@ impl Coordinator {
                 None
             };
         if let Some(kind) = kind {
-            self.prepare_engagement(kind);
+            // Wait cues are fillers, so they obey the speech gate too: a fast
+            // sequence of tool calls must not produce three "one moment"s in
+            // eight seconds. The completed-result speech is not a filler.
+            let wait_cue = matches!(kind, EngagementKind::ToolStarted | EngagementKind::ToolWait);
+            if wait_cue && !self.filler_due() {
+                self.trace.emit(
+                    "filler_suppressed",
+                    self.turn,
+                    0,
+                    json!({"tool":self.operation.as_ref().map(|op|op.call.name.clone()).unwrap_or_default(),"stage":kind.reason()}),
+                );
+            } else {
+                if wait_cue {
+                    self.last_filler = Some(tokio::time::Instant::now());
+                }
+                self.prepare_engagement(kind);
+            }
         }
     }
     fn maybe_deliver_action(&mut self) {
@@ -1261,12 +1684,13 @@ impl Coordinator {
     fn idle_opportunity(&mut self) {
         if !self.c.engagement_enabled
             || !self.idle_safe()
-            || ((self.pending_action.is_some()
-                || self
-                    .banking
-                    .as_ref()
-                    .is_some_and(|bank| bank.prepared().is_some()))
-                && !self.c.inactivity_pilot_enabled)
+            // Never nudge or close while a transaction is in flight, even with the
+            // inactivity pilot on: the caller is mid-approval, not absent.
+            || self.pending_action.is_some()
+            || self
+                .banking
+                .as_ref()
+                .is_some_and(|bank| bank.prepared().is_some())
             || self
                 .operation
                 .as_ref()
@@ -1337,6 +1761,19 @@ impl Coordinator {
         }
     }
     fn transition(&mut self, state: State, event: &str) {
+        if state == State::Idle {
+            if let Some((owner, text)) = self.unanswered.as_ref() {
+                // Invariant: never rest an answered caller behind Idle. Letting
+                // this happen is what turns a glitch into dead air followed by
+                // "are you still there?".
+                self.trace.emit(
+                    "turn_unanswered_at_idle",
+                    self.turn,
+                    0,
+                    json!({"owner":owner,"chars":text.len(),"event":event}),
+                );
+            }
+        }
         self.trace.emit(
             event,
             self.attempt.as_ref().map_or(self.turn, |a| a.owner),
@@ -1349,10 +1786,70 @@ impl Coordinator {
         }
         self.state = state;
     }
+    fn phone_capture_silence_ms(&self) -> f64 {
+        super::profiles::phone_number_capture_silence_ms(&self.c, self.waiting_for_phone_number)
+    }
+    fn activate_phone_number_capture(&mut self, attempt_id: u64) {
+        if !super::profiles::phone_number_capture_enabled(&self.c)
+            || self.phone_number_capture_prompt_attempt == Some(attempt_id)
+        {
+            return;
+        }
+        let Some(attempt) = self
+            .attempt
+            .as_ref()
+            .filter(|attempt| attempt.id == attempt_id && attempt.authorized)
+        else {
+            return;
+        };
+        if !super::profiles::asks_for_phone_number(&attempt.answer) {
+            return;
+        }
+        let owner = attempt.owner;
+        self.phone_number_capture_prompt_attempt = Some(attempt_id);
+        self.waiting_for_phone_number = true;
+        self.phone_number_capture_turns_remaining = 4;
+        self.trace.emit(
+            "phone_number_capture_state",
+            owner,
+            attempt_id,
+            json!({
+                "reason":"assistant_requested_phone_number",
+                "active":true,
+                "end_silence_ms":self.phone_capture_silence_ms()
+            }),
+        );
+    }
+    fn consume_phone_number_capture_turn(&mut self, turn: u64, text: &str) {
+        if !self.waiting_for_phone_number {
+            return;
+        }
+        let complete = super::profiles::has_complete_phone_number(text);
+        self.phone_number_capture_turns_remaining =
+            self.phone_number_capture_turns_remaining.saturating_sub(1);
+        if complete || self.phone_number_capture_turns_remaining == 0 {
+            self.waiting_for_phone_number = false;
+            self.phone_number_capture_turns_remaining = 0;
+        }
+        self.trace.emit(
+            "phone_number_capture_state",
+            turn,
+            0,
+            json!({
+                "reason":"caller_turn_received",
+                "active":self.waiting_for_phone_number,
+                "complete_number_detected":complete
+            }),
+        );
+    }
     async fn cancel(&mut self, reason: &str) {
         if matches!(
             reason,
-            "user_barge_in" | "caller_text_message" | "session_close" | "failure"
+            "user_barge_in"
+                | "user_speech_during_silent_turn"
+                | "caller_text_message"
+                | "session_close"
+                | "failure"
         ) {
             if let Some(task) = self.demo_task.take() {
                 if let Some(demo) = &self.demo {
@@ -1364,7 +1861,11 @@ impl Coordinator {
         }
         if matches!(
             reason,
-            "user_barge_in" | "caller_text_message" | "session_close" | "failure"
+            "user_barge_in"
+                | "user_speech_during_silent_turn"
+                | "caller_text_message"
+                | "session_close"
+                | "failure"
         ) && self
             .operation
             .as_ref()
@@ -1421,7 +1922,11 @@ impl Coordinator {
             }
             if matches!(
                 reason,
-                "user_barge_in" | "caller_text_message" | "session_close" | "failure"
+                "user_barge_in"
+                    | "user_speech_during_silent_turn"
+                    | "caller_text_message"
+                    | "session_close"
+                    | "failure"
             ) {
                 if let Some(prefix) = &a.audible_prefix {
                     self.memory.spoken_answer(a.owner, prefix);
@@ -1563,19 +2068,31 @@ impl Coordinator {
                 if self.speech_ms >= self.c.min_speech_ms {
                     // A dial remains cancellable after its cue has drained
                     // and the audio state has returned to Idle.
-                    if matches!(self.state, State::Playing | State::Releasing)
-                        || self.transfer_pending.is_some()
+                    let audible = self.state == State::Playing;
+                    let cancellable = self.transfer_pending.is_some()
                         || self.demo_task.is_some()
                         || self.operation.as_ref().is_some_and(|op| {
                             op.call.name == super::directory::LOOKUP && op.result.is_none()
-                        })
-                    {
+                        });
+                    if audible || cancellable {
                         self.cancel("user_barge_in").await;
+                    } else if self.attempt.is_some() {
+                        // The caller made a sound while the agent was silent:
+                        // a "Releasing" turn has committed but emitted nothing.
+                        // Drop the queued reply so it cannot start talking over
+                        // them, but keep the utterance answerable - `unanswered`
+                        // still holds it, so the next final coalesces into one
+                        // answer instead of the turn dying here.
+                        self.cancel("user_speech_during_silent_turn").await;
                     }
                     self.idle_checks = 0;
                     self.next_idle = tokio::time::Instant::now()
                         + Duration::from_secs_f64(self.c.engagement_idle_seconds);
+                    // A short pause is a pause, not a new thought: the next
+                    // segment keeps the utterance's audio and transcript.
+                    let continues = self.utterance_continues();
                     self.turn += 1;
+                    self.continuation_turn = continues.then_some(self.turn);
                     self.idle_close_at = None;
                     self.flush_suspended = false;
                     self.last_partial.clear();
@@ -1630,7 +2147,18 @@ impl Coordinator {
                 }
             }
             self.silence_ms += duration;
-            if self.silence_ms >= self.c.end_silence_ms {
+            let required_silence_ms = self.phone_capture_silence_ms();
+            if self.silence_ms >= required_silence_ms {
+                self.trace.emit(
+                    "caller_endpoint_window_elapsed",
+                    self.turn,
+                    0,
+                    json!({
+                        "silence_ms":self.silence_ms,
+                        "required_silence_ms":required_silence_ms,
+                        "phone_number_capture":self.waiting_for_phone_number
+                    }),
+                );
                 // Safety net: never commit a near-empty buffer (a tap, cough or
                 // line blip) to ASR and freeze the turn on its empty result.
                 // 0 disables each floor; both default to off. The primary
@@ -1649,6 +2177,9 @@ impl Coordinator {
                         self.preconfirm = None;
                         self.speech_ms = 0.0;
                         self.silence_ms = 0.0;
+                        if self.recover_unanswered("utterance_discarded").await {
+                            return;
+                        }
                         self.transition(State::Idle, "utterance_discarded_below_minimum");
                         return;
                     }
@@ -1658,8 +2189,34 @@ impl Coordinator {
                 if let Some(bank) = &self.banking {
                     bank.utterance(&self.pcm);
                 }
+                let segment = std::mem::take(&mut self.pcm);
+                let continued = self.continuation_turn == Some(self.turn);
+                // Keep the whole utterance's audio, not just this segment: a
+                // phone number read with pauses must be decoded with its own
+                // context. Beyond the window this starts a fresh utterance.
+                if continued {
+                    self.utterance_pcm.extend_from_slice(&segment);
+                } else {
+                    self.utterance_pcm = segment.clone();
+                }
+                if self.utterance_pcm.len() > MAX_UTTERANCE_SAMPLES {
+                    let excess = self.utterance_pcm.len() - MAX_UTTERANCE_SAMPLES;
+                    self.utterance_pcm.drain(..excess);
+                }
+                self.utterance_at = Some(tokio::time::Instant::now());
+                self.trace.emit(
+                    "utterance_audio_committed",
+                    self.turn,
+                    0,
+                    json!({"continued":continued,"segment_samples":segment.len(),"utterance_samples":self.utterance_pcm.len()}),
+                );
                 if let Some(asr) = &self.asr {
-                    let _ = asr.commit(self.turn, std::mem::take(&mut self.pcm)).await;
+                    let audio = if utterance_window_ms() > 0.0 {
+                        self.utterance_pcm.clone()
+                    } else {
+                        segment
+                    };
+                    let _ = asr.commit(self.turn, audio).await;
                 }
                 let (tx, turn) = (self.events.clone(), self.turn);
                 let timeout = Duration::from_secs_f64(
@@ -1789,7 +2346,13 @@ impl Coordinator {
             return;
         }
         if turn != self.turn || self.state != State::AwaitingFinal || !self.final_text.is_empty() {
-            self.trace.emit("stt_final_rejected", turn, 0, json!({}));
+            // A transcript for an utterance that has already moved on is still
+            // the caller's words - fold it in rather than dropping it.
+            if turn < self.turn {
+                self.recover_late_final(text).await;
+            } else {
+                self.trace.emit("stt_final_rejected", turn, 0, json!({}));
+            }
             return;
         }
         if text.is_empty() {
@@ -1800,7 +2363,7 @@ impl Coordinator {
             // clears the turn and transitions back to Idle (no lock, safe here).
             self.trace
                 .emit("stt_final_empty_recovered", turn, 0, json!({}));
-            self.unavailable(turn).await;
+            self.unavailable(turn, "empty_final").await;
             return;
         }
         if let Some(t) = self.final_timeout.take() {
@@ -1809,6 +2372,23 @@ impl Coordinator {
         if let Some(t) = self.stable.take() {
             t.abort();
         }
+        // A caller speaking in pieces produces one final per pause. Join the
+        // fragments we have not answered yet so the model sees the whole
+        // request and the caller hears one answer. This is the AJ_XdN9Mmxv4DaW
+        // failure: five fragments, both LLM requests produced zero text, then
+        // the turn was thrown away and the check-in asked "are you still there".
+        let text = match self.coalesce_final(turn, &text) {
+            Some(merged) => {
+                self.trace.emit(
+                    "turn_final_coalesced",
+                    turn,
+                    0,
+                    json!({"chars":merged.len(),"fragment_chars":text.len()}),
+                );
+                merged
+            }
+            None => text,
+        };
         self.invalidate_background();
         self.idle_checks = 0;
         self.new_messages.push(text.clone());
@@ -1816,6 +2396,21 @@ impl Coordinator {
             self.new_messages.remove(0);
         }
         self.final_text = text.clone();
+        if let Some(digits) = super::text::digit_runs(&text)
+            .into_iter()
+            .max_by_key(String::len)
+        {
+            if self.caller_digits.as_deref() != Some(digits.as_str()) {
+                self.trace.emit(
+                    "caller_digits_detected",
+                    turn,
+                    0,
+                    json!({"digits":digits,"source":"caller_words"}),
+                );
+            }
+            self.caller_digits = Some(digits);
+        }
+        self.consume_phone_number_capture_turn(turn, &text);
         self.base_asr_candidate = base_candidate
             .filter(|base| {
                 base.len() <= 16 * 1024
@@ -1839,6 +2434,13 @@ impl Coordinator {
         }
         self.idle_close_at = None;
         self.memory.user(turn, &text, !self.speech_enabled);
+        // Hold the utterance until the agent actually says something back;
+        // `note_spoken` clears it. Every path that can kill a turn before any
+        // speech (a further fragment, a silent barge-in, a lost ASR final)
+        // falls back to this text instead of going quiet.
+        if self.speech_enabled {
+            self.unanswered = Some((turn, text.clone()));
+        }
         if let Some(store) = &self.store {
             store.message("user", &text, format!("turn-{turn}"), false);
         }
@@ -1975,33 +2577,72 @@ impl Coordinator {
             let _ = self.playout.authorize(id).await;
             let _ = self.attempt.as_ref().unwrap().authorize.send(true);
         } else {
+            // A caller speaking in pieces produces one final per pause. Firing
+            // a fresh request per fragment is what starved the agent in
+            // AJ_XdN9Mmxv4DaW: five fragments, both LLM requests produced zero
+            // text, then the turn was thrown away. Join the fragments we have
+            // not answered yet and answer them once.
+            let next = match self.coalesce_final(self.turn, &text) {
+                Some(combined) => {
+                    self.trace.emit(
+                        "turn_final_coalesced",
+                        self.turn,
+                        0,
+                        json!({"chars":combined.len()}),
+                    );
+                    self.final_text = combined.clone();
+                    combined
+                }
+                None => text.clone(),
+            };
             self.cancel("final_transcript_changed").await;
-            self.begin(text, true, None).await;
+            self.begin(next, true, None).await;
         }
     }
-    async fn unavailable(&mut self, turn: u64) {
-        if self.turn == turn && self.state == State::AwaitingFinal {
-            self.cancel("final_unavailable").await;
-            if let Some(asr) = &self.asr {
-                asr.recover().await;
-            }
-            self.pcm.clear();
-            self.candidate = false;
-            self.preconfirm = None;
-            self.last_partial.clear();
-            self.speech_ms = 0.0;
-            self.silence_ms = 0.0;
-            if let Some(task) = self.final_timeout.take() {
-                task.abort();
-            }
-            self.transition(State::Idle, "turn_final_unavailable");
-            let _ = self
-                .output
-                .send(Output::Status(
-                    "authoritative ASR final unavailable; ready for another utterance".into(),
-                ))
-                .await;
+    async fn unavailable(&mut self, turn: u64, reason: &str) {
+        if self.turn != turn || self.state != State::AwaitingFinal {
+            return;
         }
+        let spoke_for = self.speech_ms;
+        self.trace.emit(
+            "turn_final_unavailable",
+            turn,
+            0,
+            json!({"reason":reason,"speech_ms":spoke_for}),
+        );
+        self.cancel("final_unavailable").await;
+        if let Some(asr) = &self.asr {
+            asr.recover().await;
+        }
+        self.pcm.clear();
+        self.candidate = false;
+        self.preconfirm = None;
+        self.last_partial.clear();
+        self.speech_ms = 0.0;
+        self.silence_ms = 0.0;
+        if let Some(task) = self.final_timeout.take() {
+            task.abort();
+        }
+        // Fall back before going quiet. An armed caller with an unanswered
+        // request must hear something, or the inactivity check-in becomes the
+        // reply ("are you still there?" after a discarded transfer request).
+        if self.recover_unanswered(reason).await {
+            return;
+        }
+        if reason != "empty_final" && self.speech_enabled {
+            self.trace.emit("turn_recovery_prompt", turn, 0, json!({}));
+            self.transition(State::Idle, "turn_recovery_prompt");
+            self.begin(String::new(), true, Some(RECOVERY_LINE.into()))
+                .await;
+            return;
+        }
+        self.transition(State::Idle, "turn_final_unavailable");
+        let _ = self
+            .output
+            .send(Output::Status(
+                "authoritative ASR final unavailable; ready for another utterance".into(),
+            ))
+            .await;
     }
     async fn begin(&mut self, text: String, authorized: bool, direct: Option<String>) {
         self.begin_direct(text, authorized, direct.map(DirectSpeech::Verbatim))
@@ -2285,6 +2926,9 @@ impl Coordinator {
             .next_system
             .take()
             .unwrap_or_else(|| self.c.base_system_prompt.clone());
+        if super::profiles::phone_number_capture_enabled(&self.c) {
+            system.push_str(super::profiles::PHONE_NUMBER_CAPTURE_RULES);
+        }
         let knowledge_offered = !followup
             && direct.is_none()
             && self.turn > 0
@@ -2309,6 +2953,15 @@ impl Coordinator {
         }
         if let Some(bank) = &self.banking {
             system.push_str(&bank.prompt());
+        }
+        if let Some(accounts) = &self.accounts {
+            system.push('\n');
+            system.push_str(accounts);
+        }
+        if let Some(digits) = &self.caller_digits {
+            system.push_str(&format!(
+                "\nCaller digits from their own words, already transcribed: {digits}. When a tool needs a phone or account number, copy these digits exactly as written. Never convert spoken digit words yourself."
+            ));
         }
         if super::transfer::enabled(&self.c.agent_context) {
             system.push_str(super::transfer::RULES);
@@ -2603,6 +3256,9 @@ impl Coordinator {
         );
     }
     async fn apply_tool(&mut self) {
+        if let Some(owner) = self.attempt.as_ref().map(|a| a.owner) {
+            self.note_answered(owner);
+        }
         let Some(a) = self.attempt.as_mut() else {
             return;
         };
@@ -3682,6 +4338,7 @@ impl Coordinator {
                 }
             }
             Internal::Token { attempt, text } => {
+                let mut answered_owner = None;
                 if let Some(a) = self
                     .attempt
                     .as_mut()
@@ -3690,6 +4347,7 @@ impl Coordinator {
                     if a.answer.is_empty() {
                         self.trace
                             .emit("llm_text_released", a.owner, a.id, json!({}));
+                        answered_owner = Some(a.owner);
                     }
                     a.answer.push_str(&text);
                     if a.authorized && self.speech_enabled && self.state == State::Playing {
@@ -3698,6 +4356,10 @@ impl Coordinator {
                             .try_send(Output::AnswerPartial(a.answer.clone()));
                     }
                 }
+                if let Some(owner) = answered_owner {
+                    self.note_answered(owner);
+                }
+                self.activate_phone_number_capture(attempt);
             }
             Internal::Tool {
                 attempt,
@@ -3731,8 +4393,10 @@ impl Coordinator {
                     .filter(|a| a.id == id && a.authorized)
                     .map(|a| a.owner)
                 {
+                    self.activate_phone_number_capture(id);
                     let from = self.state;
                     self.state = State::Playing;
+                    self.note_spoken(owner);
                     self.trace.emit(
                         "audio_first_enqueued",
                         owner,
@@ -3810,16 +4474,24 @@ impl Coordinator {
                         );
                         return;
                     }
-                    if !direct
-                        && self.speech_enabled
-                        && (error.starts_with("LLM connection")
-                            || error.starts_with("LLM HTTP 502")
-                            || error.starts_with("LLM HTTP 503")
-                            || error.starts_with("LLM HTTP 504")
-                            || error == "LLM retries exhausted")
-                    {
+                    // Every provider failure - refused with a status (402 quota,
+                    // 429, 5xx) or unreachable - is an outage from the caller's
+                    // side: say so. Going Idle here produces dead air followed by
+                    // the inactivity check-in, which reads as "it ignored me".
+                    if !direct && self.speech_enabled && error.starts_with("LLM ") {
+                        self.trace.emit(
+                            "llm_unavailable",
+                            self.turn,
+                            attempt,
+                            json!({"error":error}),
+                        );
                         self.cancel("llm_unavailable").await;
-                        self.begin_facts(self.final_text.clone(),true,Some("I'm sorry, my response service is temporarily unavailable. Please try that again in a moment.".into())).await;
+                        self.begin_facts(
+                            self.final_text.clone(),
+                            true,
+                            Some("I'm sorry, my response service is temporarily unavailable. Please try that again in a moment.".into()),
+                        )
+                        .await;
                         return;
                     }
                     self.fail(error).await;
@@ -4192,7 +4864,49 @@ impl Coordinator {
                         .emit("memory_compaction_discarded", self.turn, 0, json!({}));
                 }
             }
-            Internal::FinalTimeout(turn) => self.unavailable(turn).await,
+            Internal::FinalTimeout(turn) => self.unavailable(turn, "final_timeout").await,
+            Internal::AccountsPrefetched(result) => {
+                self.accounts_task = None;
+                let elapsed_ms = self
+                    .accounts_started
+                    .map(|started| started.elapsed().as_secs_f64() * 1000.0)
+                    .unwrap_or(0.0);
+                self.accounts_started = None;
+                let elapsed_ms = (elapsed_ms * 10.0).round() / 10.0;
+                match result {
+                    Ok(result) if matches!(result.status.as_str(), "ok" | "success") => {
+                        match accounts_block(&result.data) {
+                            Some(block) => {
+                                self.trace.emit(
+                                    "accounts_prefetch_ready",
+                                    self.turn,
+                                    0,
+                                    json!({"accounts":result.data.get("accounts").and_then(Value::as_array).map_or(0, Vec::len),"elapsed_ms":elapsed_ms}),
+                                );
+                                self.accounts = Some(block);
+                            }
+                            None => self.trace.emit(
+                                "accounts_prefetch_failed",
+                                self.turn,
+                                0,
+                                json!({"reason":"no_account_list","status":result.status,"elapsed_ms":elapsed_ms}),
+                            ),
+                        }
+                    }
+                    Ok(result) => self.trace.emit(
+                        "accounts_prefetch_failed",
+                        self.turn,
+                        0,
+                        json!({"reason":result.message,"status":result.status,"elapsed_ms":elapsed_ms}),
+                    ),
+                    Err(error) => self.trace.emit(
+                        "accounts_prefetch_failed",
+                        self.turn,
+                        0,
+                        json!({"reason":error,"elapsed_ms":elapsed_ms}),
+                    ),
+                }
+            }
         }
     }
 }
@@ -4232,10 +4946,11 @@ async fn generate(g: Generation) -> Result<(), String> {
     let llm_p = p.clone();
     let tts_p = p.clone();
     let trace = p.trace.clone();
-    // Denoise synthesized speech for MoMo PSB only: the TTS model re-adds a
-    // faint broadband hiss on every synthesis, independent of the clone
-    // reference, so we clean the output PCM before playout.
-    let denoise_output = business_matches(&p.config.agent_context.business_id, MOMO_PSB_BUSINESS_ID);
+    // Denoise synthesized speech for the businesses that hear the TTS model's
+    // own broadband hiss and onset artefact (MoMo PSB originally, now the
+    // Wema-side banking tenants too). Config-driven via
+    // RVC_OUTPUT_DENOISE_BUSINESS_IDS so a new tenant needs no code change.
+    let denoise_output = output_denoise_enabled(&p.config.agent_context.business_id);
     let token_events = events.clone();
     let g_events = events.clone();
     let producer = async move {
@@ -4354,6 +5069,10 @@ async fn generate(g: Generation) -> Result<(), String> {
                 } else {
                     phrase
                 };
+            let spoken = super::text::speakable(&spoken);
+            if spoken.is_empty() {
+                continue;
+            }
             tts_p.tts(&spoken, turn, id, &audio).await?;
         }
         Ok::<_, String>(())

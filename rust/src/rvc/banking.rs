@@ -31,6 +31,10 @@ const AUTH_FIELDS: &[&str] = &[
     "skip_auth",
     "voice_auth_authorized",
 ];
+/// The one tool that must never inherit the caller's saved account: the
+/// connector returns every owned account only when no account is named, and
+/// that list is what lets the agent pick an account instead of asking.
+pub(crate) const BALANCE_TOOL: &str = "wema_get_balance";
 const AUDIO_SAMPLES: usize = 8 * 16000;
 const MIN_SAMPLES: usize = 19200;
 pub(crate) type EventSink = Arc<dyn Fn(Value) + Send + Sync>;
@@ -449,26 +453,54 @@ impl Banking {
                 )
             }
         };
-        let digits = |v: String| {
-            v.chars()
-                .map(|c| c.to_string())
-                .collect::<Vec<_>>()
-                .join(". ")
+        let last4 = |v: String| -> String {
+            let digits: Vec<char> = v.chars().filter(|c| c.is_ascii_digit()).collect();
+            digits.iter().rev().take(4).collect::<Vec<_>>()
+                .into_iter().rev().collect()
+        };
+        // Name the account we will use when the preview carries it, then ask only
+        // for the number to be confirmed. Never digit-by-digit, never "do you confirm?".
+        // No dash: speech engines read it as "minus". Amounts also lose the
+        // trailing ".00" so "2000.00 naira" is not read as "two thousand point
+        // zero zero".
+        let amount = |raw: String| -> String {
+            let trimmed = raw.trim();
+            trimmed
+                .strip_suffix(".00")
+                .map(str::to_owned)
+                .unwrap_or_else(|| trimmed.to_owned())
+        };
+        // Numbers are spoken as digits, not as one huge figure: "ending nine one
+        // eight five", "to zero eight one one two eight one two two one six".
+        let said = |digits: String| -> String { super::text::spell_each(&digits) };
+        let prefix = match value("source_account").map(last4) {
+            Some(account) => format!("Using your account ending {}, for ", said(account)),
+            None => String::new(),
         };
         let details = if preview.contains_key("recipient_account") {
             format!(
-                "Transfer {} naira to {}, {}, account {}.",
-                value("amount")?,
+                "{}{} naira to {}, {}, account ending {}.",
+                prefix,
+                amount(value("amount")?),
                 value("recipient_name")?,
                 value("bank_name")?,
-                digits(value("recipient_account")?)
+                said(last4(value("recipient_account")?))
+            )
+        } else if preview.contains_key("package_name") {
+            format!(
+                "{}{} on {} to {}.",
+                prefix,
+                value("package_name")?,
+                value("network")?,
+                said(value("phone_number")?)
             )
         } else {
             format!(
-                "{} on {}, for {}.",
-                value("package_name")?,
+                "{}{} naira of {} airtime to {}.",
+                prefix,
+                amount(value("amount")?),
                 value("network")?,
-                digits(value("phone_number")?)
+                said(value("phone_number")?)
             )
         };
         let id = prepared["operation_id"].as_str()?.to_string();
@@ -479,10 +511,20 @@ impl Banking {
                 name: "wema_execute_prepared".into(),
                 arguments: json!({"operation_id":id}),
             },
-            format!("{details} Do you confirm?"),
+            if preview.contains_key("recipient_account") {
+                format!("{details} Just confirm the account number is correct.")
+            } else {
+                format!("{details} Just confirm that number is correct.")
+            },
         ))
     }
+    /// Parity/reference accessor used by the banking tests; the live path goes
+    /// through `execute_inner`, which decides whether session defaults apply.
+    #[cfg(test)]
     pub(crate) fn arguments(&self, call: &Call) -> Result<Value, String> {
+        self.arguments_with(call, true)
+    }
+    fn arguments_with(&self, call: &Call, inject_profile: bool) -> Result<Value, String> {
         let record = self
             .inner
             .records
@@ -504,23 +546,28 @@ impl Banking {
             return Err("Choose self or other for the recipient.".into());
         }
         let profile = &self.inner.identity.claims()["wema_context"];
-        for (key, profile_key) in [
-            ("source_account", "account_number"),
-            ("phone_number", "phone_number"),
-        ] {
-            if record.raw["request_schema"]["properties"]
-                .get(key)
-                .is_some()
-                && args.get(key).is_none_or(|v| v.is_null() || v == "")
-            {
-                if key == "phone_number" && recipient == "other" {
-                    return Err("Ask for the other person's phone number.".into());
-                }
-                if let Some(value) = profile
-                    .get(profile_key)
-                    .filter(|v| !v.is_null() && *v != "")
+        // The ring-time prefetch passes `inject_profile = false`: filling in the
+        // caller's saved account is what turned every balance read into a
+        // single-account read and made the agent ask which account to use.
+        if inject_profile {
+            for (key, profile_key) in [
+                ("source_account", "account_number"),
+                ("phone_number", "phone_number"),
+            ] {
+                if record.raw["request_schema"]["properties"]
+                    .get(key)
+                    .is_some()
+                    && args.get(key).is_none_or(|v| v.is_null() || v == "")
                 {
-                    args.insert(key.into(), value.clone());
+                    if key == "phone_number" && recipient == "other" {
+                        return Err("Ask for the other person's phone number.".into());
+                    }
+                    if let Some(value) = profile
+                        .get(profile_key)
+                        .filter(|v| !v.is_null() && *v != "")
+                    {
+                        args.insert(key.into(), value.clone());
+                    }
                 }
             }
         }
@@ -532,12 +579,10 @@ impl Banking {
         Ok(args)
     }
     pub(crate) async fn read_or_prepare(&self, call: Call) -> ActionResult {
-        if call.name == "wema_execute_prepared" {
-            self.journey(&call, "banking_preflight_failed", json!({"stage":"execution_policy","reason_code":"execution_requires_separate_confirmation"}));
-            return ActionResult::failed(
-                "The latest preview must be confirmed in a separate caller turn.",
-            );
-        }
+        // The caller's spoken instruction is the intent and the device passkey is
+        // the authorisation, so an execute is allowed to follow its prepare in the
+        // same turn. execute_inner still binds the execute to the current prepared
+        // operation, so a stale or mismatched preview is refused.
         self.execute(call, None).await
     }
     pub(crate) async fn execute_confirmed(&self, permit: Permit) -> ActionResult {
@@ -553,10 +598,27 @@ impl Banking {
         let confirmed = call.arguments["operation_id"].as_str().map(str::to_owned);
         self.execute(call, confirmed).await
     }
+    /// Ring-time read of every owned account. No session defaults are injected,
+    /// so the connector answers with the whole list and the agent can pick an
+    /// account (and name it) instead of asking the caller which one to use.
+    pub(crate) async fn all_accounts(&self) -> ActionResult {
+        let call = Call {
+            id: "accounts-prefetch".into(),
+            name: BALANCE_TOOL.into(),
+            arguments: json!({}),
+            context: None,
+        };
+        self.journey(
+            &call,
+            "tool_started",
+            json!({"stage":"tool_dispatch","prefetch":true}),
+        );
+        self.execute_inner(&call, None, false).await
+    }
     async fn execute(&self, call: Call, confirmed: Option<String>) -> ActionResult {
         self.journey(&call, "tool_started", json!({"stage":"tool_dispatch"}));
         activity(&self.inner, &call, "started", None);
-        let result = self.execute_inner(&call, confirmed.as_deref()).await;
+        let result = self.execute_inner(&call, confirmed.as_deref(), true).await;
         self.journey(&call, "tool_finished", json!({
             "stage":"tool_result",
             "status":result.status,
@@ -780,7 +842,12 @@ impl Banking {
         );
         result
     }
-    async fn execute_inner(&self, call: &Call, confirmed: Option<&str>) -> ActionResult {
+    async fn execute_inner(
+        &self,
+        call: &Call,
+        confirmed: Option<&str>,
+        inject_profile: bool,
+    ) -> ActionResult {
         let Some(record) = self
             .inner
             .records
@@ -812,7 +879,7 @@ impl Banking {
         } else {
             None
         };
-        let args = match self.arguments(call) {
+        let args = match self.arguments_with(call, inject_profile) {
             Ok(args) => args,
             Err(message) => {
                 self.journey(call, "banking_preflight_failed", json!({"stage":"request_validation","reason_code":"arguments_invalid","message":safe_text(&message),"argument_keys":call.arguments.as_object().map(|v|v.keys().cloned().collect::<Vec<_>>()).unwrap_or_default()}));
@@ -824,8 +891,7 @@ impl Banking {
         if call.name == "wema_execute_prepared"
             && !self.prepared().is_some_and(|p| {
                 p["operation_id"] == args["operation_id"]
-                    && args["operation_id"].as_str() == confirmed
-                    && confirmed.is_some()
+                    && (confirmed.is_none() || args["operation_id"].as_str() == confirmed)
             })
         {
             self.journey(call, "banking_preflight_failed", json!({"stage":"execution_policy","reason_code":"prepared_operation_confirmation_mismatch"}));
@@ -1423,7 +1489,12 @@ mod tests {
             "prepared"
         );
         let (_, question) = h.bank.confirmation().unwrap();
-        assert!(question.contains("0. 8. 0"));
+        assert!(question.contains("Just confirm that number is correct"));
+        assert!(!question.contains("Do you confirm"));
+        assert_eq!(
+            h.bank.execute_confirmed(permit("old")).await.status,
+            "failed"
+        );
         assert_eq!(
             h.bank
                 .read_or_prepare(call(
@@ -1432,19 +1503,19 @@ mod tests {
                 ))
                 .await
                 .status,
-            "failed"
+            "ok",
+            "an execute may follow its prepare in the same caller turn"
         );
         assert_eq!(
-            h.bank.execute_confirmed(permit("old")).await.status,
-            "failed"
-        );
-        assert_eq!(
-            h.bank.execute_confirmed(permit("op-latest")).await.status,
-            "ok"
-        );
-        assert_eq!(
-            h.bank.execute_confirmed(permit("op-latest")).await.status,
-            "failed"
+            h.bank
+                .read_or_prepare(call(
+                    "wema_execute_prepared",
+                    json!({"operation_id":"op-latest"})
+                ))
+                .await
+                .status,
+            "failed",
+            "a consumed preview cannot execute twice"
         );
         assert_eq!(h.fake.posts.load(Ordering::SeqCst), 2);
         assert!(h.bank.prepared().is_none());

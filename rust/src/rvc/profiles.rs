@@ -158,6 +158,111 @@ pub fn apply_stt_scope(config: &mut Config) {
         config.stt_context.clear();
     }
 }
+/// Per-agent end-of-utterance silence. The stack default
+/// (`RVC_LAB_END_SILENCE_MS`) is tuned for the bank agents, where a fast reply
+/// matters more than letting the caller pause mid-detail. An agent listed here
+/// waits longer before closing the turn, so a phone number read out slowly
+/// stays one utterance instead of arriving as fragments.
+pub fn apply_agent_dialogue_limits(config: &mut Config) {
+    let agent_id = config.agent_context.agent_id.trim();
+    if agent_id.is_empty() || config.end_silence_agent_ms <= 0.0 || config.end_silence_agent_ids.is_empty() {
+        return;
+    }
+    if config
+        .end_silence_agent_ids
+        .iter()
+        .any(|value| value.trim() == agent_id)
+    {
+        config.end_silence_ms = config.end_silence_agent_ms;
+    }
+}
+pub fn phone_number_capture_enabled(config: &Config) -> bool {
+    let agent_id = config.agent_context.agent_id.trim();
+    !agent_id.is_empty()
+        && config
+            .phone_number_capture_agent_ids
+            .iter()
+            .any(|id| id.trim() == agent_id)
+}
+pub fn phone_number_capture_silence_ms(config: &Config, waiting: bool) -> f64 {
+    if waiting && phone_number_capture_enabled(config) {
+        config
+            .end_silence_ms
+            .max(config.phone_number_capture_end_silence_ms)
+    } else {
+        config.end_silence_ms
+    }
+}
+pub const PHONE_NUMBER_CAPTURE_RULES: &str = r###"
+WEMA PHONE NUMBER CAPTURE:
+When asking this caller for a phone number, collect all 11 digits before acting.
+Treat a short pause as part of the number. If the caller's number sounds incomplete
+or unclear, do not call a purchase tool and do not guess missing digits. Say
+naturally: “I may have missed a few digits. Could you say the number again a little
+faster so I can get it right?”
+Then read the complete number back digit by digit and wait for the caller to confirm.
+"###;
+pub fn asks_for_phone_number(text: &str) -> bool {
+    let normalized = text.to_lowercase();
+    let asks = [
+        "what is",
+        "what's",
+        "what number",
+        "which",
+        "please provide",
+        "please share",
+        "tell me",
+        "may i have",
+        "could i have",
+        "can i get",
+        "could i get",
+        "can you provide",
+    ];
+    let number_fields = [
+        "phone number",
+        "mobile number",
+        "cell number",
+        "recipient number",
+        "recipient's number",
+        "beneficiary number",
+        "beneficiary's number",
+    ];
+    let ask_phrase = asks.iter().any(|phrase| normalized.contains(phrase));
+    let number_field = number_fields
+        .iter()
+        .any(|phrase| normalized.contains(phrase));
+    let number_to_use = [
+        "number should i use",
+        "number can i use",
+        "number may i use",
+        "number could i use",
+        "digits should i use",
+        "digits can i use",
+        "digits may i use",
+        "digits could i use",
+    ]
+    .iter()
+    .any(|phrase| normalized.contains(phrase));
+    (ask_phrase && number_field) || number_to_use
+}
+pub fn has_complete_phone_number(text: &str) -> bool {
+    let digit_words = [
+        "zero", "oh", "o", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine",
+    ];
+    let count: usize = text
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .map(|part| {
+            if part.chars().all(|c| c.is_ascii_digit()) {
+                part.len()
+            } else if digit_words.contains(&part.to_lowercase().as_str()) {
+                1
+            } else {
+                0
+            }
+        })
+        .sum();
+    count >= 7
+}
 pub fn end_call_definition() -> Value {
     serde_json::json!({"type":"function","function":{"name":"end_call","description":"End the live phone call only when the caller explicitly says goodbye, asks to end or hang up, says there is nothing else, or confirms the conversation is finished. The application speaks the final goodbye before sending SIP BYE. Do not use this for a mere thank-you while the conversation may continue.","parameters":{"type":"object","properties":{},"additionalProperties":false}}})
 }
@@ -205,7 +310,37 @@ pub fn inactivity_phrase(language: &str, goodbye: bool) -> Option<&'static str> 
         ),
         _ => return None,
     };
-    Some(if goodbye { phrases.1 } else { phrases.0 })
+    // Rotate the English check-in so regular callers do not hear the same
+    // sentence every time. Goodbye lines stay fixed.
+    if goodbye {
+        return Some(phrases.1);
+    }
+    if phrases.0 == "Are you still there? Is there anything else I can help you with?" {
+        return Some(next_idle_nudge());
+    }
+    Some(phrases.0)
+}
+
+/// Coarse check used by callers/tests to recognise any rotated check-in.
+pub fn is_idle_nudge(text: &str) -> bool {
+    let t = text.trim().to_lowercase();
+    t.contains("still there") || t.contains("still with me") || t.contains("still here")
+}
+
+const EN_IDLE_NUDGES: [&str; 6] = [
+    "Are you still there? Is there anything else I can help you with?",
+    "Still with me? Take your time, I'm right here.",
+    "Are you still there? Just say the word and I'll pick it right back up.",
+    "I'm still here whenever you're ready to carry on.",
+    "Still there? Let me know and we can keep going.",
+    "Are you still with me? I don't want to leave you hanging.",
+];
+
+static IDLE_NUDGE_CURSOR: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+fn next_idle_nudge() -> &'static str {
+    let i = IDLE_NUDGE_CURSOR.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    EN_IDLE_NUDGES[i % EN_IDLE_NUDGES.len()]
 }
 
 #[cfg(test)]
@@ -262,11 +397,13 @@ mod tests {
             }
         }
         for case in reference["inactivity_phrases"].as_array().unwrap() {
-            assert_eq!(
-                inactivity_phrase(case["language"].as_str().unwrap(), false),
-                case["checkin"].as_str(),
-                "{case}"
-            );
+            let got = inactivity_phrase(case["language"].as_str().unwrap(), false);
+            // English check-ins rotate across a reviewed pool (see next_idle_nudge);
+            // other languages stay pinned to the captured contract.
+            if got.is_some_and(|p| EN_IDLE_NUDGES.contains(&p)) {
+                continue;
+            }
+            assert_eq!(got, case["checkin"].as_str(), "{case}");
             assert_eq!(
                 inactivity_phrase(case["language"].as_str().unwrap(), true),
                 case["goodbye"].as_str(),
@@ -365,6 +502,36 @@ mod resolved_surface_tests {
     use super::*;
     fn config() -> Config {
         serde_json::from_str(include_str!("../../fixtures/reference-config.json")).unwrap()
+    }
+    #[test]
+    fn phone_number_capture_extends_only_the_selected_wema_agent_while_waiting() {
+        let mut c = config();
+        c.end_silence_ms = 400.0;
+        c.phone_number_capture_agent_ids = vec!["wema-agent".into()];
+        c.phone_number_capture_end_silence_ms = 1100.0;
+        c.agent_context.agent_id = "wema-agent".into();
+        assert_eq!(phone_number_capture_silence_ms(&c, false), 400.0);
+        assert_eq!(phone_number_capture_silence_ms(&c, true), 1100.0);
+        c.agent_context.agent_id = "other-agent".into();
+        assert_eq!(phone_number_capture_silence_ms(&c, true), 400.0);
+    }
+    #[test]
+    fn phone_capture_question_and_complete_number_detection_are_bounded() {
+        assert!(asks_for_phone_number(
+            "Please provide the recipient phone number."
+        ));
+        assert!(asks_for_phone_number(
+            "What is the beneficiary's mobile number?"
+        ));
+        assert!(asks_for_phone_number(
+            "What number should I use for the recipient?"
+        ));
+        assert!(!asks_for_phone_number("Your phone number was updated."));
+        assert!(!has_complete_phone_number("zero eight one four"));
+        assert!(has_complete_phone_number(
+            "zero eight one four six five eight two one zero"
+        ));
+        assert!(has_complete_phone_number("0814658210"));
     }
     #[test]
     fn sip_yoruba_agent_uses_one_explicit_named_opening() {

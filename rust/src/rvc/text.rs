@@ -132,6 +132,62 @@ impl SpokenFilter {
         out
     }
 }
+/// Text as it has to be spoken. A dash is read aloud as "minus", so it becomes
+/// a comma between words; inside a number it is dropped and the digits are
+/// glued back together.
+pub fn speakable(raw: &str) -> String {
+    fn is_dash(c: char) -> bool {
+        matches!(
+            c,
+            '-' | '\u{2010}' | '\u{2011}' | '\u{2012}' | '\u{2013}' | '\u{2014}' | '\u{2015}'
+        )
+    }
+    let chars: Vec<char> = raw.chars().collect();
+    let mut out: Vec<char> = Vec::with_capacity(chars.len());
+    let mut i = 0;
+    while i < chars.len() {
+        if !is_dash(chars[i]) {
+            out.push(chars[i]);
+            i += 1;
+            continue;
+        }
+        // "0813-153-5013" is one number, not three.
+        let prev_digit = i > 0 && chars[i - 1].is_ascii_digit();
+        let next_digit = chars.get(i + 1).is_some_and(|c| c.is_ascii_digit());
+        if prev_digit && next_digit {
+            i += 1;
+            continue;
+        }
+        while out
+            .last()
+            .is_some_and(|c| c.is_whitespace() || is_dash(*c) || *c == ',')
+        {
+            out.pop();
+        }
+        out.extend([',', ' ']);
+        i += 1;
+        while i < chars.len() && (chars[i].is_whitespace() || is_dash(chars[i])) {
+            i += 1;
+        }
+    }
+    let text: String = out.into_iter().collect();
+    let mut cleaned = String::with_capacity(text.len());
+    let mut last_space = false;
+    for ch in text.chars() {
+        if ch == ' ' {
+            if !last_space {
+                cleaned.push(' ');
+            }
+            last_space = true;
+        } else {
+            cleaned.push(ch);
+            last_space = false;
+        }
+    }
+    let cleaned = cleaned.trim().trim_matches(',').trim().to_string();
+    spell_digits(&cleaned)
+}
+
 pub fn normalize(s: &str) -> String {
     s.to_lowercase()
         .chars()
@@ -203,19 +259,93 @@ pub fn valid_final(hypothesis: &str, final_text: &str) -> bool {
     let (a, b) = (normalize(hypothesis), normalize(final_text));
     a == b || similarity(&a, &b) >= 0.92
 }
-pub fn clean_transcript_for_language(raw: &str, language: &str) -> String {
-    if !super::languages::french(language) {
-        return clean_transcript(raw);
-    }
-    static FRENCH: std::sync::OnceLock<Option<Regex>> = std::sync::OnceLock::new();
-    if let Some(pattern) = FRENCH.get_or_init(|| {
-        Regex::new(r"(?i)(\blanguage\s+)(french|français|francais|fra|fre|fr)\b").ok()
-    }) {
-        clean_transcript(&pattern.replace_all(raw, "${1}English"))
-    } else {
-        clean_transcript(raw)
-    }
+/// Scripts no supported agent uses. A transcript that comes back in one of them
+/// is a recogniser hallucination (short or noisy audio makes Qwen3-ASR pick a
+/// language of its own), not something the caller said.
+fn foreign_script(text: &str) -> bool {
+    text.chars().any(|c| {
+        let u = c as u32;
+        (0x0370..=0x052F).contains(&u)        // Greek, Cyrillic
+            || (0x0590..=0x08FF).contains(&u) // Hebrew, Arabic, Syriac, Thaana
+            || (0x0900..=0x0DFF).contains(&u) // Indic scripts
+            || (0x0E00..=0x0E7F).contains(&u) // Thai
+            || (0x1100..=0x11FF).contains(&u) // Hangul jamo
+            || (0x2E80..=0x9FFF).contains(&u) // CJK
+            || (0xA960..=0xA97F).contains(&u)
+            || (0xAC00..=0xD7FF).contains(&u) // Hangul
+            || (0xF900..=0xFAFF).contains(&u)
+    })
 }
+
+/// Function words that are common in the languages the recogniser drifts into
+/// on unclear English audio, and rare in English.
+const DRIFT_WORDS: &[&str] = &[
+    "dat", "het", "een", "niet", "dit", "van", "voor", "maar", "ook", "nog", "wel", "geen",
+    "hij", "zij", "wij", "jullie", "ja", "nee", "eens", "noemt", "vamos", "isso", "né", "não",
+    "não", "voce", "você", "uma", "com", "por", "pero", "esta", "está", "muy", "auch", "nicht",
+    "und", "ist", "ich", "für", "auf", "mit", "aber", "der", "die", "das", "oui", "pas", "avec",
+    "pour", "mais", "vous", "nous", "les", "des", "une", "aux", "bonjour", "merci", "danke",
+];
+
+/// Unambiguous English function words - enough to tell a real sentence from a
+/// drifted one, without flagging names, digits or short answers.
+const ENGLISH_WORDS: &[&str] = &[
+    "the", "is", "it", "and", "to", "of", "that", "for", "you", "my", "with", "have", "what",
+    "please", "sorry", "thanks", "correct", "number", "account", "airtime", "transfer", "balance",
+    "how", "much", "can", "would", "like", "want", "not", "this", "from", "on", "in", "at",
+];
+
+fn foreign_latin(text: &str) -> bool {
+    let mut drift = 0;
+    let mut english = 0;
+    for word in text.split(|c: char| !c.is_alphanumeric() && c != '\'') {
+        let word = word.to_ascii_lowercase();
+        if word.is_empty() {
+            continue;
+        }
+        if DRIFT_WORDS.contains(&word.as_str()) {
+            drift += 1;
+        } else if ENGLISH_WORDS.contains(&word.as_str()) {
+            english += 1;
+        }
+    }
+    // Two or more foreign function words with at most one English word to
+    // balance them: this is not English speech, so it must not become the
+    // caller's turn. ("… hij eens correct" carries a single English-looking
+    // "correct", which is not enough to make the sentence English.)
+    drift >= 2 && english <= 1
+}
+
+pub fn english_target(language: &str) -> bool {
+    let language = language.trim().to_ascii_lowercase();
+    language.is_empty() || language == "en" || language.starts_with("en-") || language == "english"
+}
+
+pub fn clean_transcript_for_language(raw: &str, language: &str) -> String {
+    // A French agent's decoder may announce its own language; rewrite that
+    // header first so the English-only header rule does not throw the sentence
+    // away, then clean.
+    if super::languages::french(language) {
+        static FRENCH: std::sync::OnceLock<Option<Regex>> = std::sync::OnceLock::new();
+        let prepared = match FRENCH.get_or_init(|| {
+            Regex::new(r"(?i)(\blanguage\s+)(french|français|francais|fra|fre|fr)\b").ok()
+        }) {
+            Some(pattern) => pattern.replace_all(raw, "${1}English").to_string(),
+            None => raw.to_string(),
+        };
+        let text = clean_transcript(&prepared);
+        return if foreign_script(&text) { String::new() } else { text };
+    }
+    let text = clean_transcript(raw);
+    // The recogniser picks the language itself - the endpoint ignores `language`
+    // (proved: the same clip returns identical text for en, fr and zh). So keep
+    // the answer only when it is actually English.
+    if foreign_script(&text) || (english_target(language) && foreign_latin(&text)) {
+        return String::new();
+    }
+    text
+}
+
 pub fn clean_transcript(raw: &str) -> String {
     let raw = raw.trim();
     let langs: Vec<_> = LANGUAGE
@@ -538,6 +668,199 @@ mod internal_annotation_tests {
         assert_eq!(
             strip_internal_annotations("[Response interrupted; the caller may not have heard it in full.]"),
             ""
+        );
+    }
+}
+
+/// Every digit spelled, however short the number. Used for identifiers the
+/// caller must hear one digit at a time (account endings, phone numbers).
+pub fn spell_each(digits: &str) -> String {
+    digits
+        .chars()
+        .filter(|c| c.is_ascii_digit())
+        .map(|d| match d {
+            '0' => "zero",
+            '1' => "one",
+            '2' => "two",
+            '3' => "three",
+            '4' => "four",
+            '5' => "five",
+            '6' => "six",
+            '7' => "seven",
+            '8' => "eight",
+            '9' => "nine",
+            _ => unreachable!("filtered to ASCII digits"),
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Long numbers as spoken digits. "08112812216" is read as one huge number by
+/// the speech engine; "zero eight one one two eight one two two one six" is what
+/// a person says, and what the caller can follow and correct.
+pub fn spell_digits(raw: &str) -> String {
+    fn word(d: char) -> &'static str {
+        match d {
+            '0' => "zero",
+            '1' => "one",
+            '2' => "two",
+            '3' => "three",
+            '4' => "four",
+            '5' => "five",
+            '6' => "six",
+            '7' => "seven",
+            '8' => "eight",
+            '9' => "nine",
+            _ => unreachable!("only ASCII digits are passed"),
+        }
+    }
+    let chars: Vec<char> = raw.chars().collect();
+    let mut out = String::with_capacity(raw.len() * 2);
+    let mut i = 0;
+    while i < chars.len() {
+        if !chars[i].is_ascii_digit() {
+            out.push(chars[i]);
+            i += 1;
+            continue;
+        }
+        let mut j = i;
+        while j < chars.len() && chars[j].is_ascii_digit() {
+            j += 1;
+        }
+        // 7+ digits is a phone or account number, never an amount in these calls.
+        if j - i >= 7 {
+            let words: Vec<&str> = chars[i..j].iter().map(|d| word(*d)).collect();
+            out.push_str(&words.join(" "));
+        } else {
+            out.extend(&chars[i..j]);
+        }
+        i = j;
+    }
+    out
+}
+
+/// Phone and account numbers as the caller actually said them. Spoken digit
+/// words are glued back into runs so the model can copy figures instead of
+/// transcribing them itself (which is where digits get transposed).
+pub fn digit_runs(raw: &str) -> Vec<String> {
+    fn digit(word: &str) -> Option<char> {
+        match word {
+            "zero" | "oh" | "odo" | "o" => Some('0'),
+            "one" | "won" | "okan" => Some('1'),
+            "two" | "tu" | "meji" => Some('2'),
+            "three" | "tree" | "meta" => Some('3'),
+            "four" | "for" | "merin" => Some('4'),
+            "five" | "fife" | "marun" => Some('5'),
+            "six" | "sik" | "mefa" => Some('6'),
+            "seven" | "meje" => Some('7'),
+            "eight" | "ate" | "mejo" => Some('8'),
+            "nine" | "niner" | "mesan" => Some('9'),
+            _ => None,
+        }
+    }
+    let mut runs = Vec::new();
+    let mut current = String::new();
+    let mut repeat = 1usize;
+    let flush = |current: &mut String, runs: &mut Vec<String>| {
+        if (7..=15).contains(&current.len()) {
+            runs.push(std::mem::take(current));
+        }
+        current.clear();
+    };
+    for word in raw.split(|c: char| !c.is_alphanumeric()) {
+        let word = word.to_ascii_lowercase();
+        if word.is_empty() {
+            continue;
+        }
+        if word == "double" || word == "triple" {
+            repeat = if word == "double" { 2 } else { 3 };
+            continue;
+        }
+        if let Some(d) = digit(&word) {
+            for _ in 0..repeat {
+                current.push(d);
+            }
+            repeat = 1;
+        } else if word.bytes().all(|b| b.is_ascii_digit()) {
+            current.push_str(&word);
+            repeat = 1;
+        } else {
+            repeat = 1;
+            flush(&mut current, &mut runs);
+        }
+    }
+    flush(&mut current, &mut runs);
+    runs
+}
+
+#[cfg(test)]
+mod spoken_tests {
+    use super::*;
+
+    #[test]
+    fn a_dash_is_never_read_as_minus() {
+        assert_eq!(
+            speakable("Using your account ending 9185 - 2000 naira of MTN airtime to 08131535013."),
+            "Using your account ending 9185, 2000 naira of MTN airtime to zero eight one three one five three five zero one three."
+        );
+        assert_eq!(speakable("Got it — the number ends 013"), "Got it, the number ends 013");
+        assert_eq!(
+            speakable("0813-153-5013"),
+            "zero eight one three one five three five zero one three"
+        );
+        assert_eq!(speakable("no dashes here"), "no dashes here");
+    }
+
+    #[test]
+    fn a_transcript_in_another_language_is_not_the_callers_turn() {
+        // All four were produced by the live recogniser on 2026-11-17.
+        assert_eq!(clean_transcript_for_language("Да, действительно.", "English"), "");
+        assert_eq!(
+            clean_transcript_for_language("ja, dat noemt hij eens correct.", "English"),
+            ""
+        );
+        assert_eq!(clean_transcript_for_language("vamos ver isso né", "English"), "");
+        assert_eq!(clean_transcript_for_language("はい、そうです。", "English"), "");
+        // Real English survives, including digits and short answers.
+        for kept in [
+            "Yes, that number is correct.",
+            "zero eight one three one five three five zero one three",
+            "I said it's not supposed to end in three zero one.",
+            "I would like to transfer airtime.",
+            "No.",
+            "MTN.",
+        ] {
+            assert_eq!(clean_transcript_for_language(kept, "English"), kept, "{kept}");
+        }
+    }
+
+    #[test]
+    fn numbers_are_spoken_as_digits_not_figures() {
+        // The whole point: the caller hears and can correct each digit.
+        assert_eq!(spell_each("9185"), "nine one eight five");
+        assert_eq!(
+            spell_digits("transfer to 08112812216 now"),
+            "transfer to zero eight one one two eight one two two one six now"
+        );
+        // Amounts and short figures are left alone.
+        assert_eq!(spell_digits("2000 naira"), "2000 naira");
+        assert_eq!(spell_digits("ending 9185"), "ending 9185");
+    }
+
+    #[test]
+    fn spoken_digits_become_one_number() {
+        assert_eq!(
+            digit_runs("the number is zero eight one three one five three five zero one three"),
+            vec!["08131535013".to_string()]
+        );
+        assert_eq!(digit_runs("double two nine"), Vec::<String>::new());
+        assert_eq!(
+            digit_runs("zero eight one one two double three five"),
+            vec!["08112335".to_string()]
+        );
+        assert_eq!(
+            digit_runs("send two thousand naira to 08131535013"),
+            vec!["08131535013".to_string()]
         );
     }
 }

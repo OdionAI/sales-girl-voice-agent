@@ -15,6 +15,7 @@ public struct AttentiveAgentView: View {
     @Environment(\.dismiss) private var dismiss
     private let callerToken: (() async throws -> String)?
     private let startsAutomatically: Bool
+    private let microphoneOnStart: Bool
 
     /// For protected calls, obtain a fresh caller token from your signed-in app backend.
     public init(apiKey: String, agentID: String, audioInput: AttentiveAudioInputConfiguration = .standard,
@@ -47,7 +48,19 @@ public struct AttentiveAgentView: View {
                                                       voiceLanguage: voiceLanguage, voiceGender: voiceGender))
         self.callerToken = callerToken
         self.startsAutomatically = startsAutomatically
+        self.microphoneOnStart = true
     }
+
+    #if DEBUG
+    // Used only by the internal staging integration harness.
+    init(stagingCall: AttentiveCall, startsAutomatically: Bool = true,
+         callerToken: (() async throws -> String)? = nil) {
+        _call = StateObject(wrappedValue: stagingCall)
+        self.callerToken = callerToken
+        self.startsAutomatically = startsAutomatically
+        self.microphoneOnStart = false
+    }
+    #endif
 
     public var body: some View {
         Group {
@@ -55,13 +68,13 @@ public struct AttentiveAgentView: View {
                 CallerContent(call: call, request: $request,
                     configuration: .init(title: metadata.title, agentName: metadata.agentName,
                                          showsToolWaitSelection: false, themeKey: metadata.themeKey),
-                    enrollment: nil, microphoneOnStart: true, onSettings: nil,
+                    enrollment: nil, microphoneOnStart: microphoneOnStart, onSettings: nil,
                     startsAutomatically: startsAutomatically, onCallEnded: { dismiss() },
                     startCall: {
                         if metadata.callerRequired && callerToken == nil { throw CallError.callerRequired }
                         let token = try await callerToken?()
                         try Task.checkCancellation()
-                        try await call.start(callerToken: token)
+                        try await call.start(callerToken: token, microphoneEnabled: microphoneOnStart)
                     })
             } else {
                 VStack(spacing: 16) {

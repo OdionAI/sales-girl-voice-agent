@@ -136,7 +136,61 @@ impl ActionResult {
         Self{status:"unknown".into(),message:"I couldn't confirm whether that request completed. Its status needs verification before I can send another request.".into(),data:json!({}),extra:Default::default()}
     }
 }
+pub const AIRTIME_TOOL: &str = "airtime_purchase";
+/// An operator-configured tool: an `agent_tools` row named `name` carrying an
+/// absolute http(s) URL. Only rows like this are ever dispatched, so agents
+/// without such a row behave exactly as before.
+fn configured_http<'a>(context: &'a AgentContext, name: &str) -> Option<&'a Value> {
+    if !context.loaded {
+        return None;
+    }
+    context.tools.iter().find(|t| {
+        t["name"].as_str().is_some_and(|v| v.trim() == name)
+            && t["url"].as_str().is_some_and(|v| {
+                let url = v.trim();
+                url.starts_with("http://") || url.starts_with("https://")
+            })
+            && t["is_active"] != false
+    })
+}
+fn airtime_network(value: &str) -> Option<&'static str> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "mtn" => Some("MTN"),
+        "airtel" | "zain" => Some("Airtel"),
+        "glo" | "globacom" => Some("Glo"),
+        "9mobile" | "9 mobile" | "etisalat" => Some("9mobile"),
+        _ => None,
+    }
+}
+fn airtime_phone(value: &str) -> Option<String> {
+    let mut digits: String = value.chars().filter(|c| c.is_ascii_digit()).collect();
+    if digits.len() == 13 && digits.starts_with("234") {
+        digits = format!("0{}", &digits[3..]);
+    }
+    let bytes = digits.as_bytes();
+    (bytes.len() == 11 && bytes[0] == b'0' && bytes[1] >= b'7').then_some(digits)
+}
+fn airtime_amount(arguments: &Value) -> Option<u64> {
+    let value = &arguments["amount"];
+    let amount = value
+        .as_u64()
+        .or_else(|| {
+            value
+                .as_f64()
+                .filter(|v| v.fract() == 0.0)
+                .map(|v| v as u64)
+        })
+        .or_else(|| {
+            value
+                .as_str()
+                .and_then(|s| s.replace([',', ' '], "").parse::<u64>().ok())
+        })?;
+    (50..=50_000).contains(&amount).then_some(amount)
+}
 pub fn enabled(context: &AgentContext, name: &str) -> bool {
+    if name == AIRTIME_TOOL {
+        return configured_http(context, name).is_some();
+    }
     let url = match name {
         "create_ticket" => "internal://create-ticket",
         "send_email" => "internal://send-email",
@@ -161,6 +215,14 @@ pub fn definitions(context: &AgentContext) -> Vec<Value> {
     }
     if enabled(context, "send_email") {
         result.push(json!({"type":"function","function":{"name":"send_email","description":"Prepare an email requested by the caller. Include the recipient, subject, and complete message. The application will request confirmation before sending.","parameters":{"type":"object","properties":{"to_email":{"type":"string","description":"Recipient email address."},"subject":{"type":"string","description":"Email subject."},"body":{"type":"string","description":"Complete plain-text email body."}},"required":["to_email","subject","body"],"additionalProperties":false}}}));
+    }
+    if enabled(context, AIRTIME_TOOL) {
+        let description = configured_http(context, AIRTIME_TOOL)
+            .and_then(|t| t["description"].as_str())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("Sell airtime to a Nigerian phone number. The application will request confirmation before the purchase runs.");
+        result.push(json!({"type":"function","function":{"name":AIRTIME_TOOL,"description":description,"parameters":{"type":"object","properties":{"network":{"type":"string","enum":["MTN","Airtel","Glo","9mobile"],"description":"Mobile network for the top-up."},"phone_number":{"type":"string","description":"The Nigerian phone number receiving the airtime, for example 08031234567."},"amount":{"type":"integer","description":"Airtime amount in naira."}},"required":["network","phone_number","amount"],"additionalProperties":false}}}));
     }
     result
 }
@@ -202,6 +264,35 @@ fn text(args: &Value, key: &str) -> String {
     args[key].as_str().unwrap_or("").trim().into()
 }
 pub fn validate(call: &Call) -> Result<(), String> {
+    if call.name == AIRTIME_TOOL {
+        call.arguments
+            .as_object()
+            .ok_or("action arguments must be an object")?;
+        if call.arguments.as_object().is_some_and(|args| {
+            args.keys()
+                .any(|key| !["network", "phone_number", "amount"].contains(&key.as_str()))
+        }) {
+            return Err("invalid action argument fields".into());
+        }
+        if call.arguments["network"]
+            .as_str()
+            .and_then(airtime_network)
+            .is_none()
+        {
+            return Err("I still need the network for that top-up: MTN, Airtel, Glo, or 9mobile.".into());
+        }
+        if call.arguments["phone_number"]
+            .as_str()
+            .and_then(airtime_phone)
+            .is_none()
+        {
+            return Err("I still need the full phone number receiving the airtime.".into());
+        }
+        if airtime_amount(&call.arguments).is_none() {
+            return Err("I still need the airtime amount in naira.".into());
+        }
+        return Ok(());
+    }
     let keys: &[&str] = match call.name.as_str() {
         "create_ticket" => &["title", "description", "priority"],
         "send_email" => &["to_email", "subject", "body"],
@@ -247,6 +338,9 @@ pub async fn execute(services: &Services, context: &AgentContext, permit: Permit
     }
     if let Err(message) = validate(&call) {
         return ActionResult::failed(&message);
+    }
+    if call.name == AIRTIME_TOOL {
+        return execute_airtime(services, context, call).await;
     }
     let (path, payload, recipient) = if call.name == "create_ticket" {
         let priority = text(&call.arguments, "priority");
@@ -325,6 +419,58 @@ pub async fn execute(services: &Services, context: &AgentContext, permit: Permit
             extra: Default::default(),
         }
     }
+}
+
+/// Executes the operator-configured airtime tool: validates the collected
+/// details, POSTs them to the endpoint from the agent's own tool row, and maps
+/// the endpoint's `{status, message, data}` reply to a spoken outcome.
+async fn execute_airtime(services: &Services, context: &AgentContext, call: Call) -> ActionResult {
+    let Some(row) = configured_http(context, AIRTIME_TOOL) else {
+        return ActionResult::failed("Airtime top-up is not available from this agent right now.");
+    };
+    let url = row["url"].as_str().unwrap_or("").trim().to_string();
+    let Some(network) = call.arguments["network"].as_str().and_then(airtime_network) else {
+        return ActionResult::failed(
+            "I still need the network for that top-up: MTN, Airtel, Glo, or 9mobile.",
+        );
+    };
+    let Some(phone) = call.arguments["phone_number"].as_str().and_then(airtime_phone) else {
+        return ActionResult::failed("I still need the full phone number receiving the airtime.");
+    };
+    let Some(amount) = airtime_amount(&call.arguments) else {
+        return ActionResult::failed("I still need the airtime amount in naira.");
+    };
+    let payload = json!({
+        "network": network,
+        "phone_number": phone,
+        "amount": amount,
+        "request_id": call.id,
+        "agent_id": context.agent_id,
+        "business_id": context.business_id,
+        "caller": context.end_user_id,
+    });
+    let reply = services
+        .configured_post(&url, row["headers"].as_object(), payload)
+        .await;
+    let body = match reply {
+        Ok(body) => body,
+        Err(error) => {
+            return if error.starts_with("service HTTP 4") {
+                ActionResult::failed("The airtime service rejected that request.")
+            } else {
+                ActionResult::unknown()
+            }
+        }
+    };
+    let mut result = ActionResult::from_body(body);
+    if result.status == "ok" || result.status == "success" || result.status == "completed" {
+        result.status = "success".into();
+        if result.message.trim().is_empty() {
+            result.message = format!("{amount} naira of {network} airtime is now on {phone}.");
+        }
+    }
+    result.extra.insert("tool_name".into(), json!(AIRTIME_TOOL));
+    result
 }
 
 #[cfg(test)]
@@ -422,6 +568,113 @@ mod tests {
         assert_eq!(result.status, "success");
         assert_eq!(requests.lock().unwrap().len(), 1);
         assert!(result.message.contains("TKT-001"));
+        server.abort();
+    }
+    #[test]
+    fn airtime_details_are_normalised_and_bounded() {
+        assert_eq!(airtime_network("mtn"), Some("MTN"));
+        assert_eq!(airtime_network(" Etisalat "), Some("9mobile"));
+        assert_eq!(airtime_network("visafone"), None);
+        assert_eq!(airtime_phone("0803 123 4567").as_deref(), Some("08031234567"));
+        assert_eq!(
+            airtime_phone("+2348031234567").as_deref(),
+            Some("08031234567")
+        );
+        assert_eq!(airtime_phone("0803123"), None);
+        assert_eq!(airtime_amount(&json!({"amount": 1000})), Some(1000));
+        assert_eq!(airtime_amount(&json!({"amount": "1,000"})), Some(1000));
+        assert_eq!(airtime_amount(&json!({"amount": 5})), None);
+        assert_eq!(airtime_amount(&json!({"amount": 900_000})), None);
+    }
+    #[test]
+    fn airtime_tool_is_only_offered_when_the_agent_configures_it() {
+        let bare = AgentContext {
+            loaded: true,
+            ..Default::default()
+        };
+        assert!(!enabled(&bare, AIRTIME_TOOL));
+        assert!(definitions(&bare).is_empty());
+        let configured = AgentContext {
+            loaded: true,
+            tools: vec![json!({
+                "name": AIRTIME_TOOL,
+                "url": "http://127.0.0.1:9/v1/demo/airtime/purchase",
+                "kind": "http",
+                "is_active": true
+            })],
+            ..Default::default()
+        };
+        assert!(enabled(&configured, AIRTIME_TOOL));
+        assert_eq!(definitions(&configured).len(), 1);
+        let mut disabled = configured.clone();
+        disabled.tools[0]["is_active"] = json!(false);
+        assert!(!enabled(&disabled, AIRTIME_TOOL));
+        let mut internal = configured;
+        internal.tools[0]["url"] = json!("internal://airtime-purchase");
+        assert!(!enabled(&internal, AIRTIME_TOOL));
+    }
+    async fn purchase(
+        State(requests): State<Arc<Mutex<Vec<Value>>>>,
+        headers: HeaderMap,
+        Json(body): Json<Value>,
+    ) -> Json<Value> {
+        assert_eq!(headers["x-business-id"], "business-a");
+        assert_eq!(headers["x-service-token"], "demo-token");
+        requests.lock().unwrap().push(body);
+        Json(json!({"status":"success","message":"Airtime delivered. Reference AIR-1010.","data":{"reference":"AIR-1010"}}))
+    }
+    #[tokio::test]
+    async fn configured_airtime_tool_posts_the_purchase_and_reports_the_reference() {
+        let requests = Arc::new(Mutex::new(vec![]));
+        let app = Router::new()
+            .route("/v1/demo/airtime/purchase", post(purchase))
+            .with_state(requests.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let endpoint = super::super::platform::Endpoint {
+            base_url: format!("http://{address}"),
+            token: "local-test-only".into(),
+            timeout_seconds: 1.0,
+        };
+        let server = tokio::spawn(async { axum::serve(listener, app).await.unwrap() });
+        let services = Services::new(
+            super::super::platform::PlatformConfig {
+                conversation: endpoint,
+                ..Default::default()
+            },
+            scope(),
+            Default::default(),
+        )
+        .unwrap();
+        let context = AgentContext {
+            loaded: true,
+            business_id: "business-a".into(),
+            agent_id: "agent-a".into(),
+            end_user_id: "caller-a".into(),
+            tools: vec![json!({
+                "name": AIRTIME_TOOL,
+                "url": format!("http://{address}/v1/demo/airtime/purchase"),
+                "kind": "http",
+                "headers": {"X-Service-Token": "demo-token"},
+                "is_active": true
+            })],
+            ..Default::default()
+        };
+        let call = Call {
+            context: None,
+            id: "airtime-1".into(),
+            name: AIRTIME_TOOL.into(),
+            arguments: json!({"network":"mtn","phone_number":"08031234567","amount":1000}),
+        };
+        validate(&call).unwrap();
+        let result = execute(&services, &context, direct_permit(call)).await;
+        assert_eq!(result.status, "success");
+        assert!(result.message.contains("AIR-1010"));
+        let received = requests.lock().unwrap().clone();
+        assert_eq!(received.len(), 1);
+        assert_eq!(received[0]["network"], "MTN");
+        assert_eq!(received[0]["phone_number"], "08031234567");
+        assert_eq!(received[0]["amount"], 1000);
         server.abort();
     }
 }

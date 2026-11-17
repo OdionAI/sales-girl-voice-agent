@@ -344,12 +344,27 @@ impl Providers {
             let response = match request {
                 Ok(r) if r.status().is_success() => r,
                 Ok(r) => {
-                    if !sent && index < 3 && [502, 503, 504].contains(&r.status().as_u16()) {
+                    let status = r.status();
+                    if !sent
+                        && index < 3
+                        && matches!(status.as_u16(), 429 | 500 | 502 | 503 | 504)
+                    {
                         span.finish();
                         tokio::time::sleep(Duration::from_secs_f64([0.3, 1.0, 2.0][index])).await;
                         continue;
                     }
-                    return Err(format!("LLM HTTP {}", r.status().as_u16()));
+                    // Keep the provider's own words: a bare status code ("LLM
+                    // HTTP 402") cannot distinguish an exhausted budget from a
+                    // revoked key, and that was the whole diagnosis gap.
+                    let body = r.text().await.unwrap_or_default();
+                    let detail = body.split_whitespace().collect::<Vec<_>>().join(" ");
+                    let detail: String = detail.chars().take(240).collect();
+                    let url = c.llm_base_url.trim_end_matches('/');
+                    return Err(if detail.is_empty() {
+                        format!("LLM HTTP {} from {url}", status.as_u16())
+                    } else {
+                        format!("LLM HTTP {} from {url}: {detail}", status.as_u16())
+                    });
                 }
                 Err(_) => {
                     if !sent && index < 3 {
@@ -513,8 +528,31 @@ impl Providers {
             }
             for (call_index, (id, name, raw)) in calls {
                 if !name.is_empty() {
-                    let arguments = serde_json::from_str(&raw)
-                        .map_err(|_| "invalid structured tool arguments")?;
+                    // A single malformed argument blob must not fail the whole
+                    // turn: doing so discarded every tool call and left the
+                    // caller in silence. Skip only the bad call, keep the
+                    // usable ones, and record why it was dropped.
+                    let trimmed = raw.trim();
+                    let arguments: serde_json::Value = if trimmed.is_empty() {
+                        json!({})
+                    } else {
+                        match serde_json::from_str(trimmed) {
+                            Ok(value) => value,
+                            Err(err) => {
+                                self.trace.emit(
+                                    "tool_call_rejected",
+                                    turn,
+                                    attempt,
+                                    json!({
+                                        "tool": name,
+                                        "error": err.to_string(),
+                                        "raw_chars": trimmed.chars().count(),
+                                    }),
+                                );
+                                continue;
+                            }
+                        }
+                    };
                     self.trace
                         .emit("tool_call_prepared", turn, attempt, json!({}));
                     tx.send(LlmEvent::Tool {
@@ -765,12 +803,20 @@ impl Providers {
         let response = self
             .client
             .post(url)
-            .multipart(
-                reqwest::multipart::Form::new()
+            .multipart({
+                let mut form = reqwest::multipart::Form::new()
                     .part("file", file)
                     .text("model", "Qwen3-ASR")
-                    .text("language", "en"),
-            )
+                    .text("language", "en");
+                // Qwen3-ASR biases transcription from free-form context supplied as a
+                // system prompt, e.g. "Vocabulary: Wema, Opay, airtime." The
+                // OpenAI-shaped transcription endpoint exposes the same field as
+                // `prompt`, so the agent's stt_context override rides along here.
+                if !self.config.stt_context.trim().is_empty() {
+                    form = form.text("prompt", self.config.stt_context.trim().to_string());
+                }
+                form
+            })
             .send()
             .await
             .ok()?
@@ -778,7 +824,16 @@ impl Providers {
             .ok()?;
         self.usage.stt_submitted(pcm.len() * 2);
         let payload: Value = response.json().await.ok()?;
-        let text = super::text::clean_transcript_for_language(payload["text"].as_str()?, "English");
+        let raw = payload["text"].as_str()?;
+        let text = super::text::clean_transcript_for_language(raw, "English");
+        if text.trim().is_empty() && !raw.trim().is_empty() {
+            self.trace.emit(
+                "stt_final_language_suppressed",
+                0,
+                0,
+                json!({"language":"English","chars":raw.len(),"source":"candidate"}),
+            );
+        }
         if super::languages::code(&self.config.tts_language) == "ig" {
             return igbo_qwen_phone_candidates(&text);
         }
@@ -849,10 +904,18 @@ impl Providers {
             .map_err(|_| "ASR final HTTP error")?;
         self.usage.stt_submitted(pcm.len() * 2);
         let payload: Value = response.json().await.map_err(|_| "ASR final JSON error")?;
-        let text = super::text::clean_transcript_for_language(
-            payload["text"].as_str().unwrap_or(""),
-            &self.config.tts_language,
-        );
+        let raw = payload["text"].as_str().unwrap_or("");
+        let text = super::text::clean_transcript_for_language(raw, &self.config.tts_language);
+        if text.trim().is_empty() && !raw.trim().is_empty() {
+            // The recogniser answered in a language nobody asked for. Drop it:
+            // the turn recovers instead of the caller being shown a translation.
+            self.trace.emit(
+                "stt_final_language_suppressed",
+                0,
+                0,
+                json!({"language":self.config.tts_language,"chars":raw.len()}),
+            );
+        }
         if super::text::is_asr_context_echo(&text, &c.stt_context) {
             return Err("ASR final copied private context".into());
         }

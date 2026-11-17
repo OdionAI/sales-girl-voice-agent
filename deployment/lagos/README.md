@@ -26,8 +26,37 @@ docker build -f deployment/lagos/Dockerfile \
 The Lagos stack is a Compose project on the private app VM reached through the jump host:
 `odion-recovery-lagos`, release dir `/opt/attentive/releases/recovery-20261009`, service `voice`.
 
+The production source/runtime reconciliation observed on 2026-11-14 is recorded
+in [`production-reconciliation-2026-11-14.md`](production-reconciliation-2026-11-14.md).
+The live image was built from `f1d5a8d`; the reconciliation branch merges that
+exact production source history into current `main` and includes the recording
+codec fix. The deployer carries forward the current container environment,
+mounts, and Compose file chain when building a release; preserve this behavior
+and the documented host overrides during future releases.
+
 Agents should pull GitHub `main`, make changes on a branch, and promote through
 `dev` and `staging` before merging to `main`. Do not deploy directly to the VM.
+
+The voice CI runs Python regressions, Rust unit tests, and the native image
+build as parallel jobs. The existing `native-worker` required check passes only
+when the Rust tests and native image check both finish. CI detects changed
+components before running tests. Python changes run Python regressions and build
+the Python image with pip and BuildKit caches; latency/passkey changes run the
+passkey suite; Rust/native build inputs run Rust unit tests and the native image
+contract. Docs and deploy-workflow-only changes skip application builds. The
+`native-worker` required check passes for a non-native change only when both
+native jobs were correctly skipped; for a native change it passes only when
+both checks succeed. Changes to the CI workflow or scope detector run the full
+matrix. CI builds the native image with `RUN_NATIVE_TESTS=false` because the
+same Rust tests run in their own job.
+
+PR merge is blocked until the Python tests, passkey regression, and
+`native-worker` aggregate check pass. The Lagos release starts immediately on
+that protected main push and checks out the exact pushed SHA; it does not repeat
+those checks. It then recreates only the Lagos `voice` service. Cargo build
+output, pip downloads, the checksum-verified RNNoise model, and unchanged Docker
+layers are cached across runs. Prompt changes compile the changed Python worker
+layer; Rust source changes compile the native worker.
 
 ## Must-not-lose behavior (verify on every release)
 - **RNNoise input-noise suppression** — `latency_lab/input_noise.py` (with the `*` global
@@ -37,7 +66,8 @@ Agents should pull GitHub `main`, make changes on a branch, and promote through
 - **STT** `Qwen3-ASR` chat transcription is authoritative for Wema SAW's
   business and the intended Amaka agent; an empty or failed chat transcript falls back to the
   realtime Qwen final. Other businesses remain on the existing realtime/batch
-  path. The vocabulary context is preserved from the active environment.
+  path. The deployment preserves the active vocabulary context and appends
+  Airtime, Transfer, Megabytes, and Gigabytes for the scoped chat ASR agents.
   **LLM** local `qwen3.8-27b`, **TTS** `Qwen3-TTS` — these are runtime env
   (`RVC_LAB_*`), not baked into the image.
 - Wema English voice selection is stored in Agent Config as `tts_voice_id`.
@@ -49,6 +79,21 @@ Agents should pull GitHub `main`, make changes on a branch, and promote through
   deterministic seed as the configured Helen clone. The runtime changes still
   require merge and a Lagos rollout before the live SAW worker applies the
   saved short voice IDs.
+
+- Caller endpointing uses a 400 ms silence window by default. For the Wema SAW
+  agent only, the worker enters a phone-number capture state when the agent
+  asks for a phone/mobile number. That caller response uses a 1,100 ms silence
+  window, retaining short pauses between spoken digits. The Wema-only runtime
+  prompt asks the caller to repeat an incomplete or unclear number a little
+  faster, then reads back
+  all 11 digits and waits for confirmation. The state expires once
+  a complete number is recognized or after four caller turns. These settings are
+  `RVC_LAB_PHONE_NUMBER_CAPTURE_AGENT_IDS` and
+  `RVC_LAB_PHONE_NUMBER_END_SILENCE_MS`; other agents and ordinary turns keep
+  the global 400 ms window. This gives the ASR more continuous audio during
+  number collection; it cannot guarantee that ASR recognizes every spoken digit.
+  The same state and trace events are implemented in both the Python fallback
+  pipeline and the active native Rust runtime.
 
 The shared Lagos LLM can be switched for all agents through the repository
 variable `RVC_LAB_LLM_PROVIDER` (`qwen` or `deepseek`; defaults to `qwen`).
@@ -244,7 +289,8 @@ Rollback restores the previous image, entrypoint, command, user and healthcheck.
 
 ## Native production cutover
 
-The native release retains the staging-tested 150 ms caller endpointing threshold,
+The native release uses a 400 ms caller endpointing threshold, with the scoped
+Wema phone-number capture window described above,
 final ASR validation, speculative generation and RNNoise speech-probability gating.
 BuildKit attestations are disabled to compare platform image IDs consistently.
 Verification accepts image-added environment defaults and compares mounts without
