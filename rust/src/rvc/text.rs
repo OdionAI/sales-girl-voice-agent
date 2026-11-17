@@ -184,11 +184,8 @@ pub fn speakable(raw: &str) -> String {
             last_space = false;
         }
     }
-    cleaned
-        .trim()
-        .trim_matches(',')
-        .trim()
-        .to_string()
+    let cleaned = cleaned.trim().trim_matches(',').trim().to_string();
+    spell_digits(&cleaned)
 }
 
 pub fn normalize(s: &str) -> String {
@@ -601,6 +598,73 @@ mod internal_annotation_tests {
     }
 }
 
+/// Every digit spelled, however short the number. Used for identifiers the
+/// caller must hear one digit at a time (account endings, phone numbers).
+pub fn spell_each(digits: &str) -> String {
+    digits
+        .chars()
+        .filter(|c| c.is_ascii_digit())
+        .map(|d| match d {
+            '0' => "zero",
+            '1' => "one",
+            '2' => "two",
+            '3' => "three",
+            '4' => "four",
+            '5' => "five",
+            '6' => "six",
+            '7' => "seven",
+            '8' => "eight",
+            '9' => "nine",
+            _ => unreachable!("filtered to ASCII digits"),
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Long numbers as spoken digits. "08112812216" is read as one huge number by
+/// the speech engine; "zero eight one one two eight one two two one six" is what
+/// a person says, and what the caller can follow and correct.
+pub fn spell_digits(raw: &str) -> String {
+    fn word(d: char) -> &'static str {
+        match d {
+            '0' => "zero",
+            '1' => "one",
+            '2' => "two",
+            '3' => "three",
+            '4' => "four",
+            '5' => "five",
+            '6' => "six",
+            '7' => "seven",
+            '8' => "eight",
+            '9' => "nine",
+            _ => unreachable!("only ASCII digits are passed"),
+        }
+    }
+    let chars: Vec<char> = raw.chars().collect();
+    let mut out = String::with_capacity(raw.len() * 2);
+    let mut i = 0;
+    while i < chars.len() {
+        if !chars[i].is_ascii_digit() {
+            out.push(chars[i]);
+            i += 1;
+            continue;
+        }
+        let mut j = i;
+        while j < chars.len() && chars[j].is_ascii_digit() {
+            j += 1;
+        }
+        // 7+ digits is a phone or account number, never an amount in these calls.
+        if j - i >= 7 {
+            let words: Vec<&str> = chars[i..j].iter().map(|d| word(*d)).collect();
+            out.push_str(&words.join(" "));
+        } else {
+            out.extend(&chars[i..j]);
+        }
+        i = j;
+    }
+    out
+}
+
 /// Phone and account numbers as the caller actually said them. Spoken digit
 /// words are glued back into runs so the model can copy figures instead of
 /// transcribing them itself (which is where digits get transposed).
@@ -663,11 +727,27 @@ mod spoken_tests {
     fn a_dash_is_never_read_as_minus() {
         assert_eq!(
             speakable("Using your account ending 9185 - 2000 naira of MTN airtime to 08131535013."),
-            "Using your account ending 9185, 2000 naira of MTN airtime to 08131535013."
+            "Using your account ending 9185, 2000 naira of MTN airtime to zero eight one three one five three five zero one three."
         );
         assert_eq!(speakable("Got it — the number ends 013"), "Got it, the number ends 013");
-        assert_eq!(speakable("0813-153-5013"), "08131535013");
+        assert_eq!(
+            speakable("0813-153-5013"),
+            "zero eight one three one five three five zero one three"
+        );
         assert_eq!(speakable("no dashes here"), "no dashes here");
+    }
+
+    #[test]
+    fn numbers_are_spoken_as_digits_not_figures() {
+        // The whole point: the caller hears and can correct each digit.
+        assert_eq!(spell_each("9185"), "nine one eight five");
+        assert_eq!(
+            spell_digits("transfer to 08112812216 now"),
+            "transfer to zero eight one one two eight one two two one six now"
+        );
+        // Amounts and short figures are left alone.
+        assert_eq!(spell_digits("2000 naira"), "2000 naira");
+        assert_eq!(spell_digits("ending 9185"), "ending 9185");
     }
 
     #[test]

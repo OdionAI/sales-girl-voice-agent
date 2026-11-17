@@ -470,8 +470,11 @@ impl Banking {
                 .map(str::to_owned)
                 .unwrap_or_else(|| trimmed.to_owned())
         };
+        // Numbers are spoken as digits, not as one huge figure: "ending nine one
+        // eight five", "to zero eight one one two eight one two two one six".
+        let said = |digits: String| -> String { super::text::spell_each(&digits) };
         let prefix = match value("source_account").map(last4) {
-            Some(account) => format!("Using your account ending {}, for ", account),
+            Some(account) => format!("Using your account ending {}, for ", said(account)),
             None => String::new(),
         };
         let details = if preview.contains_key("recipient_account") {
@@ -481,7 +484,7 @@ impl Banking {
                 amount(value("amount")?),
                 value("recipient_name")?,
                 value("bank_name")?,
-                last4(value("recipient_account")?)
+                said(last4(value("recipient_account")?))
             )
         } else if preview.contains_key("package_name") {
             format!(
@@ -489,7 +492,7 @@ impl Banking {
                 prefix,
                 value("package_name")?,
                 value("network")?,
-                value("phone_number")?
+                said(value("phone_number")?)
             )
         } else {
             format!(
@@ -497,7 +500,7 @@ impl Banking {
                 prefix,
                 amount(value("amount")?),
                 value("network")?,
-                value("phone_number")?
+                said(value("phone_number")?)
             )
         };
         let id = prepared["operation_id"].as_str()?.to_string();
