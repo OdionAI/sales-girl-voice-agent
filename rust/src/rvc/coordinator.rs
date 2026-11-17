@@ -34,8 +34,10 @@ const RECOVERY_LINE: &str = "Sorry, I missed that. Could you say it again?";
 /// account once, before the caller's first turn, so the agent can name the
 /// account it will use instead of waiting on a tool round-trip. Bounded and
 /// fail-soft: a slow or unauthorised read must never delay the greeting.
-/// `RVC_ACCOUNTS_PREFETCH_MS=0` disables it.
-const ACCOUNTS_PREFETCH_MS: f64 = 1500.0;
+/// `RVC_ACCOUNTS_PREFETCH_MS=0` disables it. Sized from live calls: the
+/// connector reads A1 plus one A2 per account, so a two-account list costs
+/// three bank round-trips and 1.5 s was not enough.
+const ACCOUNTS_PREFETCH_MS: f64 = 4000.0;
 
 fn accounts_prefetch_ms() -> f64 {
     std::env::var("RVC_ACCOUNTS_PREFETCH_MS")
@@ -530,6 +532,7 @@ struct Coordinator {
     last_filler: Option<tokio::time::Instant>,
     /// Prompt block built from the ring-time balance read.
     accounts: Option<String>,
+    accounts_started: Option<tokio::time::Instant>,
     accounts_task: Option<JoinHandle<()>>,
 }
 /// The actor is the sole owner of turn/final/attempt authority. Provider streaming
@@ -765,6 +768,7 @@ pub fn start_with_services(
         last_spoken: None,
         last_filler: None,
         accounts: None,
+        accounts_started: None,
         accounts_task: None,
     };
     let task = tokio::spawn(async move {
@@ -1131,6 +1135,7 @@ fn wait_cue(call: &super::actions::Call) -> String {
             return;
         };
         let events = self.events.clone();
+        self.accounts_started = Some(tokio::time::Instant::now());
         self.trace
             .emit("accounts_prefetch_start", 0, 0, json!({"deadline_ms":deadline}));
         self.accounts_task = Some(tokio::spawn(async move {
@@ -4313,16 +4318,24 @@ fn wait_cue(call: &super::actions::Call) -> String {
                         );
                         return;
                     }
-                    if !direct
-                        && self.speech_enabled
-                        && (error.starts_with("LLM connection")
-                            || error.starts_with("LLM HTTP 502")
-                            || error.starts_with("LLM HTTP 503")
-                            || error.starts_with("LLM HTTP 504")
-                            || error == "LLM retries exhausted")
-                    {
+                    // Every provider failure - refused with a status (402 quota,
+                    // 429, 5xx) or unreachable - is an outage from the caller's
+                    // side: say so. Going Idle here produces dead air followed by
+                    // the inactivity check-in, which reads as "it ignored me".
+                    if !direct && self.speech_enabled && error.starts_with("LLM ") {
+                        self.trace.emit(
+                            "llm_unavailable",
+                            self.turn,
+                            attempt,
+                            json!({"error":error}),
+                        );
                         self.cancel("llm_unavailable").await;
-                        self.begin_facts(self.final_text.clone(),true,Some("I'm sorry, my response service is temporarily unavailable. Please try that again in a moment.".into())).await;
+                        self.begin_facts(
+                            self.final_text.clone(),
+                            true,
+                            Some("I'm sorry, my response service is temporarily unavailable. Please try that again in a moment.".into()),
+                        )
+                        .await;
                         return;
                     }
                     self.fail(error).await;
@@ -4698,6 +4711,12 @@ fn wait_cue(call: &super::actions::Call) -> String {
             Internal::FinalTimeout(turn) => self.unavailable(turn, "final_timeout").await,
             Internal::AccountsPrefetched(result) => {
                 self.accounts_task = None;
+                let elapsed_ms = self
+                    .accounts_started
+                    .map(|started| started.elapsed().as_secs_f64() * 1000.0)
+                    .unwrap_or(0.0);
+                self.accounts_started = None;
+                let elapsed_ms = (elapsed_ms * 10.0).round() / 10.0;
                 match result {
                     Ok(result) if matches!(result.status.as_str(), "ok" | "success") => {
                         match accounts_block(&result.data) {
@@ -4706,7 +4725,7 @@ fn wait_cue(call: &super::actions::Call) -> String {
                                     "accounts_prefetch_ready",
                                     self.turn,
                                     0,
-                                    json!({"accounts":result.data.get("accounts").and_then(Value::as_array).map_or(0, Vec::len)}),
+                                    json!({"accounts":result.data.get("accounts").and_then(Value::as_array).map_or(0, Vec::len),"elapsed_ms":elapsed_ms}),
                                 );
                                 self.accounts = Some(block);
                             }
@@ -4714,7 +4733,7 @@ fn wait_cue(call: &super::actions::Call) -> String {
                                 "accounts_prefetch_failed",
                                 self.turn,
                                 0,
-                                json!({"reason":"no_account_list","status":result.status}),
+                                json!({"reason":"no_account_list","status":result.status,"elapsed_ms":elapsed_ms}),
                             ),
                         }
                     }
@@ -4722,13 +4741,13 @@ fn wait_cue(call: &super::actions::Call) -> String {
                         "accounts_prefetch_failed",
                         self.turn,
                         0,
-                        json!({"reason":result.message,"status":result.status}),
+                        json!({"reason":result.message,"status":result.status,"elapsed_ms":elapsed_ms}),
                     ),
                     Err(error) => self.trace.emit(
                         "accounts_prefetch_failed",
                         self.turn,
                         0,
-                        json!({"reason":error}),
+                        json!({"reason":error,"elapsed_ms":elapsed_ms}),
                     ),
                 }
             }

@@ -46,6 +46,9 @@ struct Fixture {
     mail_release: tokio::sync::Notify,
     hold_mail: std::sync::atomic::AtomicBool,
     mail_unknown: std::sync::atomic::AtomicBool,
+    /// Force the chat endpoint to answer with this status (0 = normal), so a
+    /// provider refusal can be tested without a real outage.
+    llm_status: std::sync::atomic::AtomicU16,
     /// Ring-time balance prefetch calls: worker warm-up, not a business call,
     /// so they are counted here and kept out of `requests` / `bank_started`.
     prefetch_calls: std::sync::atomic::AtomicUsize,
@@ -57,6 +60,14 @@ struct Fixture {
 }
 async fn llm(State(s): State<Arc<Fixture>>, Json(body): Json<Value>) -> Response {
     s.requests.lock().unwrap().push(body.clone());
+    let forced = s.llm_status.load(std::sync::atomic::Ordering::SeqCst);
+    if forced != 0 {
+        return (
+            axum::http::StatusCode::from_u16(forced).unwrap(),
+            axum::Json(json!({"error":{"message":"Insufficient Balance","type":"insufficient_quota"}})),
+        )
+            .into_response();
+    }
     let text = body["messages"].as_array().unwrap().last().unwrap()["content"]
         .as_str()
         .unwrap()
@@ -5032,5 +5043,63 @@ async fn ring_time_balance_prefetch_feeds_the_system_prompt() {
         1,
         "the prefetch runs once per call"
     );
+    h.close().await;
+}
+
+/// A provider that refuses the request (402 quota, 429, 5xx) must be spoken, not
+/// swallowed: dead air plus the inactivity check-in reads as "it ignored me".
+#[tokio::test]
+async fn provider_refusal_is_spoken_instead_of_going_quiet() {
+    let mut h = Harness::new(false).await;
+    h.fixture
+        .llm_status
+        .store(402, std::sync::atomic::Ordering::SeqCst);
+    h.voice().await;
+    h.end().await;
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while !h
+            .trace
+            .events()
+            .iter()
+            .any(|e| e.event == "user_speech_end")
+        {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .await
+    .unwrap();
+    h.session
+        .input
+        .send(Input::Final {
+            turn: 1,
+            text: "two hundred naira of airtime".into(),
+        })
+        .await
+        .unwrap();
+    h.complete(1).await;
+    let events = h.trace.events();
+    let refusal = events
+        .iter()
+        .find(|e| e.event == "llm_unavailable")
+        .expect("the provider refusal is recorded");
+    assert!(
+        refusal.data["error"].as_str().unwrap_or("").contains("402"),
+        "{}",
+        refusal.data
+    );
+    assert!(
+        refusal.data["error"]
+            .as_str()
+            .unwrap_or("")
+            .contains("Insufficient Balance"),
+        "the provider's own message is kept: {}",
+        refusal.data
+    );
+    assert!(!events.iter().any(|e| e.event == "turn_unanswered_at_idle"));
+    let spoken = {
+        let pcm = h.sink.pcm.lock().unwrap();
+        !pcm.is_empty()
+    };
+    assert!(spoken, "the caller hears an apology instead of silence");
     h.close().await;
 }
