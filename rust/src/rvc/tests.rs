@@ -2431,7 +2431,7 @@ async fn inactivity_pilot_falls_back_when_model_selects_silence() {
     wait_idle_end(&mut h).await;
     assert!(h.fixture.requests.lock().unwrap().iter().any(|r| r["input"]
         .as_str()
-        .is_some_and(|s| s.starts_with("Are you still there?"))));
+        .is_some_and(super::profiles::is_idle_nudge)));
     h.close().await;
 }
 #[tokio::test]
@@ -2444,7 +2444,7 @@ async fn inactivity_pilot_falls_back_when_model_output_is_invalid() {
     wait_idle_end(&mut h).await;
     assert!(h.fixture.requests.lock().unwrap().iter().any(|r| r["input"]
         .as_str()
-        .is_some_and(|s| s.starts_with("Are you still there?"))));
+        .is_some_and(super::profiles::is_idle_nudge)));
     h.close().await;
 }
 #[tokio::test]
