@@ -259,19 +259,93 @@ pub fn valid_final(hypothesis: &str, final_text: &str) -> bool {
     let (a, b) = (normalize(hypothesis), normalize(final_text));
     a == b || similarity(&a, &b) >= 0.92
 }
-pub fn clean_transcript_for_language(raw: &str, language: &str) -> String {
-    if !super::languages::french(language) {
-        return clean_transcript(raw);
-    }
-    static FRENCH: std::sync::OnceLock<Option<Regex>> = std::sync::OnceLock::new();
-    if let Some(pattern) = FRENCH.get_or_init(|| {
-        Regex::new(r"(?i)(\blanguage\s+)(french|français|francais|fra|fre|fr)\b").ok()
-    }) {
-        clean_transcript(&pattern.replace_all(raw, "${1}English"))
-    } else {
-        clean_transcript(raw)
-    }
+/// Scripts no supported agent uses. A transcript that comes back in one of them
+/// is a recogniser hallucination (short or noisy audio makes Qwen3-ASR pick a
+/// language of its own), not something the caller said.
+fn foreign_script(text: &str) -> bool {
+    text.chars().any(|c| {
+        let u = c as u32;
+        (0x0370..=0x052F).contains(&u)        // Greek, Cyrillic
+            || (0x0590..=0x08FF).contains(&u) // Hebrew, Arabic, Syriac, Thaana
+            || (0x0900..=0x0DFF).contains(&u) // Indic scripts
+            || (0x0E00..=0x0E7F).contains(&u) // Thai
+            || (0x1100..=0x11FF).contains(&u) // Hangul jamo
+            || (0x2E80..=0x9FFF).contains(&u) // CJK
+            || (0xA960..=0xA97F).contains(&u)
+            || (0xAC00..=0xD7FF).contains(&u) // Hangul
+            || (0xF900..=0xFAFF).contains(&u)
+    })
 }
+
+/// Function words that are common in the languages the recogniser drifts into
+/// on unclear English audio, and rare in English.
+const DRIFT_WORDS: &[&str] = &[
+    "dat", "het", "een", "niet", "dit", "van", "voor", "maar", "ook", "nog", "wel", "geen",
+    "hij", "zij", "wij", "jullie", "ja", "nee", "eens", "noemt", "vamos", "isso", "né", "não",
+    "não", "voce", "você", "uma", "com", "por", "pero", "esta", "está", "muy", "auch", "nicht",
+    "und", "ist", "ich", "für", "auf", "mit", "aber", "der", "die", "das", "oui", "pas", "avec",
+    "pour", "mais", "vous", "nous", "les", "des", "une", "aux", "bonjour", "merci", "danke",
+];
+
+/// Unambiguous English function words - enough to tell a real sentence from a
+/// drifted one, without flagging names, digits or short answers.
+const ENGLISH_WORDS: &[&str] = &[
+    "the", "is", "it", "and", "to", "of", "that", "for", "you", "my", "with", "have", "what",
+    "please", "sorry", "thanks", "correct", "number", "account", "airtime", "transfer", "balance",
+    "how", "much", "can", "would", "like", "want", "not", "this", "from", "on", "in", "at",
+];
+
+fn foreign_latin(text: &str) -> bool {
+    let mut drift = 0;
+    let mut english = 0;
+    for word in text.split(|c: char| !c.is_alphanumeric() && c != '\'') {
+        let word = word.to_ascii_lowercase();
+        if word.is_empty() {
+            continue;
+        }
+        if DRIFT_WORDS.contains(&word.as_str()) {
+            drift += 1;
+        } else if ENGLISH_WORDS.contains(&word.as_str()) {
+            english += 1;
+        }
+    }
+    // Two or more foreign function words with at most one English word to
+    // balance them: this is not English speech, so it must not become the
+    // caller's turn. ("… hij eens correct" carries a single English-looking
+    // "correct", which is not enough to make the sentence English.)
+    drift >= 2 && english <= 1
+}
+
+pub fn english_target(language: &str) -> bool {
+    let language = language.trim().to_ascii_lowercase();
+    language.is_empty() || language == "en" || language.starts_with("en-") || language == "english"
+}
+
+pub fn clean_transcript_for_language(raw: &str, language: &str) -> String {
+    // A French agent's decoder may announce its own language; rewrite that
+    // header first so the English-only header rule does not throw the sentence
+    // away, then clean.
+    if super::languages::french(language) {
+        static FRENCH: std::sync::OnceLock<Option<Regex>> = std::sync::OnceLock::new();
+        let prepared = match FRENCH.get_or_init(|| {
+            Regex::new(r"(?i)(\blanguage\s+)(french|français|francais|fra|fre|fr)\b").ok()
+        }) {
+            Some(pattern) => pattern.replace_all(raw, "${1}English").to_string(),
+            None => raw.to_string(),
+        };
+        let text = clean_transcript(&prepared);
+        return if foreign_script(&text) { String::new() } else { text };
+    }
+    let text = clean_transcript(raw);
+    // The recogniser picks the language itself - the endpoint ignores `language`
+    // (proved: the same clip returns identical text for en, fr and zh). So keep
+    // the answer only when it is actually English.
+    if foreign_script(&text) || (english_target(language) && foreign_latin(&text)) {
+        return String::new();
+    }
+    text
+}
+
 pub fn clean_transcript(raw: &str) -> String {
     let raw = raw.trim();
     let langs: Vec<_> = LANGUAGE
@@ -735,6 +809,29 @@ mod spoken_tests {
             "zero eight one three one five three five zero one three"
         );
         assert_eq!(speakable("no dashes here"), "no dashes here");
+    }
+
+    #[test]
+    fn a_transcript_in_another_language_is_not_the_callers_turn() {
+        // All four were produced by the live recogniser on 2026-11-17.
+        assert_eq!(clean_transcript_for_language("Да, действительно.", "English"), "");
+        assert_eq!(
+            clean_transcript_for_language("ja, dat noemt hij eens correct.", "English"),
+            ""
+        );
+        assert_eq!(clean_transcript_for_language("vamos ver isso né", "English"), "");
+        assert_eq!(clean_transcript_for_language("はい、そうです。", "English"), "");
+        // Real English survives, including digits and short answers.
+        for kept in [
+            "Yes, that number is correct.",
+            "zero eight one three one five three five zero one three",
+            "I said it's not supposed to end in three zero one.",
+            "I would like to transfer airtime.",
+            "No.",
+            "MTN.",
+        ] {
+            assert_eq!(clean_transcript_for_language(kept, "English"), kept, "{kept}");
+        }
     }
 
     #[test]
