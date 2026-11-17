@@ -188,6 +188,8 @@ pub(crate) struct Meta {
     pub room: String,
     pub web: bool,
     pub explicitly_routed: bool,
+    /// "outbound" when the agent is marked outbound; otherwise "inbound".
+    pub direction: String,
 }
 enum Command {
     Message {
@@ -470,7 +472,7 @@ impl Runtime {
             );
             return;
         }
-        let started=request(&self.services,&["v1","conversations","sessions","start"],json!({"conversation_id":conversation,"channel":channel,"explicitly_routed_agent":self.meta.explicitly_routed,"client_session_id":self.meta.client_session_id,"started_at":self.started_at}),true,&self.trace).await;
+        let started=request(&self.services,&["v1","conversations","sessions","start"],json!({"conversation_id":conversation,"channel":channel,"direction":self.meta.direction,"explicitly_routed_agent":self.meta.explicitly_routed,"client_session_id":self.meta.client_session_id,"started_at":self.started_at}),true,&self.trace).await;
         if started["status"] == "failed" {
             self.trace.emit(
                 "conversation_persist_start_failed",
@@ -503,7 +505,7 @@ impl Runtime {
             0,
             json!({"session_id":session,"room_name":self.meta.room,"channel":channel}),
         );
-        request(&self.services,&["v1","conversations","sessions",&session,"events"],json!({"event_type":"session_started","role":"system","title":"Session started","body":format!("Inbound call from {}",if self.meta.caller.is_empty(){"anonymous caller"}else{&self.meta.caller}),"payload":{"room_name":self.meta.room,"caller":self.meta.caller,"channel":channel}}),false,&self.trace).await;
+        request(&self.services,&["v1","conversations","sessions",&session,"events"],json!({"event_type":"session_started","role":"system","title":"Session started","body":format!("{} call {} {}",if self.meta.direction=="outbound"{"Outbound"}else{"Inbound"},if self.meta.direction=="outbound"{"to"}else{"from"},if self.meta.caller.is_empty(){"anonymous caller"}else{&self.meta.caller}),"payload":{"room_name":self.meta.room,"caller":self.meta.caller,"channel":channel,"direction":self.meta.direction}}),false,&self.trace).await;
         self.recording.start(session);
     }
     async fn handoff(&self, reason: &str, payload: Value) {
@@ -756,6 +758,7 @@ mod tests {
                 room: "room-a".into(),
                 web: true,
                 explicitly_routed: true,
+                direction: "inbound".into(),
             },
             collector,
             Default::default(),

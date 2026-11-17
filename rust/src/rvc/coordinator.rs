@@ -485,6 +485,7 @@ pub fn start_with_services(
                     room: svc.scope().room().into(),
                     web: c.transport == "browser" || svc.scope().claims()["identity_type"] == "web",
                     explicitly_routed: c.explicitly_routed_agent,
+                    direction: if c.agent_context.outbound_enabled { "outbound" } else { "inbound" }.into(),
                 },
                 usage.clone(),
                 c.recording.clone(),
