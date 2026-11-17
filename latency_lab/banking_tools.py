@@ -373,7 +373,9 @@ class BankingTools:
             "preserving leading zeros and every digit. Separate the digit words with spaces only; "
             "never insert periods, full stops, ellipses, or commas between digits. Never use a dash, "
             "hyphen, en dash or em dash when you speak: they are read aloud as \"minus\". Say the same "
-            "thing with plain words and commas. "
+            "thing with plain words and commas. Never say a phone or account number as one figure; "
+            "even when the number appears in figures in the tool data, speak it digit by digit, e.g. "
+            "\"zero eight one one two eight one two two one six\". "
             "Preparation is not execution. Read the actual returned preview and ask confirmation. "
             "The application requires a separate confirmation before execution. "
             + voice_policy +
