@@ -1332,12 +1332,13 @@ fn wait_cue(call: &super::actions::Call) -> String {
     fn idle_opportunity(&mut self) {
         if !self.c.engagement_enabled
             || !self.idle_safe()
-            || ((self.pending_action.is_some()
-                || self
-                    .banking
-                    .as_ref()
-                    .is_some_and(|bank| bank.prepared().is_some()))
-                && !self.c.inactivity_pilot_enabled)
+            // Never nudge or close while a transaction is in flight, even with the
+            // inactivity pilot on: the caller is mid-approval, not absent.
+            || self.pending_action.is_some()
+            || self
+                .banking
+                .as_ref()
+                .is_some_and(|bank| bank.prepared().is_some())
             || self
                 .operation
                 .as_ref()
