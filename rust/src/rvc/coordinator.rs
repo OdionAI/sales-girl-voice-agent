@@ -21,6 +21,16 @@ enum State {
     Releasing,
     Playing,
 }
+/// Minimum spacing between two spoken fillers, and minimum spacing between the
+/// agent's own speech and a new filler. Fillers are gated on *speech*, not on
+/// the tool starting: a caller who just heard the agent must not hear another
+/// "one moment" two seconds later because two bank reads fired in a row.
+const FILLER_MIN_GAP: Duration = Duration::from_secs(9);
+const SPEECH_MIN_GAP: Duration = Duration::from_secs(6);
+/// Said when a caller turn produced no usable transcript at all. Silence is
+/// never an acceptable answer to a caller who just spoke.
+const RECOVERY_LINE: &str = "Sorry, I missed that. Could you say it again?";
+
 /// Percent of 10 ms frames whose RMS clears the loudness floor. Used by the
 /// optional min-utterance safety net before committing audio to ASR.
 fn voiced_frame_percent(pcm: &[i16], speech_rms: f64) -> f64 {
@@ -52,6 +62,17 @@ fn counts_as_speech(level: f64, speech_prob: Option<f64>, c: &Config) -> bool {
             _ => true,
         }
 }
+/// Whether a filler (wait cue) may be spoken now, given the last filler and
+/// the agent's own last speech.
+pub(super) fn filler_due_at(
+    last_filler: Option<tokio::time::Instant>,
+    last_spoken: Option<tokio::time::Instant>,
+    now: tokio::time::Instant,
+) -> bool {
+    last_filler.map_or(true, |t| now.duration_since(t) >= FILLER_MIN_GAP)
+        && last_spoken.map_or(true, |t| now.duration_since(t) >= SPEECH_MIN_GAP)
+}
+
 #[derive(Debug)]
 pub enum Output {
     Ready,
@@ -445,6 +466,15 @@ struct Coordinator {
     demo: Option<super::passkey_demo::Demo>,
     demo_task: Option<JoinHandle<()>>,
     demo_run: u64,
+    /// Caller text the agent has heard but not yet answered: (turn, text).
+    /// Fragment churn, a silent barge-in or a lost ASR final all kill a turn
+    /// before any speech; this is what the machine falls back to instead of
+    /// going quiet.
+    unanswered: Option<(u64, String)>,
+    /// When the agent last produced audible speech; drives the filler gate.
+    last_spoken: Option<tokio::time::Instant>,
+    /// When a spoken filler (wait cue) was last used.
+    last_filler: Option<tokio::time::Instant>,
 }
 /// The actor is the sole owner of turn/final/attempt authority. Provider streaming
 /// and paced playout run outside it, so held-audio release cannot stop input.
@@ -675,6 +705,9 @@ pub fn start_with_services(
         demo,
         demo_task: None,
         demo_run: 0,
+        unanswered: None,
+        last_spoken: None,
+        last_filler: None,
     };
     let task = tokio::spawn(async move {
         if !with_asr {
@@ -687,7 +720,7 @@ pub fn start_with_services(
                 _=maintenance.tick()=>s.maintenance(),
                 event=internal.recv()=>if let Some(e)=event{s.internal(e).await;},
                 event=async{match s.asr.as_mut(){Some(a)=>a.events.recv().await,None=>std::future::pending().await}}=>{
-                    match event{Some(AsrEvent::Ready)=>{s.asr_ready=true;s.trace.emit("session_ready",0,0,json!({}));let _=s.output.send(Output::Ready).await;s.maybe_opening().await;},Some(AsrEvent::Partial(t))=>s.partial(t).await,Some(AsrEvent::Hypothesis{turn,revision,text})=>s.hypothesis(turn,revision,text).await,Some(AsrEvent::Final{turn,text,base_candidate,qwen_candidate})=>s.final_text(turn,text,base_candidate,qwen_candidate).await,Some(AsrEvent::Unavailable(t))=>s.unavailable(t).await,Some(AsrEvent::Degraded(e))=>{s.trace.emit("stt_realtime_degraded",s.turn,0,json!({"detail":e}));let _=s.output.send(Output::Status(e)).await;},Some(AsrEvent::Error(e))=>{s.fail(e).await;break;},None=>{s.fail("ASR task closed".into()).await;break;}}
+                    match event{Some(AsrEvent::Ready)=>{s.asr_ready=true;s.trace.emit("session_ready",0,0,json!({}));let _=s.output.send(Output::Ready).await;s.maybe_opening().await;},Some(AsrEvent::Partial(t))=>s.partial(t).await,Some(AsrEvent::Hypothesis{turn,revision,text})=>s.hypothesis(turn,revision,text).await,Some(AsrEvent::Final{turn,text,base_candidate,qwen_candidate})=>s.final_text(turn,text,base_candidate,qwen_candidate).await,Some(AsrEvent::Unavailable(t))=>s.unavailable(t,"asr_unavailable").await,Some(AsrEvent::Degraded(e))=>{s.trace.emit("stt_realtime_degraded",s.turn,0,json!({"detail":e}));let _=s.output.send(Output::Status(e)).await;},Some(AsrEvent::Error(e))=>{s.fail(e).await;break;},None=>{s.fail("ASR task closed".into()).await;break;}}
                 },
                 command=rx.recv()=>match command{
                     Some(Input::Pcm(pcm))=>s.audio(pcm).await,
@@ -696,7 +729,7 @@ pub fn start_with_services(
                     Some(Input::Partial(t))=>s.partial(t).await,
                     Some(Input::Hypothesis{turn,revision,text})=>s.hypothesis(turn,revision,text).await,
                     Some(Input::Final{turn,text})=>s.final_text(turn,text,None,None).await,
-                    Some(Input::Unavailable(t))=>s.unavailable(t).await,
+                    Some(Input::Unavailable(t))=>s.unavailable(t,"asr_unavailable").await,
                     Some(Input::ClientReady)=>{s.opening_started=true;s.maybe_opening().await;},
                     Some(Input::EndCallFailed{reason})=>{
                         s.call_ending=false;
@@ -960,6 +993,10 @@ const WAIT_CUES_READ: &[&str] = &[
     "Right, let me check that.",
     "Okay, checking on that.",
     "Bear with me a moment.",
+    "Alright, let me see.",
+    "Okay, I'm looking.",
+    "Give me a second here.",
+    "Let me have a look.",
 ];
 /// Spoken while a prepare is in flight. No jargon, no claim of completion.
 const WAIT_CUES_PREPARE: &[&str] = &[
@@ -971,6 +1008,14 @@ const WAIT_CUES_PREPARE: &[&str] = &[
     "Sure, I'm on that now.",
     "Okay, almost there.",
     "Right, working on it.",
+    "Okay, putting that together.",
+    "Right, I'm setting that up now.",
+    "Okay, arranging that.",
+    "Got it, getting that sorted.",
+    "Right, that's in progress.",
+    "Okay, I'm getting it done.",
+    "Alright, I'm on it.",
+    "Okay, processing that.",
 ];
 /// Spoken while the execute is submitted, just before the passkey prompt.
 const WAIT_CUES_EXECUTE: &[&str] = &[
@@ -980,6 +1025,12 @@ const WAIT_CUES_EXECUTE: &[&str] = &[
     "Okay, check your phone to approve.",
     "Sending it to you now.",
     "Right, approve it on your phone.",
+    "Okay, I'm sending it through.",
+    "Right, sending that now.",
+    "Okay, it's on its way to your phone.",
+    "Check your phone and approve it.",
+    "Right, that's heading to you now.",
+    "Okay, approve it when it appears.",
 ];
 
 fn next_wait_cue(pool: &'static [&'static str]) -> String {
@@ -999,11 +1050,97 @@ fn wait_cue(call: &super::actions::Call) -> String {
     }
 }
 
+    /// True when a spoken filler is due (see `filler_due_at`).
+    fn filler_due(&self) -> bool {
+        filler_due_at(
+            self.last_filler,
+            self.last_spoken,
+            tokio::time::Instant::now(),
+        )
+    }
+    /// The agent produced a reply for `turn` (text or a tool call), so that
+    /// utterance is answered and must not be folded into the next one.
+    fn note_answered(&mut self, turn: u64) {
+        if self
+            .unanswered
+            .as_ref()
+            .is_some_and(|(owner, _)| *owner <= turn)
+        {
+            self.unanswered = None;
+        }
+    }
+    /// The agent produced audible speech for `turn`, so nothing is owed to the
+    /// caller for that utterance any more.
+    fn note_spoken(&mut self, turn: u64) {
+        self.last_spoken = Some(tokio::time::Instant::now());
+        self.note_answered(turn);
+    }
+    /// Join a new final with caller text that has not been answered yet.
+    /// Returns None when there is nothing to join, or when the two are far
+    /// enough apart that treating them as one request would be wrong.
+    fn coalesce_final(&self, turn: u64, text: &str) -> Option<String> {
+        const MAX_COALESCED_CHARS: usize = 320;
+        let (owner, prior) = self.unanswered.clone()?;
+        if owner >= turn {
+            return None;
+        }
+        let (prior, next) = (prior.trim(), text.trim());
+        if prior.is_empty() || next.is_empty() {
+            return None;
+        }
+        if normalize(prior) == normalize(next) {
+            return Some(prior.to_string());
+        }
+        if next.contains(prior) {
+            return Some(next.to_string());
+        }
+        if prior.contains(next) {
+            return Some(prior.to_string());
+        }
+        if prior.len() + next.len() > MAX_COALESCED_CHARS {
+            return None;
+        }
+        Some(format!("{prior} {next}"))
+    }
+    /// The caller has said something we never answered. Re-open the turn on
+    /// that text rather than resting in Idle with dead air. Returns true when
+    /// it re-opened the turn.
+    async fn recover_unanswered(&mut self, reason: &str) -> bool {
+        let Some((owner, text)) = self.unanswered.take() else {
+            return false;
+        };
+        if text.trim().is_empty() {
+            return false;
+        }
+        self.trace.emit(
+            "turn_recovered_unanswered_final",
+            self.turn,
+            0,
+            json!({"owner":owner,"reason":reason,"chars":text.len()}),
+        );
+        self.final_text = text.clone();
+        self.transition(State::AwaitingFinal, "turn_recovered_unanswered_final");
+        self.begin(text, true, None).await;
+        true
+    }
     async fn bank_wait(
         &mut self,
         call: super::actions::Call,
         permit: Option<super::actions::Permit>,
     ) {
+        if !self.filler_due() {
+            // The caller heard us a moment ago. Run the tool straight away and
+            // stay quiet rather than stacking another "one moment".
+            self.trace.emit(
+                "filler_suppressed",
+                self.turn,
+                0,
+                json!({"tool":call.name,"stage":"wait_cue"}),
+            );
+            self.launch_bank(call, permit);
+            return;
+        }
+        self.last_filler = Some(tokio::time::Instant::now());
         let message = Self::wait_cue(&call);
         self.begin(self.final_text.clone(), true, Some(message))
             .await;
@@ -1091,7 +1228,23 @@ fn wait_cue(call: &super::actions::Call) -> String {
                 None
             };
         if let Some(kind) = kind {
-            self.prepare_engagement(kind);
+            // Wait cues are fillers, so they obey the speech gate too: a fast
+            // sequence of tool calls must not produce three "one moment"s in
+            // eight seconds. The completed-result speech is not a filler.
+            let wait_cue = matches!(kind, EngagementKind::ToolStarted | EngagementKind::ToolWait);
+            if wait_cue && !self.filler_due() {
+                self.trace.emit(
+                    "filler_suppressed",
+                    self.turn,
+                    0,
+                    json!({"tool":self.operation.as_ref().map(|op|op.call.name.clone()).unwrap_or_default(),"stage":kind.reason()}),
+                );
+            } else {
+                if wait_cue {
+                    self.last_filler = Some(tokio::time::Instant::now());
+                }
+                self.prepare_engagement(kind);
+            }
         }
     }
     fn maybe_deliver_action(&mut self) {
@@ -1409,6 +1562,19 @@ fn wait_cue(call: &super::actions::Call) -> String {
         }
     }
     fn transition(&mut self, state: State, event: &str) {
+        if state == State::Idle {
+            if let Some((owner, text)) = self.unanswered.as_ref() {
+                // Invariant: never rest an answered caller behind Idle. Letting
+                // this happen is what turns a glitch into dead air followed by
+                // "are you still there?".
+                self.trace.emit(
+                    "turn_unanswered_at_idle",
+                    self.turn,
+                    0,
+                    json!({"owner":owner,"chars":text.len(),"event":event}),
+                );
+            }
+        }
         self.trace.emit(
             event,
             self.attempt.as_ref().map_or(self.turn, |a| a.owner),
@@ -1480,7 +1646,11 @@ fn wait_cue(call: &super::actions::Call) -> String {
     async fn cancel(&mut self, reason: &str) {
         if matches!(
             reason,
-            "user_barge_in" | "caller_text_message" | "session_close" | "failure"
+            "user_barge_in"
+                | "user_speech_during_silent_turn"
+                | "caller_text_message"
+                | "session_close"
+                | "failure"
         ) {
             if let Some(task) = self.demo_task.take() {
                 if let Some(demo) = &self.demo {
@@ -1492,7 +1662,11 @@ fn wait_cue(call: &super::actions::Call) -> String {
         }
         if matches!(
             reason,
-            "user_barge_in" | "caller_text_message" | "session_close" | "failure"
+            "user_barge_in"
+                | "user_speech_during_silent_turn"
+                | "caller_text_message"
+                | "session_close"
+                | "failure"
         ) && self
             .operation
             .as_ref()
@@ -1549,7 +1723,11 @@ fn wait_cue(call: &super::actions::Call) -> String {
             }
             if matches!(
                 reason,
-                "user_barge_in" | "caller_text_message" | "session_close" | "failure"
+                "user_barge_in"
+                    | "user_speech_during_silent_turn"
+                    | "caller_text_message"
+                    | "session_close"
+                    | "failure"
             ) {
                 if let Some(prefix) = &a.audible_prefix {
                     self.memory.spoken_answer(a.owner, prefix);
@@ -1691,14 +1869,22 @@ fn wait_cue(call: &super::actions::Call) -> String {
                 if self.speech_ms >= self.c.min_speech_ms {
                     // A dial remains cancellable after its cue has drained
                     // and the audio state has returned to Idle.
-                    if matches!(self.state, State::Playing | State::Releasing)
-                        || self.transfer_pending.is_some()
+                    let audible = self.state == State::Playing;
+                    let cancellable = self.transfer_pending.is_some()
                         || self.demo_task.is_some()
                         || self.operation.as_ref().is_some_and(|op| {
                             op.call.name == super::directory::LOOKUP && op.result.is_none()
-                        })
-                    {
+                        });
+                    if audible || cancellable {
                         self.cancel("user_barge_in").await;
+                    } else if self.attempt.is_some() {
+                        // The caller made a sound while the agent was silent:
+                        // a "Releasing" turn has committed but emitted nothing.
+                        // Drop the queued reply so it cannot start talking over
+                        // them, but keep the utterance answerable - `unanswered`
+                        // still holds it, so the next final coalesces into one
+                        // answer instead of the turn dying here.
+                        self.cancel("user_speech_during_silent_turn").await;
                     }
                     self.idle_checks = 0;
                     self.next_idle = tokio::time::Instant::now()
@@ -1788,6 +1974,9 @@ fn wait_cue(call: &super::actions::Call) -> String {
                         self.preconfirm = None;
                         self.speech_ms = 0.0;
                         self.silence_ms = 0.0;
+                        if self.recover_unanswered("utterance_discarded").await {
+                            return;
+                        }
                         self.transition(State::Idle, "utterance_discarded_below_minimum");
                         return;
                     }
@@ -1939,7 +2128,7 @@ fn wait_cue(call: &super::actions::Call) -> String {
             // clears the turn and transitions back to Idle (no lock, safe here).
             self.trace
                 .emit("stt_final_empty_recovered", turn, 0, json!({}));
-            self.unavailable(turn).await;
+            self.unavailable(turn, "empty_final").await;
             return;
         }
         if let Some(t) = self.final_timeout.take() {
@@ -1948,6 +2137,23 @@ fn wait_cue(call: &super::actions::Call) -> String {
         if let Some(t) = self.stable.take() {
             t.abort();
         }
+        // A caller speaking in pieces produces one final per pause. Join the
+        // fragments we have not answered yet so the model sees the whole
+        // request and the caller hears one answer. This is the AJ_XdN9Mmxv4DaW
+        // failure: five fragments, both LLM requests produced zero text, then
+        // the turn was thrown away and the check-in asked "are you still there".
+        let text = match self.coalesce_final(turn, &text) {
+            Some(merged) => {
+                self.trace.emit(
+                    "turn_final_coalesced",
+                    turn,
+                    0,
+                    json!({"chars":merged.len(),"fragment_chars":text.len()}),
+                );
+                merged
+            }
+            None => text,
+        };
         self.invalidate_background();
         self.idle_checks = 0;
         self.new_messages.push(text.clone());
@@ -1979,6 +2185,13 @@ fn wait_cue(call: &super::actions::Call) -> String {
         }
         self.idle_close_at = None;
         self.memory.user(turn, &text, !self.speech_enabled);
+        // Hold the utterance until the agent actually says something back;
+        // `note_spoken` clears it. Every path that can kill a turn before any
+        // speech (a further fragment, a silent barge-in, a lost ASR final)
+        // falls back to this text instead of going quiet.
+        if self.speech_enabled {
+            self.unanswered = Some((turn, text.clone()));
+        }
         if let Some(store) = &self.store {
             store.message("user", &text, format!("turn-{turn}"), false);
         }
@@ -2115,33 +2328,72 @@ fn wait_cue(call: &super::actions::Call) -> String {
             let _ = self.playout.authorize(id).await;
             let _ = self.attempt.as_ref().unwrap().authorize.send(true);
         } else {
+            // A caller speaking in pieces produces one final per pause. Firing
+            // a fresh request per fragment is what starved the agent in
+            // AJ_XdN9Mmxv4DaW: five fragments, both LLM requests produced zero
+            // text, then the turn was thrown away. Join the fragments we have
+            // not answered yet and answer them once.
+            let next = match self.coalesce_final(self.turn, &text) {
+                Some(combined) => {
+                    self.trace.emit(
+                        "turn_final_coalesced",
+                        self.turn,
+                        0,
+                        json!({"chars":combined.len()}),
+                    );
+                    self.final_text = combined.clone();
+                    combined
+                }
+                None => text.clone(),
+            };
             self.cancel("final_transcript_changed").await;
-            self.begin(text, true, None).await;
+            self.begin(next, true, None).await;
         }
     }
-    async fn unavailable(&mut self, turn: u64) {
-        if self.turn == turn && self.state == State::AwaitingFinal {
-            self.cancel("final_unavailable").await;
-            if let Some(asr) = &self.asr {
-                asr.recover().await;
-            }
-            self.pcm.clear();
-            self.candidate = false;
-            self.preconfirm = None;
-            self.last_partial.clear();
-            self.speech_ms = 0.0;
-            self.silence_ms = 0.0;
-            if let Some(task) = self.final_timeout.take() {
-                task.abort();
-            }
-            self.transition(State::Idle, "turn_final_unavailable");
-            let _ = self
-                .output
-                .send(Output::Status(
-                    "authoritative ASR final unavailable; ready for another utterance".into(),
-                ))
-                .await;
+    async fn unavailable(&mut self, turn: u64, reason: &str) {
+        if self.turn != turn || self.state != State::AwaitingFinal {
+            return;
         }
+        let spoke_for = self.speech_ms;
+        self.trace.emit(
+            "turn_final_unavailable",
+            turn,
+            0,
+            json!({"reason":reason,"speech_ms":spoke_for}),
+        );
+        self.cancel("final_unavailable").await;
+        if let Some(asr) = &self.asr {
+            asr.recover().await;
+        }
+        self.pcm.clear();
+        self.candidate = false;
+        self.preconfirm = None;
+        self.last_partial.clear();
+        self.speech_ms = 0.0;
+        self.silence_ms = 0.0;
+        if let Some(task) = self.final_timeout.take() {
+            task.abort();
+        }
+        // Fall back before going quiet. An armed caller with an unanswered
+        // request must hear something, or the inactivity check-in becomes the
+        // reply ("are you still there?" after a discarded transfer request).
+        if self.recover_unanswered(reason).await {
+            return;
+        }
+        if reason != "empty_final" && self.speech_enabled {
+            self.trace.emit("turn_recovery_prompt", turn, 0, json!({}));
+            self.transition(State::Idle, "turn_recovery_prompt");
+            self.begin(String::new(), true, Some(RECOVERY_LINE.into()))
+                .await;
+            return;
+        }
+        self.transition(State::Idle, "turn_final_unavailable");
+        let _ = self
+            .output
+            .send(Output::Status(
+                "authoritative ASR final unavailable; ready for another utterance".into(),
+            ))
+            .await;
     }
     async fn begin(&mut self, text: String, authorized: bool, direct: Option<String>) {
         self.begin_direct(text, authorized, direct.map(DirectSpeech::Verbatim))
@@ -2746,6 +2998,9 @@ fn wait_cue(call: &super::actions::Call) -> String {
         );
     }
     async fn apply_tool(&mut self) {
+        if let Some(owner) = self.attempt.as_ref().map(|a| a.owner) {
+            self.note_answered(owner);
+        }
         let Some(a) = self.attempt.as_mut() else {
             return;
         };
@@ -3825,6 +4080,7 @@ fn wait_cue(call: &super::actions::Call) -> String {
                 }
             }
             Internal::Token { attempt, text } => {
+                let mut answered_owner = None;
                 if let Some(a) = self
                     .attempt
                     .as_mut()
@@ -3833,6 +4089,7 @@ fn wait_cue(call: &super::actions::Call) -> String {
                     if a.answer.is_empty() {
                         self.trace
                             .emit("llm_text_released", a.owner, a.id, json!({}));
+                        answered_owner = Some(a.owner);
                     }
                     a.answer.push_str(&text);
                     if a.authorized && self.speech_enabled && self.state == State::Playing {
@@ -3840,6 +4097,9 @@ fn wait_cue(call: &super::actions::Call) -> String {
                             .output
                             .try_send(Output::AnswerPartial(a.answer.clone()));
                     }
+                }
+                if let Some(owner) = answered_owner {
+                    self.note_answered(owner);
                 }
                 self.activate_phone_number_capture(attempt);
             }
@@ -3878,6 +4138,7 @@ fn wait_cue(call: &super::actions::Call) -> String {
                     self.activate_phone_number_capture(id);
                     let from = self.state;
                     self.state = State::Playing;
+                    self.note_spoken(owner);
                     self.trace.emit(
                         "audio_first_enqueued",
                         owner,
@@ -4337,7 +4598,7 @@ fn wait_cue(call: &super::actions::Call) -> String {
                         .emit("memory_compaction_discarded", self.turn, 0, json!({}));
                 }
             }
-            Internal::FinalTimeout(turn) => self.unavailable(turn).await,
+            Internal::FinalTimeout(turn) => self.unavailable(turn, "final_timeout").await,
         }
     }
 }

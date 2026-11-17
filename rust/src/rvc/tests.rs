@@ -46,6 +46,11 @@ struct Fixture {
     mail_release: tokio::sync::Notify,
     hold_mail: std::sync::atomic::AtomicBool,
     mail_unknown: std::sync::atomic::AtomicBool,
+    /// Hold the plain chat answer so a test can deliver several caller finals
+    /// while the model has produced no text yet (the fragmented-caller case).
+    hold_answer: std::sync::atomic::AtomicBool,
+    answer_started: tokio::sync::Notify,
+    answer_release: tokio::sync::Notify,
 }
 async fn llm(State(s): State<Arc<Fixture>>, Json(body): Json<Value>) -> Response {
     s.requests.lock().unwrap().push(body.clone());
@@ -196,6 +201,10 @@ async fn llm(State(s): State<Arc<Fixture>>, Json(body): Json<Value>) -> Response
     } else if text.contains("transfer") {
         json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":"unsafe","function":{"name":"transfer_money","arguments":"{}"}}]}}]})
     } else {
+        if s.hold_answer.load(std::sync::atomic::Ordering::SeqCst) {
+            s.answer_started.notify_one();
+            s.answer_release.notified().await;
+        }
         json!({"choices":[{"delta":{"content":if text.contains("second"){ "Second answer." }else{"First answer."}}}]})
     };
     let usage = if text.contains("usage frame request") {
@@ -1392,15 +1401,28 @@ async fn unavailable_authoritative_final_discards_speculation_and_rejects_late_f
     h.end().await;
     h.until("user_speech_end").await;
     h.session.input.send(Input::Unavailable(1)).await.unwrap();
+    // The caller who just spoke is asked to repeat instead of the turn being
+    // dropped in silence (turn_recovery_prompt); the late final must still be
+    // rejected rather than producing a second answer.
     tokio::time::timeout(Duration::from_secs(2), async {
-        loop {
-            if let Some(Output::Status(_)) = h.out.recv().await {
-                break;
-            }
+        while !h
+            .trace
+            .events()
+            .iter()
+            .any(|e| e.event == "turn_recovery_prompt")
+        {
+            tokio::time::sleep(Duration::from_millis(1)).await;
         }
     })
     .await
     .unwrap();
+    // Let the recovery line play out, then the late final must be rejected
+    // rather than producing a second answer.
+    tokio::time::timeout(Duration::from_millis(400), async {
+        while h.out.recv().await.is_some() {}
+    })
+    .await
+    .ok();
     h.session
         .input
         .send(Input::Final {
@@ -1410,7 +1432,11 @@ async fn unavailable_authoritative_final_discards_speculation_and_rejects_late_f
         .await
         .unwrap();
     tokio::time::sleep(Duration::from_millis(20)).await;
-    assert!(h.sink.pcm.lock().unwrap().is_empty());
+    assert!(h
+        .trace
+        .events()
+        .iter()
+        .any(|e| e.event == "stt_final_rejected"));
     h.close().await;
 }
 #[tokio::test]
@@ -1713,7 +1739,14 @@ async fn failed_final_recovers_for_a_subsequent_caller_turn() {
     h.end().await;
     h.session.input.send(Input::Unavailable(1)).await.unwrap();
     tokio::time::timeout(Duration::from_secs(2), async {
-        while !matches!(h.out.recv().await, Some(Output::Status(_))) {}
+        while !h
+            .trace
+            .events()
+            .iter()
+            .any(|e| e.event == "turn_recovery_prompt")
+        {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
     })
     .await
     .unwrap();
@@ -3280,13 +3313,14 @@ async fn pending_operation_updates_are_interruptible_and_never_trigger_idle_hang
     tokio::time::timeout(Duration::from_secs(2), h.fixture.ticket_started.notified())
         .await
         .unwrap();
+    // The agent asked its question moments ago, so the filler gate either
+    // speaks the tool update or deliberately suppresses it; both keep the turn
+    // interruptible and neither may hang the call up.
     tokio::time::timeout(Duration::from_secs(2), async {
-        while !h
-            .trace
-            .events()
-            .iter()
-            .any(|e| e.event == "engagement_spoken" && e.data["reason"] == "tool_started")
-        {
+        while !h.trace.events().iter().any(|e| {
+            (e.event == "engagement_spoken" && e.data["reason"] == "tool_started")
+                || (e.event == "filler_suppressed" && e.data["stage"] == "tool_started")
+        }) {
             tokio::time::sleep(Duration::from_millis(1)).await;
         }
     })
@@ -4729,4 +4763,183 @@ async fn owned_utterances_are_not_cut_at_the_old_sixty_second_prototype_limit() 
         .any(|event| event.event == "stt_final"
             && event.data["text"] == "A complete long caller turn."));
     h.close().await;
+}
+
+/// Regression for AJ_XdN9Mmxv4DaW: the caller spoke in five fragments, every
+/// new final cancelled the in-flight attempt before it produced any text, the
+/// turn was thrown away, and the machine asked "are you still there?".
+#[tokio::test]
+async fn fragmented_finals_produce_one_answer_instead_of_dead_air() {
+    let mut h = Harness::configured(true, |c| {
+        // Production runs with a reply grace, which is what lets a new fragment
+        // open a new turn while the previous answer is still unspoken.
+        c.agent_context.agent_id = "fragment-agent".into();
+        c.reply_grace_agent_ids = vec!["fragment-agent".into()];
+        c.reply_grace_ms = 250.0;
+    })
+    .await;
+    h.fixture
+        .hold_answer
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let fragments = [
+        "Yeah, I want to send some money to my friend",
+        "And it's",
+        "Two thousand naira",
+        "Is",
+        "Eight one one two eight one two two one six and it's Wemba",
+    ];
+    for (index, fragment) in fragments.iter().enumerate() {
+        let turn = index as u64 + 1;
+        h.voice().await;
+        h.end().await;
+        tokio::time::timeout(Duration::from_secs(3), async {
+            while !h
+                .trace
+                .events()
+                .iter()
+                .any(|e| e.event == "user_speech_end" && e.turn == turn)
+            {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        })
+        .await
+        .unwrap();
+        h.session
+            .input
+            .send(Input::Final {
+                turn,
+                text: (*fragment).into(),
+            })
+            .await
+            .unwrap();
+        // Only move on once the provider request for this fragment is in
+        // flight: that is the state the real call was in when the next
+        // fragment arrived.
+        tokio::time::timeout(Duration::from_secs(3), async {
+            while h
+                .trace
+                .events()
+                .iter()
+                .filter(|e| e.event == "llm_request_start")
+                .count()
+                < index + 1
+            {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        })
+        .await
+        .unwrap();
+    }
+    h.fixture
+        .hold_answer
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+    h.fixture.answer_release.notify_waiters();
+    let mut answers = Vec::new();
+    tokio::time::timeout(Duration::from_secs(8), async {
+        while let Some(out) = h.out.recv().await {
+            match out {
+                Output::Answer(text) => answers.push(text),
+                Output::Complete { .. } => break,
+                Output::Error(error) => panic!("{error}"),
+                _ => {}
+            }
+        }
+    })
+    .await
+    .expect("the fragmented request must be answered");
+    assert_eq!(
+        answers.len(),
+        1,
+        "exactly one spoken answer for one fragmented request: {answers:?}"
+    );
+    let events = h.trace.events();
+    assert!(
+        events.iter().any(|e| e.event == "turn_final_coalesced"),
+        "fragments are joined before they reach the model"
+    );
+    assert!(
+        !events.iter().any(|e| e.event == "turn_final_unavailable"),
+        "no fragment may end in turn_final_unavailable"
+    );
+    assert!(
+        !events.iter().any(|e| e.event == "turn_unanswered_at_idle"),
+        "the turn may never rest in Idle unanswered"
+    );
+    let requests = h.fixture.requests.lock().unwrap();
+    let last = requests
+        .iter()
+        .rev()
+        .find(|r| r.get("messages").is_some())
+        .expect("a chat request");
+    let user = last["messages"].as_array().unwrap().last().unwrap()["content"]
+        .as_str()
+        .unwrap();
+    assert!(
+        user.contains("send some money to my friend") && user.contains("Eight one one two"),
+        "the model sees the whole utterance: {user}"
+    );
+}
+
+/// A caller who spoke must never be left with silence when the ASR proof of
+/// their utterance is lost.
+#[tokio::test]
+async fn lost_final_speaks_a_recovery_line_instead_of_going_quiet() {
+    let mut h = Harness::new(false).await;
+    h.voice().await;
+    h.end().await;
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while !h
+            .trace
+            .events()
+            .iter()
+            .any(|e| e.event == "user_speech_end")
+        {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .await
+    .unwrap();
+    h.session.input.send(Input::Unavailable(1)).await.unwrap();
+    h.complete(1).await;
+    let events = h.trace.events();
+    assert!(
+        events.iter().any(|e| e.event == "turn_recovery_prompt"),
+        "the caller is asked to repeat instead of hearing dead air"
+    );
+    assert!(
+        !events.iter().any(|e| e.event == "turn_unanswered_at_idle"),
+        "the turn may never rest in Idle unanswered"
+    );
+    let spoken = {
+        let pcm = h.sink.pcm.lock().unwrap();
+        !pcm.is_empty()
+    };
+    assert!(spoken, "the recovery line was actually spoken");
+    h.close().await;
+}
+
+#[test]
+fn fillers_are_gated_on_the_agent_speaking_not_on_the_tool_starting() {
+    use super::coordinator::filler_due_at;
+    let now = tokio::time::Instant::now();
+    assert!(
+        filler_due_at(None, None, now),
+        "first cue of the call is due"
+    );
+    assert!(
+        !filler_due_at(None, Some(now - Duration::from_secs(3)), now),
+        "the agent spoke three seconds ago"
+    );
+    assert!(
+        !filler_due_at(Some(now - Duration::from_secs(3)), None, now),
+        "a filler was used three seconds ago"
+    );
+    assert!(
+        filler_due_at(
+            Some(now - Duration::from_secs(10)),
+            Some(now - Duration::from_secs(7)),
+            now
+        ),
+        "nine seconds since the last filler and six since speech"
+    );
 }
