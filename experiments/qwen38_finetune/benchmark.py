@@ -8,12 +8,15 @@ score the saved replies for accuracy, naturalness, and spoken suitability.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+
+from jsonschema import Draft202012Validator
 
 
 ROOT = Path(__file__).resolve().parent
@@ -48,14 +51,12 @@ def score(case: dict, message: dict, calls: list[dict]) -> dict:
     expected = case["expect"]
     wanted = expected.get("tool")
     choice = (len(calls) == 1 and calls[0]["name"] == wanted) if wanted else not calls
-    arguments = True
+    arguments = None
     if wanted and choice:
         args = calls[0]["arguments"]
         schema = next(t["function"]["parameters"] for t in case.get("tools", [])
                       if t["function"]["name"] == wanted)
-        arguments = isinstance(args, dict) and all(k in args and args[k] for k in schema.get("required", []))
-        if arguments and schema.get("additionalProperties") is False:
-            arguments = not (set(args) - set(schema.get("properties", {})))
+        arguments = isinstance(args, dict) and Draft202012Validator(schema).is_valid(args)
     elif wanted:
         arguments = False
     spoken = (message.get("content") or "").strip()
@@ -90,6 +91,7 @@ def request_payload(case: dict, model: str, provider: str, temperature: float) -
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cases", type=Path, default=ROOT / "cases.json")
+    parser.add_argument("--contract", type=Path, default=ROOT / "contract_snapshot.json")
     parser.add_argument("--validate", action="store_true")
     parser.add_argument("--base-url", help="Base URL ending in /v1, or a full /chat/completions URL")
     parser.add_argument("--model")
@@ -99,9 +101,14 @@ def main() -> None:
     parser.add_argument("--temperature", type=float, default=0.0)
     parser.add_argument("--timeout", type=float, default=30.0)
     parser.add_argument("--ids", help="Comma-separated case IDs for a connectivity smoke run")
+    parser.add_argument("--allow-surrogate-prompt", action="store_true",
+                        help="Permit a plumbing smoke run before prompt parity is verified")
     args = parser.parse_args()
-    fixture = json.loads(args.cases.read_text())
-    catalog = fixture["tools"]
+    fixture_bytes = args.cases.read_bytes()
+    contract_bytes = args.contract.read_bytes()
+    fixture = json.loads(fixture_bytes)
+    contract = json.loads(contract_bytes)
+    catalog = contract["tools"]
     cases = fixture["cases"]
     if args.ids:
         selected = set(args.ids.split(","))
@@ -116,10 +123,30 @@ def main() -> None:
         parser.error("case IDs must be unique")
     for case in cases:
         assert case["messages"] and case["messages"][0]["role"] == "system", case["id"]
+        assert case["messages"][-1]["role"] == "user", case["id"]
+        assert all(message["role"] == ("user" if index % 2 == 0 else "assistant")
+                   for index, message in enumerate(case["messages"][1:])), case["id"]
+        assert case.get("human_expect"), case["id"]
+        assert set(case.get("tool_names", [])) <= set(catalog), case["id"]
         assert case["expect"].get("tool") is None or case.get("tools"), case["id"]
+        assert (case["expect"].get("tool") is None or
+                case["expect"]["tool"] in case.get("tool_names", [])), case["id"]
+        assert not case["expect"].get("tool_result") or case["expect"].get("tool"), case["id"]
     if args.validate:
-        print(json.dumps({"valid_cases": len(cases), "slices": sorted({c["slice"] for c in cases})}))
+        source_path = ROOT.parents[1] / contract["source"]
+        source_matches = (source_path.is_file() and
+                          hashlib.sha256(source_path.read_bytes()).hexdigest() ==
+                          contract["source_sha256"])
+        print(json.dumps({"valid_cases": len(cases),
+                          "slices": {name: sum(c["slice"] == name for c in cases)
+                                     for name in sorted({c["slice"] for c in cases})},
+                          "prompt_status": fixture.get("prompt_status"),
+                          "tool_source_matches_snapshot": source_matches,
+                          "cases_sha256": hashlib.sha256(fixture_bytes).hexdigest(),
+                          "contract_sha256": hashlib.sha256(contract_bytes).hexdigest()}))
         return
+    if fixture.get("prompt_status") != "verified" and not args.allow_surrogate_prompt:
+        parser.error("prompt fixture is provisional; capture and verify the runtime prompt before baseline runs")
     if not (args.base_url and args.model and args.output):
         parser.error("--base-url, --model, and --output are required for a run")
     api_key = os.environ.get(args.api_key_env)
@@ -132,7 +159,10 @@ def main() -> None:
     results = []
     with args.output.open("w") as output:
         for case in cases:
-            result = {"id": case["id"], "slice": case["slice"], "model": args.model}
+            result = {"id": case["id"], "slice": case["slice"], "model": args.model,
+                      "provider": args.provider, "temperature": args.temperature,
+                      "cases_sha256": hashlib.sha256(fixture_bytes).hexdigest(),
+                      "contract_sha256": hashlib.sha256(contract_bytes).hexdigest()}
             try:
                 body, ms = post_chat(url, api_key, request_payload(case, args.model, args.provider,
                                                                      args.temperature), args.timeout)
@@ -165,9 +195,12 @@ def main() -> None:
             results.append(result)
             print(f"{case['id']}: {'error' if 'error' in result else 'done'}")
     successful = [r for r in results if "auto_score" in r]
+    tool_expected = [r for r in successful if next(c for c in cases if c["id"] == r["id"])["expect"].get("tool")]
     print(json.dumps({"completed": len(successful), "total": len(cases),
                       "tool_choice_correct": sum(r["auto_score"]["choice_correct"] for r in successful),
-                      "arguments_valid": sum(r["auto_score"]["arguments_valid"] for r in successful),
+                      "tool_expected": len(tool_expected),
+                      "arguments_valid_on_expected_tools": sum(r["auto_score"]["arguments_valid"] is True
+                                                                for r in tool_expected),
                       "output": str(args.output)}, indent=2))
 
 

@@ -3,11 +3,15 @@
 This experiment targets **non-thinking text replies and structured tool calls** for
 SalesGirl's voice runtime. It does not change live routing, prompts, or tools.
 
-## Current checkpoint (2026-11-16)
+## Current checkpoint (2026-11-17)
 
-- A 14-case, synthetic, read-only starter benchmark and Chat Completions runner
-  are available. These cases exercise the bench plumbing; they are **not** a
-  statistically useful quality benchmark or a production-ready test set.
+- A 100-case, synthetic, read-only **candidate** set for MoMo English support and
+  Chat Completions runner are available. The cases and [scoring protocol](SCORING.md)
+  prepare the benchmark; they are **not** the complete cross-agent test set.
+- [Contract snapshot](contract_snapshot.json) contains the exact three
+  `create_ticket`, `end_call`, and `transfer_to_aicc` schemas generated from
+  the current voice runtime code. The system prompt remains a surrogate until
+  the saved agent config and assembled LLM prompt are captured read-only.
 - Both configured local Huawei routes (`qwen3.8_27b` at the dashboard's Qwen URL
   and `deepseek_v4_flash` at the voice repo's Ascend URL) timed out on `GET
   /models` and on one synthetic `POST /chat/completions` case from this machine.
@@ -19,13 +23,17 @@ SalesGirl's voice runtime. It does not change live routing, prompts, or tools.
   reconstruct complete supervised tool-call examples; data collection must
   preserve the request's actual tool schemas, assistant tool calls, tool
   results, and spoken continuation in an approved, redacted capture or replay.
+- No model requests were made during the 2026-11-17 benchmark preparation.
 
 ## Phases and gates
 
 1. **Freeze the contract.** Record the exact Qwen model revision, serving
    endpoint, no-thinking request field, tool parser, runtime prompt revision,
-   active tool schemas, and the DeepSeek teacher endpoint. Confirm a parsed
-   no-thinking tool call on each endpoint. Record hardware and access route.
+   active tool schemas, and the DeepSeek teacher endpoint. Obtain the saved
+   Agent Config and assembled voice-pipeline prompt. Confirm a parsed
+   no-thinking tool call on each endpoint when endpoint access is authorized.
+   Record hardware and access route. Huawei Ascend NPU is selected for the
+   first QLoRA training attempt; its dependency and memory gates remain open.
 2. **Build the benchmark.** Expand the starter set to about 300 distinct
    scenarios, stratified by agent/business, tool, language, missing information,
    success/failure, and no-tool decisions. Reserve roughly 100 as a locked
@@ -91,10 +99,16 @@ show the required role mapping.
 
 ## Running the starter benchmark
 
-Validate locally:
+Validate locally without calling a model:
 
 ```bash
 python3 experiments/qwen38_finetune/benchmark.py --validate
+```
+
+Regenerate the schema snapshot after changing the voice runtime tool code:
+
+```bash
+python3 experiments/qwen38_finetune/prepare_contract.py
 ```
 
 Set a key in the environment without putting it on the command line. Run each
@@ -111,6 +125,9 @@ python3 experiments/qwen38_finetune/benchmark.py \
 Use `--provider deepseek-api` only for the direct DeepSeek API; use `generic`
 for an OpenAI-compatible MaaS gateway until its accepted request fields are
 verified. `--ids warm_01 --timeout 5` makes a one-case connectivity smoke run.
+Until `prompt_status` is set to `verified` after the real prompt snapshot is
+reviewed, ordinary runs stop before making a request. For a deliberate
+one-case plumbing smoke test only, add `--allow-surrogate-prompt`.
 The runner never executes tools: it supplies fixture tool results for the
 follow-up turn. Output JSONL may contain model-generated text and should be
 stored privately. Automatic checks are intentionally narrow. Review answers
@@ -129,9 +146,11 @@ network route are still to be selected.
 
 ## Immediate access/setup gap
 
-Provide a reachable inference route for the official `Qwen/Qwen3.8-27B`
+The user has deferred model endpoint access while reviewing the benchmark.
+Before baseline execution, provide a reachable inference route for the official `Qwen/Qwen3.8-27B`
 checkpoint (or identify the exact revision of the served model) and for the
 direct `deepseek-flash` endpoint, with credentials available as environment
-variables. Also choose the isolated training accelerator and approved redacted
-data location. The existing local Huawei URLs cannot currently be benchmarked
-from this machine; do not interpret those timeouts as model failures.
+variables. The training accelerator is Huawei Ascend NPU; the exact device,
+software stack, capacity, and approved redacted-data location remain to be
+checked. The existing local Huawei URLs cannot currently be benchmarked from
+this machine; do not interpret those timeouts as model failures.

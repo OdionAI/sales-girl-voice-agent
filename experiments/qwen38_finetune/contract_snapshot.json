@@ -1,0 +1,73 @@
+{
+  "source": "latency_lab/action_tools.py",
+  "source_sha256": "32a7f1b892294dfc2b6bdc0e4db348391428a5f69bc06d67960388015ce324cf",
+  "profile": "MoMo support tools documented active for Amaka/Balogun/Abdul; live Agent Config export pending",
+  "tools": {
+    "create_ticket": {
+      "type": "function",
+      "function": {
+        "name": "create_ticket",
+        "description": "Prepare a support ticket when the caller asks for human follow-up, reports an unresolved issue, or explicitly asks for a ticket. The application will request confirmation before execution.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "title": {
+              "type": "string",
+              "description": "Short ticket title."
+            },
+            "description": {
+              "type": "string",
+              "description": "Clear summary of the caller's issue and requested follow-up."
+            },
+            "priority": {
+              "type": "string",
+              "enum": [
+                "low",
+                "normal",
+                "high",
+                "urgent"
+              ]
+            }
+          },
+          "required": [
+            "title",
+            "description"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    "end_call": {
+      "type": "function",
+      "function": {
+        "name": "end_call",
+        "description": "End the live phone call only when the caller explicitly says goodbye, asks to end or hang up, says there is nothing else, or confirms the conversation is finished. The application speaks the final goodbye before sending SIP BYE. Do not use this for a mere thank-you while the conversation may continue.",
+        "parameters": {
+          "type": "object",
+          "properties": {},
+          "additionalProperties": false
+        }
+      }
+    },
+    "transfer_to_aicc": {
+      "type": "function",
+      "function": {
+        "name": "transfer_to_aicc",
+        "description": "Immediately connect this caller to a human colleague when requested or when they accept an offered escalation. Their request is sufficient: do not ask for confirmation again or merely offer a transfer. Give a factual reason; never choose a destination. Call without a spoken preamble: the application announces the connection once and reports failure honestly.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "reason_summary": {
+              "type": "string",
+              "description": "Short summary of why the caller needs a human agent."
+            }
+          },
+          "required": [
+            "reason_summary"
+          ],
+          "additionalProperties": false
+        }
+      }
+    }
+  }
+}
