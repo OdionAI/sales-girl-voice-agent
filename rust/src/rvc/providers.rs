@@ -344,12 +344,27 @@ impl Providers {
             let response = match request {
                 Ok(r) if r.status().is_success() => r,
                 Ok(r) => {
-                    if !sent && index < 3 && [502, 503, 504].contains(&r.status().as_u16()) {
+                    let status = r.status();
+                    if !sent
+                        && index < 3
+                        && matches!(status.as_u16(), 429 | 500 | 502 | 503 | 504)
+                    {
                         span.finish();
                         tokio::time::sleep(Duration::from_secs_f64([0.3, 1.0, 2.0][index])).await;
                         continue;
                     }
-                    return Err(format!("LLM HTTP {}", r.status().as_u16()));
+                    // Keep the provider's own words: a bare status code ("LLM
+                    // HTTP 402") cannot distinguish an exhausted budget from a
+                    // revoked key, and that was the whole diagnosis gap.
+                    let body = r.text().await.unwrap_or_default();
+                    let detail = body.split_whitespace().collect::<Vec<_>>().join(" ");
+                    let detail: String = detail.chars().take(240).collect();
+                    let url = c.llm_base_url.trim_end_matches('/');
+                    return Err(if detail.is_empty() {
+                        format!("LLM HTTP {} from {url}", status.as_u16())
+                    } else {
+                        format!("LLM HTTP {} from {url}: {detail}", status.as_u16())
+                    });
                 }
                 Err(_) => {
                     if !sent && index < 3 {
