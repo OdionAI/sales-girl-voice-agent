@@ -46,9 +46,10 @@ struct CallerAvatar: View {
     @Binding var animationReady: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
+    @State private var smoothedEnergy = 0.0
     private var scale: Double {
-        if image == nil, AnimatedAgentTheme(key: themeKey) != nil { return 1 }
-        return speaking && !reduceMotion ? 1 + Double(audioLevel.energy) * 0.25 : 1
+        AgentBounceMotion.scale(energy: smoothedEnergy, speaking: speaking, connected: connected,
+                                sceneActive: scenePhase == .active, reduceMotion: reduceMotion)
     }
 
     private var assetName: String {
@@ -80,7 +81,12 @@ struct CallerAvatar: View {
             }
         }
             .frame(width: 123, height: 123).clipShape(Circle()).scaleEffect(scale)
-            .animation(reduceMotion ? nil : .interpolatingSpring(mass: 0.68, stiffness: 300, damping: 22), value: scale)
+            // Retarget the spring smoothly as new audio levels arrive; do not restart
+            // a separate repeating animation for each syllable.
+            .animation(reduceMotion ? nil : .spring(response: 0.30, dampingFraction: 0.80), value: scale)
+            .onReceive(audioLevel.$energy) { value in
+                smoothedEnergy = AgentBounceMotion.smoothedEnergy(current: smoothedEnergy, target: value)
+            }
             .frame(width: 204, height: 204).accessibilityHidden(true)
     }
 }
