@@ -371,7 +371,9 @@ class BankingTools:
             "figures, never in words (e.g. \"5000 naira\", not \"five thousand naira\"), and express "
             "phone and account number readbacks must spell each digit as a word in the original order, "
             "preserving leading zeros and every digit. Separate the digit words with spaces only; "
-            "never insert periods, full stops, ellipses, or commas between digits. "
+            "never insert periods, full stops, ellipses, or commas between digits. Never use a dash, "
+            "hyphen, en dash or em dash when you speak: they are read aloud as \"minus\". Say the same "
+            "thing with plain words and commas. "
             "Preparation is not execution. Read the actual returned preview and ask confirmation. "
             "The application requires a separate confirmation before execution. "
             + voice_policy +

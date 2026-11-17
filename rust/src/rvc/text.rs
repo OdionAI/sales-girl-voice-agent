@@ -132,6 +132,65 @@ impl SpokenFilter {
         out
     }
 }
+/// Text as it has to be spoken. A dash is read aloud as "minus", so it becomes
+/// a comma between words; inside a number it is dropped and the digits are
+/// glued back together.
+pub fn speakable(raw: &str) -> String {
+    fn is_dash(c: char) -> bool {
+        matches!(
+            c,
+            '-' | '\u{2010}' | '\u{2011}' | '\u{2012}' | '\u{2013}' | '\u{2014}' | '\u{2015}'
+        )
+    }
+    let chars: Vec<char> = raw.chars().collect();
+    let mut out: Vec<char> = Vec::with_capacity(chars.len());
+    let mut i = 0;
+    while i < chars.len() {
+        if !is_dash(chars[i]) {
+            out.push(chars[i]);
+            i += 1;
+            continue;
+        }
+        // "0813-153-5013" is one number, not three.
+        let prev_digit = i > 0 && chars[i - 1].is_ascii_digit();
+        let next_digit = chars.get(i + 1).is_some_and(|c| c.is_ascii_digit());
+        if prev_digit && next_digit {
+            i += 1;
+            continue;
+        }
+        while out
+            .last()
+            .is_some_and(|c| c.is_whitespace() || is_dash(*c) || *c == ',')
+        {
+            out.pop();
+        }
+        out.extend([',', ' ']);
+        i += 1;
+        while i < chars.len() && (chars[i].is_whitespace() || is_dash(chars[i])) {
+            i += 1;
+        }
+    }
+    let text: String = out.into_iter().collect();
+    let mut cleaned = String::with_capacity(text.len());
+    let mut last_space = false;
+    for ch in text.chars() {
+        if ch == ' ' {
+            if !last_space {
+                cleaned.push(' ');
+            }
+            last_space = true;
+        } else {
+            cleaned.push(ch);
+            last_space = false;
+        }
+    }
+    cleaned
+        .trim()
+        .trim_matches(',')
+        .trim()
+        .to_string()
+}
+
 pub fn normalize(s: &str) -> String {
     s.to_lowercase()
         .chars()
@@ -538,6 +597,93 @@ mod internal_annotation_tests {
         assert_eq!(
             strip_internal_annotations("[Response interrupted; the caller may not have heard it in full.]"),
             ""
+        );
+    }
+}
+
+/// Phone and account numbers as the caller actually said them. Spoken digit
+/// words are glued back into runs so the model can copy figures instead of
+/// transcribing them itself (which is where digits get transposed).
+pub fn digit_runs(raw: &str) -> Vec<String> {
+    fn digit(word: &str) -> Option<char> {
+        match word {
+            "zero" | "oh" | "odo" | "o" => Some('0'),
+            "one" | "won" | "okan" => Some('1'),
+            "two" | "tu" | "meji" => Some('2'),
+            "three" | "tree" | "meta" => Some('3'),
+            "four" | "for" | "merin" => Some('4'),
+            "five" | "fife" | "marun" => Some('5'),
+            "six" | "sik" | "mefa" => Some('6'),
+            "seven" | "meje" => Some('7'),
+            "eight" | "ate" | "mejo" => Some('8'),
+            "nine" | "niner" | "mesan" => Some('9'),
+            _ => None,
+        }
+    }
+    let mut runs = Vec::new();
+    let mut current = String::new();
+    let mut repeat = 1usize;
+    let flush = |current: &mut String, runs: &mut Vec<String>| {
+        if (7..=15).contains(&current.len()) {
+            runs.push(std::mem::take(current));
+        }
+        current.clear();
+    };
+    for word in raw.split(|c: char| !c.is_alphanumeric()) {
+        let word = word.to_ascii_lowercase();
+        if word.is_empty() {
+            continue;
+        }
+        if word == "double" || word == "triple" {
+            repeat = if word == "double" { 2 } else { 3 };
+            continue;
+        }
+        if let Some(d) = digit(&word) {
+            for _ in 0..repeat {
+                current.push(d);
+            }
+            repeat = 1;
+        } else if word.bytes().all(|b| b.is_ascii_digit()) {
+            current.push_str(&word);
+            repeat = 1;
+        } else {
+            repeat = 1;
+            flush(&mut current, &mut runs);
+        }
+    }
+    flush(&mut current, &mut runs);
+    runs
+}
+
+#[cfg(test)]
+mod spoken_tests {
+    use super::*;
+
+    #[test]
+    fn a_dash_is_never_read_as_minus() {
+        assert_eq!(
+            speakable("Using your account ending 9185 - 2000 naira of MTN airtime to 08131535013."),
+            "Using your account ending 9185, 2000 naira of MTN airtime to 08131535013."
+        );
+        assert_eq!(speakable("Got it — the number ends 013"), "Got it, the number ends 013");
+        assert_eq!(speakable("0813-153-5013"), "08131535013");
+        assert_eq!(speakable("no dashes here"), "no dashes here");
+    }
+
+    #[test]
+    fn spoken_digits_become_one_number() {
+        assert_eq!(
+            digit_runs("the number is zero eight one three one five three five zero one three"),
+            vec!["08131535013".to_string()]
+        );
+        assert_eq!(digit_runs("double two nine"), Vec::<String>::new());
+        assert_eq!(
+            digit_runs("zero eight one one two double three five"),
+            vec!["08112335".to_string()]
+        );
+        assert_eq!(
+            digit_runs("send two thousand naira to 08131535013"),
+            vec!["08131535013".to_string()]
         );
     }
 }

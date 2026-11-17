@@ -460,15 +460,25 @@ impl Banking {
         };
         // Name the account we will use when the preview carries it, then ask only
         // for the number to be confirmed. Never digit-by-digit, never "do you confirm?".
+        // No dash: speech engines read it as "minus". Amounts also lose the
+        // trailing ".00" so "2000.00 naira" is not read as "two thousand point
+        // zero zero".
+        let amount = |raw: String| -> String {
+            let trimmed = raw.trim();
+            trimmed
+                .strip_suffix(".00")
+                .map(str::to_owned)
+                .unwrap_or_else(|| trimmed.to_owned())
+        };
         let prefix = match value("source_account").map(last4) {
-            Some(account) => format!("Using your account ending {} - ", account),
+            Some(account) => format!("Using your account ending {}, for ", account),
             None => String::new(),
         };
         let details = if preview.contains_key("recipient_account") {
             format!(
                 "{}{} naira to {}, {}, account ending {}.",
                 prefix,
-                value("amount")?,
+                amount(value("amount")?),
                 value("recipient_name")?,
                 value("bank_name")?,
                 last4(value("recipient_account")?)
@@ -485,7 +495,7 @@ impl Banking {
             format!(
                 "{}{} naira of {} airtime to {}.",
                 prefix,
-                value("amount")?,
+                amount(value("amount")?),
                 value("network")?,
                 value("phone_number")?
             )
