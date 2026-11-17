@@ -553,6 +553,9 @@ struct Coordinator {
     utterance_pcm: Vec<i16>,
     /// When the last segment of the utterance was committed.
     utterance_at: Option<tokio::time::Instant>,
+    /// Digits the caller actually said, copied verbatim from their words. The
+    /// model must copy these instead of transcribing digit words itself.
+    caller_digits: Option<String>,
     /// The turn whose segment continued an earlier one inside the window.
     continuation_turn: Option<u64>,
     /// Prompt block built from the ring-time balance read.
@@ -792,6 +795,7 @@ pub fn start_with_services(
         unanswered: None,
         last_spoken: None,
         last_filler: None,
+        caller_digits: None,
         utterance_pcm: Vec::new(),
         utterance_at: None,
         continuation_turn: None,
@@ -2391,6 +2395,20 @@ fn wait_cue(call: &super::actions::Call) -> String {
             self.new_messages.remove(0);
         }
         self.final_text = text.clone();
+        if let Some(digits) = super::text::digit_runs(&text)
+            .into_iter()
+            .max_by_key(String::len)
+        {
+            if self.caller_digits.as_deref() != Some(digits.as_str()) {
+                self.trace.emit(
+                    "caller_digits_detected",
+                    turn,
+                    0,
+                    json!({"digits":digits,"source":"caller_words"}),
+                );
+            }
+            self.caller_digits = Some(digits);
+        }
         self.consume_phone_number_capture_turn(turn, &text);
         self.base_asr_candidate = base_candidate
             .filter(|base| {
@@ -2938,6 +2956,11 @@ fn wait_cue(call: &super::actions::Call) -> String {
         if let Some(accounts) = &self.accounts {
             system.push('\n');
             system.push_str(accounts);
+        }
+        if let Some(digits) = &self.caller_digits {
+            system.push_str(&format!(
+                "\nCaller digits from their own words, already transcribed: {digits}. When a tool needs a phone or account number, copy these digits exactly as written. Never convert spoken digit words yourself."
+            ));
         }
         if super::transfer::enabled(&self.c.agent_context) {
             system.push_str(super::transfer::RULES);
@@ -5045,6 +5068,10 @@ async fn generate(g: Generation) -> Result<(), String> {
                 } else {
                     phrase
                 };
+            let spoken = super::text::speakable(&spoken);
+            if spoken.is_empty() {
+                continue;
+            }
             tts_p.tts(&spoken, turn, id, &audio).await?;
         }
         Ok::<_, String>(())
