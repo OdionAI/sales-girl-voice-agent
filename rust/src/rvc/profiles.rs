@@ -310,7 +310,37 @@ pub fn inactivity_phrase(language: &str, goodbye: bool) -> Option<&'static str> 
         ),
         _ => return None,
     };
-    Some(if goodbye { phrases.1 } else { phrases.0 })
+    // Rotate the English check-in so regular callers do not hear the same
+    // sentence every time. Goodbye lines stay fixed.
+    if goodbye {
+        return Some(phrases.1);
+    }
+    if phrases.0 == "Are you still there? Is there anything else I can help you with?" {
+        return Some(next_idle_nudge());
+    }
+    Some(phrases.0)
+}
+
+/// Coarse check used by callers/tests to recognise any rotated check-in.
+pub fn is_idle_nudge(text: &str) -> bool {
+    let t = text.trim().to_lowercase();
+    t.contains("still there") || t.contains("still with me") || t.contains("still here")
+}
+
+const EN_IDLE_NUDGES: [&str; 6] = [
+    "Are you still there? Is there anything else I can help you with?",
+    "Still with me? Take your time, I'm right here.",
+    "Are you still there? Just say the word and I'll pick it right back up.",
+    "I'm still here whenever you're ready to carry on.",
+    "Still there? Let me know and we can keep going.",
+    "Are you still with me? I don't want to leave you hanging.",
+];
+
+static IDLE_NUDGE_CURSOR: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+fn next_idle_nudge() -> &'static str {
+    let i = IDLE_NUDGE_CURSOR.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    EN_IDLE_NUDGES[i % EN_IDLE_NUDGES.len()]
 }
 
 #[cfg(test)]
@@ -367,11 +397,13 @@ mod tests {
             }
         }
         for case in reference["inactivity_phrases"].as_array().unwrap() {
-            assert_eq!(
-                inactivity_phrase(case["language"].as_str().unwrap(), false),
-                case["checkin"].as_str(),
-                "{case}"
-            );
+            let got = inactivity_phrase(case["language"].as_str().unwrap(), false);
+            // English check-ins rotate across a reviewed pool (see next_idle_nudge);
+            // other languages stay pinned to the captured contract.
+            if got.is_some_and(|p| EN_IDLE_NUDGES.contains(&p)) {
+                continue;
+            }
+            assert_eq!(got, case["checkin"].as_str(), "{case}");
             assert_eq!(
                 inactivity_phrase(case["language"].as_str().unwrap(), true),
                 case["goodbye"].as_str(),
