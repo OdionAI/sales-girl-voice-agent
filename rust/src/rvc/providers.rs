@@ -824,7 +824,16 @@ impl Providers {
             .ok()?;
         self.usage.stt_submitted(pcm.len() * 2);
         let payload: Value = response.json().await.ok()?;
-        let text = super::text::clean_transcript_for_language(payload["text"].as_str()?, "English");
+        let raw = payload["text"].as_str()?;
+        let text = super::text::clean_transcript_for_language(raw, "English");
+        if text.trim().is_empty() && !raw.trim().is_empty() {
+            self.trace.emit(
+                "stt_final_language_suppressed",
+                0,
+                0,
+                json!({"language":"English","chars":raw.len(),"source":"candidate"}),
+            );
+        }
         if super::languages::code(&self.config.tts_language) == "ig" {
             return igbo_qwen_phone_candidates(&text);
         }
@@ -895,10 +904,18 @@ impl Providers {
             .map_err(|_| "ASR final HTTP error")?;
         self.usage.stt_submitted(pcm.len() * 2);
         let payload: Value = response.json().await.map_err(|_| "ASR final JSON error")?;
-        let text = super::text::clean_transcript_for_language(
-            payload["text"].as_str().unwrap_or(""),
-            &self.config.tts_language,
-        );
+        let raw = payload["text"].as_str().unwrap_or("");
+        let text = super::text::clean_transcript_for_language(raw, &self.config.tts_language);
+        if text.trim().is_empty() && !raw.trim().is_empty() {
+            // The recogniser answered in a language nobody asked for. Drop it:
+            // the turn recovers instead of the caller being shown a translation.
+            self.trace.emit(
+                "stt_final_language_suppressed",
+                0,
+                0,
+                json!({"language":self.config.tts_language,"chars":raw.len()}),
+            );
+        }
         if super::text::is_asr_context_echo(&text, &c.stt_context) {
             return Err("ASR final copied private context".into());
         }
