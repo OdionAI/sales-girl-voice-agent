@@ -31,6 +31,10 @@ const AUTH_FIELDS: &[&str] = &[
     "skip_auth",
     "voice_auth_authorized",
 ];
+/// The one tool that must never inherit the caller's saved account: the
+/// connector returns every owned account only when no account is named, and
+/// that list is what lets the agent pick an account instead of asking.
+pub(crate) const BALANCE_TOOL: &str = "wema_get_balance";
 const AUDIO_SAMPLES: usize = 8 * 16000;
 const MIN_SAMPLES: usize = 19200;
 pub(crate) type EventSink = Arc<dyn Fn(Value) + Send + Sync>;
@@ -501,7 +505,13 @@ impl Banking {
             },
         ))
     }
+    /// Parity/reference accessor used by the banking tests; the live path goes
+    /// through `execute_inner`, which decides whether session defaults apply.
+    #[cfg(test)]
     pub(crate) fn arguments(&self, call: &Call) -> Result<Value, String> {
+        self.arguments_with(call, true)
+    }
+    fn arguments_with(&self, call: &Call, inject_profile: bool) -> Result<Value, String> {
         let record = self
             .inner
             .records
@@ -523,23 +533,28 @@ impl Banking {
             return Err("Choose self or other for the recipient.".into());
         }
         let profile = &self.inner.identity.claims()["wema_context"];
-        for (key, profile_key) in [
-            ("source_account", "account_number"),
-            ("phone_number", "phone_number"),
-        ] {
-            if record.raw["request_schema"]["properties"]
-                .get(key)
-                .is_some()
-                && args.get(key).is_none_or(|v| v.is_null() || v == "")
-            {
-                if key == "phone_number" && recipient == "other" {
-                    return Err("Ask for the other person's phone number.".into());
-                }
-                if let Some(value) = profile
-                    .get(profile_key)
-                    .filter(|v| !v.is_null() && *v != "")
+        // The ring-time prefetch passes `inject_profile = false`: filling in the
+        // caller's saved account is what turned every balance read into a
+        // single-account read and made the agent ask which account to use.
+        if inject_profile {
+            for (key, profile_key) in [
+                ("source_account", "account_number"),
+                ("phone_number", "phone_number"),
+            ] {
+                if record.raw["request_schema"]["properties"]
+                    .get(key)
+                    .is_some()
+                    && args.get(key).is_none_or(|v| v.is_null() || v == "")
                 {
-                    args.insert(key.into(), value.clone());
+                    if key == "phone_number" && recipient == "other" {
+                        return Err("Ask for the other person's phone number.".into());
+                    }
+                    if let Some(value) = profile
+                        .get(profile_key)
+                        .filter(|v| !v.is_null() && *v != "")
+                    {
+                        args.insert(key.into(), value.clone());
+                    }
                 }
             }
         }
@@ -570,10 +585,27 @@ impl Banking {
         let confirmed = call.arguments["operation_id"].as_str().map(str::to_owned);
         self.execute(call, confirmed).await
     }
+    /// Ring-time read of every owned account. No session defaults are injected,
+    /// so the connector answers with the whole list and the agent can pick an
+    /// account (and name it) instead of asking the caller which one to use.
+    pub(crate) async fn all_accounts(&self) -> ActionResult {
+        let call = Call {
+            id: "accounts-prefetch".into(),
+            name: BALANCE_TOOL.into(),
+            arguments: json!({}),
+            context: None,
+        };
+        self.journey(
+            &call,
+            "tool_started",
+            json!({"stage":"tool_dispatch","prefetch":true}),
+        );
+        self.execute_inner(&call, None, false).await
+    }
     async fn execute(&self, call: Call, confirmed: Option<String>) -> ActionResult {
         self.journey(&call, "tool_started", json!({"stage":"tool_dispatch"}));
         activity(&self.inner, &call, "started", None);
-        let result = self.execute_inner(&call, confirmed.as_deref()).await;
+        let result = self.execute_inner(&call, confirmed.as_deref(), true).await;
         self.journey(&call, "tool_finished", json!({
             "stage":"tool_result",
             "status":result.status,
@@ -797,7 +829,12 @@ impl Banking {
         );
         result
     }
-    async fn execute_inner(&self, call: &Call, confirmed: Option<&str>) -> ActionResult {
+    async fn execute_inner(
+        &self,
+        call: &Call,
+        confirmed: Option<&str>,
+        inject_profile: bool,
+    ) -> ActionResult {
         let Some(record) = self
             .inner
             .records
@@ -829,7 +866,7 @@ impl Banking {
         } else {
             None
         };
-        let args = match self.arguments(call) {
+        let args = match self.arguments_with(call, inject_profile) {
             Ok(args) => args,
             Err(message) => {
                 self.journey(call, "banking_preflight_failed", json!({"stage":"request_validation","reason_code":"arguments_invalid","message":safe_text(&message),"argument_keys":call.arguments.as_object().map(|v|v.keys().cloned().collect::<Vec<_>>()).unwrap_or_default()}));

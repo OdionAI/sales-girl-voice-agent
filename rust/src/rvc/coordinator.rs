@@ -30,6 +30,58 @@ const SPEECH_MIN_GAP: Duration = Duration::from_secs(6);
 /// Said when a caller turn produced no usable transcript at all. Silence is
 /// never an acceptable answer to a caller who just spoke.
 const RECOVERY_LINE: &str = "Sorry, I missed that. Could you say it again?";
+/// Ring-time balance prefetch deadline. The worker asks the connector for every
+/// account once, before the caller's first turn, so the agent can name the
+/// account it will use instead of waiting on a tool round-trip. Bounded and
+/// fail-soft: a slow or unauthorised read must never delay the greeting.
+/// `RVC_ACCOUNTS_PREFETCH_MS=0` disables it.
+const ACCOUNTS_PREFETCH_MS: f64 = 1500.0;
+
+fn accounts_prefetch_ms() -> f64 {
+    std::env::var("RVC_ACCOUNTS_PREFETCH_MS")
+        .ok()
+        .and_then(|value| value.trim().parse::<f64>().ok())
+        .filter(|value| value.is_finite() && *value >= 0.0)
+        .unwrap_or(ACCOUNTS_PREFETCH_MS)
+}
+
+/// Render the prefetched account list into a prompt block. Returns None when
+/// the connector did not hand back a usable list, so the caller falls back to
+/// the ordinary tool path.
+fn accounts_block(data: &Value) -> Option<String> {
+    let rows = data.get("accounts").and_then(Value::as_array)?;
+    if rows.is_empty() {
+        return None;
+    }
+    let mut block = String::from(
+        "Accounts on this call (read from the bank when the call connected; treat as current for this call and do not call wema_get_balance again unless the caller asks for a fresh balance):\n",
+    );
+    for row in rows {
+        let number = row["account_number"].as_str().unwrap_or("");
+        let last4 = row["last4"]
+            .as_str()
+            .map(str::to_owned)
+            .unwrap_or_else(|| number.chars().rev().take(4).collect::<Vec<_>>().into_iter().rev().collect());
+        let balance = match &row["available_balance"] {
+            Value::String(text) => text.clone(),
+            Value::Number(number) => number.to_string(),
+            _ => "unknown".into(),
+        };
+        let currency = row["currency"].as_str().unwrap_or("NGN");
+        let preferred = if row["preferred"].as_bool() == Some(true) {
+            " - preferred, highest balance"
+        } else {
+            ""
+        };
+        block.push_str(&format!(
+            "- account ending {last4}: available balance {balance} {currency}{preferred}\n"
+        ));
+    }
+    block.push_str(
+        "Pick the account with the highest available balance that covers the amount, tell the caller which account you used, and never ask the caller which account to use.",
+    );
+    Some(block)
+}
 
 /// Percent of 10 ms frames whose RMS clears the loudness floor. Used by the
 /// optional min-utterance safety net before committing audio to ASR.
@@ -228,6 +280,7 @@ enum Internal {
         operation: Option<u64>,
     },
     FinalTimeout(u64),
+    AccountsPrefetched(Result<super::actions::ActionResult, String>),
     Compacted {
         revision: u64,
         snapshot: Snapshot,
@@ -475,6 +528,9 @@ struct Coordinator {
     last_spoken: Option<tokio::time::Instant>,
     /// When a spoken filler (wait cue) was last used.
     last_filler: Option<tokio::time::Instant>,
+    /// Prompt block built from the ring-time balance read.
+    accounts: Option<String>,
+    accounts_task: Option<JoinHandle<()>>,
 }
 /// The actor is the sole owner of turn/final/attempt authority. Provider streaming
 /// and paced playout run outside it, so held-audio release cannot stop input.
@@ -708,11 +764,14 @@ pub fn start_with_services(
         unanswered: None,
         last_spoken: None,
         last_filler: None,
+        accounts: None,
+        accounts_task: None,
     };
     let task = tokio::spawn(async move {
         if !with_asr {
             let _ = s.output.send(Output::Ready).await;
         }
+        s.prefetch_accounts();
         let mut maintenance = tokio::time::interval(Duration::from_millis(100));
         maintenance.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
@@ -1050,6 +1109,40 @@ fn wait_cue(call: &super::actions::Call) -> String {
     }
 }
 
+    /// Warm the account list before the caller's first turn. Runs once per
+    /// call, bounded by `accounts_prefetch_ms`, and never surfaces a failure to
+    /// the caller - a miss just leaves the ordinary `wema_get_balance` path.
+    fn prefetch_accounts(&mut self) {
+        let deadline = accounts_prefetch_ms();
+        let enabled = self
+            .banking
+            .as_ref()
+            .is_some_and(|bank| bank.available() && bank.enabled(super::banking::BALANCE_TOOL));
+        if deadline <= 0.0 || !enabled {
+            self.trace.emit(
+                "accounts_prefetch_skipped",
+                0,
+                0,
+                json!({"deadline_ms":deadline,"banking":enabled}),
+            );
+            return;
+        }
+        let Some(bank) = self.banking.clone() else {
+            return;
+        };
+        let events = self.events.clone();
+        self.trace
+            .emit("accounts_prefetch_start", 0, 0, json!({"deadline_ms":deadline}));
+        self.accounts_task = Some(tokio::spawn(async move {
+            let result = tokio::time::timeout(
+                Duration::from_millis(deadline as u64),
+                bank.all_accounts(),
+            )
+            .await
+            .map_err(|_| "timeout".to_string());
+            let _ = events.send(Internal::AccountsPrefetched(result)).await;
+        }));
+    }
     /// True when a spoken filler is due (see `filler_due_at`).
     fn filler_due(&self) -> bool {
         filler_due_at(
@@ -2704,6 +2797,10 @@ fn wait_cue(call: &super::actions::Call) -> String {
         }
         if let Some(bank) = &self.banking {
             system.push_str(&bank.prompt());
+        }
+        if let Some(accounts) = &self.accounts {
+            system.push('\n');
+            system.push_str(accounts);
         }
         if super::transfer::enabled(&self.c.agent_context) {
             system.push_str(super::transfer::RULES);
@@ -4599,6 +4696,42 @@ fn wait_cue(call: &super::actions::Call) -> String {
                 }
             }
             Internal::FinalTimeout(turn) => self.unavailable(turn, "final_timeout").await,
+            Internal::AccountsPrefetched(result) => {
+                self.accounts_task = None;
+                match result {
+                    Ok(result) if matches!(result.status.as_str(), "ok" | "success") => {
+                        match accounts_block(&result.data) {
+                            Some(block) => {
+                                self.trace.emit(
+                                    "accounts_prefetch_ready",
+                                    self.turn,
+                                    0,
+                                    json!({"accounts":result.data.get("accounts").and_then(Value::as_array).map_or(0, Vec::len)}),
+                                );
+                                self.accounts = Some(block);
+                            }
+                            None => self.trace.emit(
+                                "accounts_prefetch_failed",
+                                self.turn,
+                                0,
+                                json!({"reason":"no_account_list","status":result.status}),
+                            ),
+                        }
+                    }
+                    Ok(result) => self.trace.emit(
+                        "accounts_prefetch_failed",
+                        self.turn,
+                        0,
+                        json!({"reason":result.message,"status":result.status}),
+                    ),
+                    Err(error) => self.trace.emit(
+                        "accounts_prefetch_failed",
+                        self.turn,
+                        0,
+                        json!({"reason":error}),
+                    ),
+                }
+            }
         }
     }
 }

@@ -46,6 +46,9 @@ struct Fixture {
     mail_release: tokio::sync::Notify,
     hold_mail: std::sync::atomic::AtomicBool,
     mail_unknown: std::sync::atomic::AtomicBool,
+    /// Ring-time balance prefetch calls: worker warm-up, not a business call,
+    /// so they are counted here and kept out of `requests` / `bank_started`.
+    prefetch_calls: std::sync::atomic::AtomicUsize,
     /// Hold the plain chat answer so a test can deliver several caller finals
     /// while the model has produced no text yet (the fragmented-caller case).
     hold_answer: std::sync::atomic::AtomicBool,
@@ -3474,6 +3477,21 @@ async fn bank_service(
     assert_eq!(headers["x-business-id"], "business-a");
     assert_eq!(headers["x-wema-customer-id"], "customer-a");
     let tool = headers["x-tool-name"].to_str().unwrap();
+    // The worker's ring-time prefetch asks for every account with no arguments.
+    // It is warm-up, so it must not appear as a business call in `requests`.
+    if tool == "wema_get_balance" && body.as_object().is_some_and(|o| o.is_empty()) {
+        fixture
+            .prefetch_calls
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        return Json(json!({
+            "status":"ok",
+            "message":"Balances retrieved from Wema.",
+            "data":{"accounts":[
+                {"account_number":"0000000001","last4":"0001","currency":"NGN","available_balance":"52500.00","preferred":true},
+                {"account_number":"0000000002","last4":"0002","currency":"NGN","available_balance":"1200.00"}
+            ]}
+        }));
+    }
     fixture
         .requests
         .lock()
@@ -4942,4 +4960,77 @@ fn fillers_are_gated_on_the_agent_speaking_not_on_the_tool_starting() {
         ),
         "nine seconds since the last filler and six since speech"
     );
+}
+
+/// The worker reads every account once, before the caller's first turn, so the
+/// agent can name the account it will use instead of asking "which account?".
+#[tokio::test]
+async fn ring_time_balance_prefetch_feeds_the_system_prompt() {
+    let h = bank_harness().await;
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while h
+            .fixture
+            .prefetch_calls
+            .load(std::sync::atomic::Ordering::SeqCst)
+            == 0
+        {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|e| panic!("prefetch: {e}; {:?}", h.trace.events()));
+    h.until("accounts_prefetch_ready").await;
+    h.session
+        .input
+        .send(Input::Text("hello there".into()))
+        .await
+        .unwrap();
+    // `llm_request_start` fires before the request lands, so wait for the
+    // fixture to have the body.
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while !h
+            .fixture
+            .requests
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|r| r.get("messages").is_some())
+        {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .await
+    .expect("the chat request reached the model");
+    {
+        let requests = h.fixture.requests.lock().unwrap();
+        let chat = requests
+            .iter()
+            .rev()
+            .find(|r| r.get("messages").is_some())
+            .expect("a chat request");
+        let system = chat["messages"][0]["content"].as_str().unwrap_or("");
+        assert!(
+            system.contains("Accounts on this call"),
+            "prefetched accounts reach the model: {system}"
+        );
+        assert!(system.contains("account ending 0001"), "{system}");
+        assert!(system.contains("available balance 52500.00 NGN"), "{system}");
+        assert!(
+            system.contains("never ask the caller which account to use"),
+            "{system}"
+        );
+        assert!(
+            system.contains("do not call wema_get_balance again"),
+            "{system}"
+        );
+    }
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(
+        h.fixture
+            .prefetch_calls
+            .load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "the prefetch runs once per call"
+    );
+    h.close().await;
 }
