@@ -803,12 +803,20 @@ impl Providers {
         let response = self
             .client
             .post(url)
-            .multipart(
-                reqwest::multipart::Form::new()
+            .multipart({
+                let mut form = reqwest::multipart::Form::new()
                     .part("file", file)
                     .text("model", "Qwen3-ASR")
-                    .text("language", "en"),
-            )
+                    .text("language", "en");
+                // Qwen3-ASR biases transcription from free-form context supplied as a
+                // system prompt, e.g. "Vocabulary: Wema, Opay, airtime." The
+                // OpenAI-shaped transcription endpoint exposes the same field as
+                // `prompt`, so the agent's stt_context override rides along here.
+                if !self.config.stt_context.trim().is_empty() {
+                    form = form.text("prompt", self.config.stt_context.trim().to_string());
+                }
+                form
+            })
             .send()
             .await
             .ok()?
