@@ -1,25 +1,37 @@
 #if os(iOS)
 import AttentiveVoice
 import SwiftUI
+import UIKit
 
-// Matches the public web call-surface and wema-caller-console, not Voice Lab.
+// The light palette matches the public caller. Semantic colors adapt to the presented view's style.
 enum CallerTheme {
-    static let stage = Color(hex: 0xFBFAF8)
-    static let surface = Color(hex: 0xFDFCFA)
-    static let ink = Color(hex: 0x241936)
-    static let muted = Color(hex: 0x7D7592)
-    static let border = Color(hex: 0xE4E0DB)
-    static let divider = Color(hex: 0xECE8E2)
-    static let field = Color(hex: 0xF4F1EE)
-    static let control = Color(hex: 0xECEAE9)
-    static let accent = Color(hex: 0x842723)
-    static let endFill = Color(hex: 0xFFB4B6)
-    static let endInk = Color(hex: 0x8F181F)
-    static let red = Color(hex: 0xB33A32)
-    static let green = Color(hex: 0x278564)
+    static let stage = Color(light: 0xFBFAF8, dark: 0x19161F)
+    static let surface = Color(light: 0xFDFCFA, dark: 0x231E2B)
+    static let raisedSurface = Color(light: 0xFFFFFF, dark: 0x2B2336)
+    static let ink = Color(light: 0x241936, dark: 0xF5F0FB)
+    static let onInk = Color(light: 0xFFFFFF, dark: 0x19161F)
+    static let shadow = Color(light: 0x241936, dark: 0x000000)
+    static let muted = Color(light: 0x7D7592, dark: 0xBFB4CD)
+    static let border = Color(light: 0xE4E0DB, dark: 0x51465F)
+    static let divider = Color(light: 0xECE8E2, dark: 0x40354B)
+    static let field = Color(light: 0xF4F1EE, dark: 0x2E2637)
+    static let control = Color(light: 0xECEAE9, dark: 0x342A3F)
+    static let endFill = Color(light: 0xFFB4B6, dark: 0x512127)
+    static let endInk = Color(light: 0x8F181F, dark: 0xFFB9BE)
+    static let red = Color(light: 0xB33A32, dark: 0xF8867E)
+    static let green = Color(light: 0x278564, dark: 0x70DBAF)
 }
 
 private extension Color {
+    init(light: UInt32, dark: UInt32) {
+        self.init(uiColor: UIColor { traits in
+            let hex = traits.userInterfaceStyle == .dark ? dark : light
+            return UIColor(red: CGFloat((hex >> 16) & 255) / 255,
+                           green: CGFloat((hex >> 8) & 255) / 255,
+                           blue: CGFloat(hex & 255) / 255, alpha: 1)
+        })
+    }
+
     init(hex: UInt32) {
         self.init(.sRGB, red: Double((hex >> 16) & 255) / 255,
                   green: Double((hex >> 8) & 255) / 255, blue: Double(hex & 255) / 255)

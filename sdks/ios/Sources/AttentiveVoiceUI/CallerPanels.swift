@@ -115,7 +115,7 @@ struct CallerProfilePanel: View {
                 .font(.system(size: 14)).keyboardType(keyboard)
                 .textInputAutocapitalization(.never).autocorrectionDisabled()
                 .padding(.horizontal, 12).frame(minHeight: 44)
-                .background(controls.active ? CallerTheme.field : .white, in: RoundedRectangle(cornerRadius: 8))
+                .background(controls.active ? CallerTheme.field : CallerTheme.raisedSurface, in: RoundedRectangle(cornerRadius: 8))
                 .overlay(RoundedRectangle(cornerRadius: 8).stroke(CallerTheme.border, lineWidth: 1))
         }.frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -256,7 +256,7 @@ struct CallerTranscriptPanel: View {
                     Task { if await controls.send(text) { draft = ""; composing = false } }
                 } label: {
                     Image(systemName: "arrow.up").font(.system(size: 16, weight: .medium))
-                        .foregroundStyle(.white).frame(width: 44, height: 44)
+                        .foregroundStyle(CallerTheme.onInk).frame(width: 44, height: 44)
                         .background(CallerTheme.ink.opacity(readyToSend && !draft.isEmpty ? 1 : 0.4), in: Circle())
                 }
                 .buttonStyle(.plain)
