@@ -27,8 +27,12 @@ controls. See [accepted ranges](../../LISTENING_CONTROLS.md). Speech level is
 input loudness, not voice pitch.
 
 The Start call button belongs to this app. It presents `AttentiveAgentView` in a
-full-screen cover, which starts once and dismisses after End call. Pass
-`startsAutomatically: false` only when you want the SDK's built-in start button.
+full-screen cover. The view starts the call once and dismisses the cover when
+the user taps Close or End Call. Pass `startsAutomatically: false` for a
+reusable Start Call button with the same identity supplied in code.
+
+For an editable and reusable email or phone start page, use
+`AttentiveCallerView` with `showsContactForm: true`.
 The generated demo enables the Audio background mode for an active call; your
 app should enable and test that mode only if it needs background calling.
 

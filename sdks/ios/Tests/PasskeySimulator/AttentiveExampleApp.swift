@@ -33,7 +33,8 @@ private struct SimulatorBankScreen: View {
                 .font(.subheadline.monospaced()).accessibilityIdentifier("actionStatus")
             AttentiveCallerView(call: call, request: $model.request,
                 configuration: .init(title: "Simulated bank", agentName: "Test assistant",
-                                     showsToolWaitSelection: false), microphoneOnStart: false)
+                                     showsToolWaitSelection: false), microphoneOnStart: false,
+                showsContactForm: true)
             HStack {
                 Button("Approve path") { model.begin("approve") }.accessibilityIdentifier("approvePath")
                 Button("Reject path") { model.begin("reject") }.accessibilityIdentifier("rejectPath")
