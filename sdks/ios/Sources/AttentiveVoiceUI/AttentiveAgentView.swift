@@ -18,33 +18,33 @@ public struct AttentiveAgentView: View {
     private let microphoneOnStart: Bool
 
     /// For protected calls, obtain a fresh caller token from your signed-in app backend.
-    public init(apiKey: String, agentID: String, audioInput: AttentiveAudioInputConfiguration = .standard,
+    public init(apiKey: String, agentID: String, phoneNumber: String? = nil, audioInput: AttentiveAudioInputConfiguration = .standard,
                 passkeys: AttentivePasskeyConfiguration = .disabled,
                 voiceLanguage: VoiceAccent? = nil, voiceGender: VoiceGender? = nil,
                 callerToken: (() async throws -> String)? = nil) {
-        self.init(apiKey: apiKey, agentID: agentID, customerID: nil, audioInput: audioInput, passkeys: passkeys,
+        self.init(apiKey: apiKey, agentID: agentID, customerID: nil, phoneNumber: phoneNumber, audioInput: audioInput, passkeys: passkeys,
                   voiceLanguage: voiceLanguage, voiceGender: voiceGender, callerToken: callerToken)
     }
 
     /// Pass the signed-in customer's ID. The backend verifies it against callerToken before using it for tools.
-    public init(apiKey: String, agentID: String, customerID: String?,
+    public init(apiKey: String, agentID: String, customerID: String?, phoneNumber: String? = nil,
                 audioInput: AttentiveAudioInputConfiguration = .standard,
                 passkeys: AttentivePasskeyConfiguration = .disabled,
                 voiceLanguage: VoiceAccent? = nil, voiceGender: VoiceGender? = nil,
                 callerToken: (() async throws -> String)? = nil) {
-        self.init(apiKey: apiKey, agentID: agentID, customerID: customerID,
+        self.init(apiKey: apiKey, agentID: agentID, customerID: customerID, phoneNumber: phoneNumber,
                   startsAutomatically: true, audioInput: audioInput, passkeys: passkeys,
                   voiceLanguage: voiceLanguage, voiceGender: voiceGender, callerToken: callerToken)
     }
 
     /// Present from a host-owned button. Set false to retain the built-in Start call button.
-    public init(apiKey: String, agentID: String, customerID: String? = nil,
+    public init(apiKey: String, agentID: String, customerID: String? = nil, phoneNumber: String? = nil,
                 startsAutomatically: Bool, audioInput: AttentiveAudioInputConfiguration = .standard,
                 passkeys: AttentivePasskeyConfiguration = .disabled,
                 voiceLanguage: VoiceAccent? = nil, voiceGender: VoiceGender? = nil,
                 callerToken: (() async throws -> String)? = nil) {
         _call = StateObject(wrappedValue: AttentiveCall(apiKey: apiKey, agentID: agentID,
-                                                      customerID: customerID, audioInput: audioInput, passkeys: passkeys,
+                                                      customerID: customerID, phoneNumber: phoneNumber, audioInput: audioInput, passkeys: passkeys,
                                                       voiceLanguage: voiceLanguage, voiceGender: voiceGender))
         self.callerToken = callerToken
         self.startsAutomatically = startsAutomatically
