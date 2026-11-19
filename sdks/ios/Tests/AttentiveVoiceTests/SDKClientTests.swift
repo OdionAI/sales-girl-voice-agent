@@ -30,6 +30,31 @@ final class SDKClientTests: XCTestCase {
         }
     }
 
+    func testCallerPhoneIsOnlySentOnCalls() async throws {
+        for (path, number) in [("phone-local", "08161540638"), ("phone-international", "+2348161540638")] {
+            let client = makeClient(path, customerID: "CUSTOMER_1", phoneNumber: number)
+            _ = try await client.configuration()
+            _ = try await client.credentials(callerToken: "signed-caller-token")
+            XCTAssertFalse(client.description.contains(number))
+            XCTAssertFalse(client.debugDescription.contains(number))
+        }
+    }
+
+    func testMalformedPhoneNumbersAreRejectedBeforeNetworking() async {
+        for value in ["", "0816154063", "081615406380", "+012345678", "+1234567",
+                      "+1234567890123456", "08161540638\n", " 08161540638",
+                      "081-6154-0638", "٠٨١٦١٥٤٠٦٣٨"] {
+            do { _ = try await makeClient(phoneNumber: value).credentials(callerToken: nil); XCTFail("Invalid number accepted") }
+            catch { XCTAssertEqual(error as? CallError, .invalidRequest) }
+        }
+    }
+
+    func testValidPhoneBoundariesAndUnspecifiedPhone() throws {
+        for value: String? in [nil, "01234567890", "+12345678", "+123456789012345"] {
+            XCTAssertNoThrow(try makeClient(phoneNumber: value).validate())
+        }
+    }
+
     func testServerSecretAndMalformedKeysRejected() async {
         for invalid in ["att_sk_" + String(repeating: "a", count: 43), "", key + "\r\nX-Header: value"] {
             do { _ = try await SDKClient(apiKey: invalid, agentID: "agt_example").configuration(); XCTFail() }
@@ -74,10 +99,10 @@ final class SDKClientTests: XCTestCase {
         XCTAssertEqual(smooth.themeKey, "animated:#A1B2C3:smooth")
     }
 
-    private func makeClient(_ path: String = "success", customerID: String? = nil) -> SDKClient {
+    private func makeClient(_ path: String = "success", customerID: String? = nil, phoneNumber: String? = nil) -> SDKClient {
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [SDKProtocol.self]
-        return SDKClient(apiKey: key, agentID: "agt_example", customerID: customerID, session: URLSession(configuration: config),
+        return SDKClient(apiKey: key, agentID: "agt_example", customerID: customerID, phoneNumber: phoneNumber, session: URLSession(configuration: config),
                          baseURL: URL(string: "https://attentive.odion.ai/\(path)/")!)
     }
 }
@@ -104,12 +129,21 @@ private final class SDKProtocol: URLProtocol {
         }
         let body = try! JSONSerialization.jsonObject(with: data) as! [String: String]
         XCTAssertEqual(body["agentId"], "agt_example")
-        XCTAssertTrue(Set(body.keys).isSubset(of: ["agentId", "callerToken", "customerId"]))
+        XCTAssertTrue(Set(body.keys).isSubset(of: ["agentId", "callerToken", "customerId", "phoneNumber"]))
         let path = request.url!.pathComponents[1]
+        if path.hasPrefix("phone-") && request.url!.lastPathComponent == "calls" {
+            XCTAssertEqual(body["phoneNumber"], path == "phone-local" ? "08161540638" : "+2348161540638")
+            XCTAssertEqual(body["customerId"], "CUSTOMER_1")
+            XCTAssertEqual(body["callerToken"], "signed-caller-token")
+        } else {
+            XCTAssertNil(body["phoneNumber"])
+        }
         if path == "customer" && request.url!.lastPathComponent == "calls" {
             XCTAssertEqual(body["customerId"], "CUSTOMER_1")
             XCTAssertEqual(body["callerToken"], "signed-caller-token")
-        } else { XCTAssertNil(body["customerId"]) }
+        } else if !path.hasPrefix("phone-") || request.url!.lastPathComponent != "calls" {
+            XCTAssertNil(body["customerId"])
+        }
         let errorStatuses = ["invalid_api_key": 401, "agent_not_allowed": 403, "caller_required": 403,
                              "customer_mismatch": 403,
                              "invalid_caller_token": 401, "call_limit": 429, "sdk_unavailable": 503, "service_unavailable": 503]
