@@ -57,6 +57,25 @@ Set [noise control and response sensitivity](LISTENING_CONTROLS.md) in the
 `audioInput` parameter of `AttentiveAgentView`. These settings stay in code and
 do not add buttons, sliders, or menus to the caller.
 
+### Call screen appearance
+
+Set `appearance` when presenting `AttentiveAgentView` in a sheet or full-screen
+cover. The default `.system` follows the host app's effective iOS appearance.
+Use `.light` or `.dark` to fix the appearance of the call presentation.
+
+```swift
+AttentiveAgentView(
+    apiKey: "YOUR_API_KEY",
+    agentID: "YOUR_AGENT_ID",
+    customerID: signedInCustomerID,
+    appearance: .dark,
+    callerToken: fetchCallerToken
+)
+```
+
+This setting applies to the call screen and its controls. The dashboard still
+chooses the agent's avatar, color, and animation.
+
 Keep the key/agent pair stable while the view is presented. To change agents,
 dismiss the caller first, then present a new view (or change its SwiftUI identity
 with `.id(agentID)`). Never switch tenants mid-call.
