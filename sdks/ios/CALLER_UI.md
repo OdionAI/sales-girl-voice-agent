@@ -68,8 +68,16 @@ Do not embed a provider key, LiveKit API secret or a long-lived privileged token
 The current POC bootstrap still needs the hardening described in the
 [API contract](../../docs/attentive/call-api.md) before external production use.
 
-The view does not start a call on appearance. Its Start Call button uses the
-latest bound request. It defaults to enabling the microphone, while
+Present the caller in a SwiftUI sheet or full-screen cover. It starts once on
+appearance using the bound request. Put the caller's email or phone number in
+`request.endUserContact` before presenting it. The top-right X and End Call
+both end the session and dismiss the presentation.
+
+Set `showsContactForm: true` to let the caller enter an email or phone number
+and tap Start Call. In this mode, End Call returns to the contact page and the
+X closes the presentation.
+
+The view defaults to enabling the microphone, while
 `microphoneOnStart: false` enables a chat-only diagnostic. Chat cannot pass voice
 authentication. It does not require voice enrollment to start a call; the
 backend remains responsible for deciding which actions are allowed.
@@ -79,7 +87,8 @@ backend remains responsible for deciding which actions are allowed.
 | Input | Meaning |
 | --- | --- |
 | `call` | One retained headless core instance; shared with any host observers |
-| `request` | Binding to caller/agent/language/profile/wait-phrase settings; the UI edits contact and enabled profile fields before a call |
+| `request` | Binding to caller/agent/language/profile/wait-phrase settings. Supply the contact in code for automatic startup. |
+| `showsContactForm` | Defaults to `false`. Set `true` for a reusable contact form and Start Call button. |
 | `configuration` | Presentation labels, optional profile fields, tool display names, accent color and avatar |
 | `enrollment` | Optional `VoiceEnrollment`; omit to use your own enrollment screen |
 | `microphoneOnStart` | Initial microphone choice; subsequent mute/unmute uses the core |

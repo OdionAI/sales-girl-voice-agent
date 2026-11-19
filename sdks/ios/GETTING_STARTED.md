@@ -105,8 +105,10 @@ recording enrollment; the rest of the host app must respect that lock too.
 
 ## 3A. Embed the Supplied Caller UI
 
-Copy this screen. Its existing Start Call button starts the microphone and call;
-do not also call `start()` when the screen appears.
+Present this screen in a sheet or full-screen cover with the contact set in
+`session.request`. The supplied caller starts the call once and provides
+both Close and End Call. To let callers enter their own email or phone number,
+pass `showsContactForm: true`.
 
 <!-- snippet: caller-ui -->
 ```swift
@@ -117,31 +119,22 @@ import SwiftUI
 @MainActor
 struct CustomerCallerScreen: View {
     @ObservedObject var session: CustomerVoiceSession
-    @Environment(\.dismiss) private var dismiss
-
     var body: some View {
-        NavigationStack {
-            AttentiveCallerView(
-                call: session.call,
-                request: $session.request,
-                configuration: CallerUIConfiguration(
-                    title: "Talk to customer care",
-                    agentName: "Assistant",
-                    profileTitle: "My account",
-                    showsProfile: true,
-                    toolDisplayNames: [
-                        "wema_get_balance": "Check balance",
-                        "wema_get_transactions": "Transaction history"
-                    ]
-                ),
-                enrollment: session.enrollment
-            )
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Close", systemImage: "xmark") { dismiss() }
-                }
-            }
-        }
+        AttentiveCallerView(
+            call: session.call,
+            request: $session.request,
+            configuration: CallerUIConfiguration(
+                title: "Talk to customer care",
+                agentName: "Assistant",
+                profileTitle: "My account",
+                showsProfile: true,
+                toolDisplayNames: [
+                    "wema_get_balance": "Check balance",
+                    "wema_get_transactions": "Transaction history"
+                ]
+            ),
+            enrollment: session.enrollment
+        )
     }
 }
 ```

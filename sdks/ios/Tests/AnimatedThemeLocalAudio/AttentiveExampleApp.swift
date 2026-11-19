@@ -16,7 +16,7 @@ struct AnimatedThemeLocalAudioApp: App {
             AttentiveCallerView(call: model.call, request: $model.request,
                 configuration: .init(title: "Local audio test", agentName: "Test assistant",
                                      showsToolWaitSelection: false, themeKey: "animated:#2F6FED:grain"),
-                microphoneOnStart: false)
+                microphoneOnStart: false, showsContactForm: true)
                 .overlay(alignment: .top) { Text("LOCAL TEST · NO STAGING CALL").font(.caption.bold()) }
                 .task { await model.start() }
         }
