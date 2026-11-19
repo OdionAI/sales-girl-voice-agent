@@ -16,7 +16,7 @@ struct AnimatedThemePublicStagingApp: App {
                 AttentiveCallerView(call: model.call, request: $model.request,
                     configuration: .init(title: "Talk to MoMo", agentName: "Amaka",
                                          showsToolWaitSelection: false, themeKey: theme),
-                    microphoneOnStart: false)
+                    microphoneOnStart: false, showsContactForm: true)
                     .task { await model.start() }
             } else {
                 Text(model.error ?? "Loading agent")

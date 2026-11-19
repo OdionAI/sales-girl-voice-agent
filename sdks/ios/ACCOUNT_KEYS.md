@@ -36,10 +36,11 @@ Custom `AttentiveCallerView` integrations can opt back in with
 `CallerUIConfiguration.showsAccountMenu` and `showsCallOptions`.
 Dismissing it ends the call
 and cancels startup, including a pending caller-token request.
-End call dismisses a presented sheet or full-screen cover. For an embedded caller
-that should wait for a tap, pass `startsAutomatically: false` to retain the SDK's
-Start call button. Do not leave an automatically starting caller in a hidden tab.
-Custom multi-field entry forms are not provided by this release.
+Close and End Call dismiss an automatically started call. Pass
+`startsAutomatically: false` if you want a reusable Start Call button with the
+same caller identity supplied in code. To collect an email or phone number in
+the UI, use `AttentiveCallerView` with
+[`showsContactForm: true`](CALLER_UI.md#add-the-caller-to-your-app).
 
 For active calls in the background, the host must enable the Audio background
 mode (`UIBackgroundModes` containing `audio`) and test interruption/route changes
