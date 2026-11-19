@@ -195,9 +195,9 @@ struct CallerContent: View {
                     .frame(width: min(390, max(0, geometry.size.width - 24)))
                     .frame(height: min(max(0, geometry.size.height - 68),
                                        panel == .bank && call.toolActivity.isEmpty ? 550 : 760), alignment: .top)
-                    .background(.white).clipShape(RoundedRectangle(cornerRadius: 14))
+                    .background(CallerTheme.raisedSurface).clipShape(RoundedRectangle(cornerRadius: 14))
                     .overlay(RoundedRectangle(cornerRadius: 14).stroke(CallerTheme.border, lineWidth: 1))
-                    .shadow(color: CallerTheme.ink.opacity(0.14), radius: 20, x: 0, y: 18)
+                    .shadow(color: CallerTheme.shadow.opacity(0.14), radius: 20, x: 0, y: 18)
                     .padding(.top, 64).padding(.trailing, 12)
                     .transition(.opacity.combined(with: .offset(y: -8)))
                 }
@@ -210,9 +210,9 @@ struct CallerContent: View {
                     } label: {
                         Image(systemName: panel == nil ? "line.3.horizontal" : "xmark")
                             .font(.system(size: 18)).contentTransition(.symbolEffect(.replace))
-                            .frame(width: 44, height: 44).background(.white, in: Circle())
+                            .frame(width: 44, height: 44).background(CallerTheme.raisedSurface, in: Circle())
                             .overlay(Circle().stroke(CallerTheme.border, lineWidth: 1))
-                            .shadow(color: CallerTheme.ink.opacity(0.08), radius: 12, x: 0, y: 6)
+                            .shadow(color: CallerTheme.shadow.opacity(0.08), radius: 12, x: 0, y: 6)
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel(panel == nil
@@ -295,7 +295,7 @@ struct CallerContent: View {
         }
         .padding(8).background(CallerTheme.surface, in: Capsule())
         .overlay(Capsule().stroke(CallerTheme.border, lineWidth: 1))
-        .shadow(color: CallerTheme.ink.opacity(0.08), radius: 20, x: 0, y: 12)
+        .shadow(color: CallerTheme.shadow.opacity(0.08), radius: 20, x: 0, y: 12)
         .fixedSize(horizontal: false, vertical: true)
     }
 
@@ -350,7 +350,7 @@ private struct StartCallCard: View {
         .padding(22).frame(maxWidth: 340)
         .background(CallerTheme.surface, in: RoundedRectangle(cornerRadius: 28))
         .overlay(RoundedRectangle(cornerRadius: 28).stroke(CallerTheme.border, lineWidth: 1))
-        .shadow(color: CallerTheme.ink.opacity(0.08), radius: 30, x: 0, y: 20)
+        .shadow(color: CallerTheme.shadow.opacity(0.08), radius: 30, x: 0, y: 20)
     }
 }
 
@@ -393,7 +393,7 @@ private struct VoiceEnrollmentControl: View {
                         else { Image(systemName: "mic") }
                         Text(enrollment.stage == .saving ? "Saving voice..." : enrollment.isEnrolled ? "Re-record my voice" : "Record my voice")
                     }.font(.system(size: 13, weight: .medium)).frame(maxWidth: .infinity, minHeight: 44)
-                        .background(.white, in: Capsule())
+                        .background(CallerTheme.raisedSurface, in: Capsule())
                         .overlay(Capsule().stroke(CallerTheme.border, lineWidth: 1))
                 }.buttonStyle(.plain).disabled(enrollment.isBusy || enrollment.stage == .checking)
                     .accessibilityIdentifier("recordVoice")

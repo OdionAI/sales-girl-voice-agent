@@ -2,6 +2,22 @@
 import AttentiveVoice
 import SwiftUI
 
+/// The color scheme of the presented caller.
+public enum AttentiveAppearance: Sendable {
+    /// Use the host app's effective color scheme.
+    case system
+    case light
+    case dark
+
+    var colorScheme: ColorScheme? {
+        switch self {
+        case .system: nil
+        case .light: .light
+        case .dark: .dark
+        }
+    }
+}
+
 /// A complete dashboard-configured caller. No host model or call lifecycle code is needed.
 /// Configure audio input with `audioInput` and speaking voice with `voiceLanguage` / `voiceGender`.
 /// Preferences are code-only; the caller never displays settings controls.
@@ -16,6 +32,7 @@ public struct AttentiveAgentView: View {
     private let callerToken: (() async throws -> String)?
     private let startsAutomatically: Bool
     private let microphoneOnStart: Bool
+    private let appearance: AttentiveAppearance
 
     /// For protected calls, obtain a fresh caller token from your signed-in app backend.
     public init(apiKey: String, agentID: String, phoneNumber: String? = nil, audioInput: AttentiveAudioInputConfiguration = .standard,
@@ -43,22 +60,36 @@ public struct AttentiveAgentView: View {
                 passkeys: AttentivePasskeyConfiguration = .disabled,
                 voiceLanguage: VoiceAccent? = nil, voiceGender: VoiceGender? = nil,
                 callerToken: (() async throws -> String)? = nil) {
+        self.init(apiKey: apiKey, agentID: agentID, customerID: customerID, phoneNumber: phoneNumber,
+                  startsAutomatically: startsAutomatically, appearance: .system, audioInput: audioInput,
+                  passkeys: passkeys, voiceLanguage: voiceLanguage, voiceGender: voiceGender, callerToken: callerToken)
+    }
+
+    /// Set appearance when presenting the caller in a sheet or full-screen cover.
+    public init(apiKey: String, agentID: String, customerID: String? = nil, phoneNumber: String? = nil,
+                startsAutomatically: Bool = true, appearance: AttentiveAppearance,
+                audioInput: AttentiveAudioInputConfiguration = .standard,
+                passkeys: AttentivePasskeyConfiguration = .disabled,
+                voiceLanguage: VoiceAccent? = nil, voiceGender: VoiceGender? = nil,
+                callerToken: (() async throws -> String)? = nil) {
         _call = StateObject(wrappedValue: AttentiveCall(apiKey: apiKey, agentID: agentID,
                                                       customerID: customerID, phoneNumber: phoneNumber, audioInput: audioInput, passkeys: passkeys,
                                                       voiceLanguage: voiceLanguage, voiceGender: voiceGender))
         self.callerToken = callerToken
         self.startsAutomatically = startsAutomatically
         self.microphoneOnStart = true
+        self.appearance = appearance
     }
 
     #if DEBUG
     // Used only by the internal staging integration harness.
-    init(stagingCall: AttentiveCall, startsAutomatically: Bool = true,
+    init(stagingCall: AttentiveCall, startsAutomatically: Bool = true, appearance: AttentiveAppearance = .system,
          callerToken: (() async throws -> String)? = nil) {
         _call = StateObject(wrappedValue: stagingCall)
         self.callerToken = callerToken
         self.startsAutomatically = startsAutomatically
         self.microphoneOnStart = false
+        self.appearance = appearance
     }
     #endif
 
@@ -95,6 +126,7 @@ public struct AttentiveAgentView: View {
         .background(PasskeyWindowReader { [weak call] window in
             call?.passkeyPresentationAnchor = { [weak window] in window }
         })
+        .preferredColorScheme(appearance.colorScheme)
         .task { if call.configuration == nil { await load() } }
     }
 
