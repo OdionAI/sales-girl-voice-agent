@@ -25,6 +25,20 @@ final class CallerControlsTests: XCTestCase {
     }
 
     @available(iOS 17, *)
+    @MainActor
+    func testCallerPhoneCompilesForEverySupportedEntryPoint() {
+        _ = AttentiveAgentView(apiKey: "YOUR_API_KEY", agentID: "agt_example", phoneNumber: "08161540638")
+        _ = AttentiveAgentView(apiKey: "YOUR_API_KEY", agentID: "agt_example",
+                               customerID: "CUSTOMER_1", phoneNumber: "+2348161540638",
+                               callerToken: { "test-token" })
+        _ = AttentiveAgentView(apiKey: "YOUR_API_KEY", agentID: "agt_example",
+                               phoneNumber: "08161540638", startsAutomatically: false)
+        _ = AttentiveCall(apiKey: "YOUR_API_KEY", agentID: "agt_example", phoneNumber: "08161540638")
+        _ = AttentiveCall(apiKey: "YOUR_API_KEY", agentID: "agt_example",
+                          customerID: "CUSTOMER_1", phoneNumber: "+2348161540638")
+    }
+
+    @available(iOS 17, *)
     func testDefaultCallerHidesAccountAndSettingsMenus() {
         let configuration = CallerUIConfiguration()
         XCTAssertFalse(configuration.showsAccountMenu)
