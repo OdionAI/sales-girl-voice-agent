@@ -288,8 +288,13 @@ pub fn from_lookup(get: impl Fn(&str) -> Option<String>) -> Result<OperatorConfi
     config.validate()?;
     Ok(config)
 }
+/// Split an id list on commas OR whitespace. Deploy chains have written these
+/// lists both ways (`a,b` and `a b`); splitting on commas alone turns a
+/// space-separated scope into one unmatchable string, and a scope that matches
+/// nothing silently disables the feature it scopes - the ASR vocabulary hint on
+/// this stack was switched off that way for weeks.
 fn ids(raw: &str) -> Vec<String> {
-    raw.split(',')
+    raw.split(|c: char| c == ',' || c.is_whitespace())
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(str::to_string)
@@ -311,6 +316,27 @@ fn number(raw: &str) -> Result<f64, String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn id_lists_accept_commas_and_whitespace() {
+        let expected = vec![
+            "a0c8cda2-3b46-4ee0-898c-48f9a4d3a444".to_string(),
+            "f90e2db3-6e12-4b4f-94fa-905b83a2adfd".to_string(),
+        ];
+        assert_eq!(
+            super::ids("a0c8cda2-3b46-4ee0-898c-48f9a4d3a444 f90e2db3-6e12-4b4f-94fa-905b83a2adfd"),
+            expected
+        );
+        assert_eq!(
+            super::ids("a0c8cda2-3b46-4ee0-898c-48f9a4d3a444,f90e2db3-6e12-4b4f-94fa-905b83a2adfd"),
+            expected
+        );
+        assert_eq!(
+            super::ids(" a0c8cda2-3b46-4ee0-898c-48f9a4d3a444 ,\n f90e2db3-6e12-4b4f-94fa-905b83a2adfd "),
+            expected
+        );
+        assert!(super::ids("  ").is_empty());
+    }
+
     use super::*;
     use std::collections::HashMap;
     #[test]
