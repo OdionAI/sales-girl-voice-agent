@@ -3029,7 +3029,7 @@ fn wait_cue(call: &super::actions::Call) -> String {
             messages.extend(self.final_history.clone());
         }
         if self.c.engagement_enabled {
-            messages.push(json!({"role":"user","content":format!("Current application task state (reference, not caller confirmation):\n{}",super::python_json(&json!({"quiet_preference":if self.speech_enabled{"none"}else{"until_user"},"speech_enabled":self.speech_enabled,"awaiting_device_approval":self.passkey.as_ref().is_some_and(|flow|flow.busy()),"prepared_preview_not_executed":self.banking.as_ref().and_then(|bank|bank.prepared()),"pending_action":self.pending_action.as_ref().map(|p|json!({"name":p.call.name,"details":p.call.arguments,"question":p.question})),"operation":self.operation.as_ref().map(|op|json!({"name":op.call.name,"pending":op.result.is_none(),"result":op.result}))})))}));
+            messages.push(json!({"role":"user","content":format!("Current application task state (reference, not caller confirmation):\n{}",super::python_json(&json!({"quiet_preference":if self.speech_enabled{"none"}else{"until_user"},"speech_enabled":self.speech_enabled,"awaiting_device_approval":self.passkey.as_ref().is_some_and(|flow|flow.busy()),"prepared_preview_not_executed":self.banking.as_ref().and_then(|bank|bank.prepared()),"pending_action":self.pending_action.as_ref().map(|p|json!({"name":p.call.name,"details":p.call.arguments,"question":p.question})),"operation":self.operation.as_ref().map(|op|json!({"name":op.call.name,"pending":op.result.is_none(),"result":op.result})),"caller_phone":self.passkey.as_ref().and_then(|flow|flow.phone())})))}));
         }
         if !tool_result_followup {
             let content = if base_candidate.is_some() || qwen_candidate.is_some() {
