@@ -63,7 +63,7 @@ final class ReferenceShaderWebKitTests: XCTestCase {
         configuration.websiteDataStore = .nonPersistent()
         configuration.userContentController.addUserScript(WKUserScript(source: script, injectionTime: .atDocumentEnd, forMainFrameOnly: true))
 
-        let webView = WKWebView(frame: CGRect(x: 0, y: 0, width: 123, height: 123), configuration: configuration)
+        let webView = WKWebView(frame: CGRect(x: 0, y: 0, width: 204, height: 204), configuration: configuration)
         let controller = UIViewController()
         controller.view.addSubview(webView)
         let window = UIWindow(frame: UIScreen.main.bounds)
@@ -88,6 +88,18 @@ final class ReferenceShaderWebKitTests: XCTestCase {
         XCTAssertEqual(active["mode"] as? String, "talking")
         XCTAssertEqual(try XCTUnwrap(active["intensity"] as? Double), 0.65, accuracy: 0.0001)
         XCTAssertEqual(active["paused"] as? Bool, false)
+        try await Task.sleep(for: .milliseconds(500))
+        let speakingScale = try await scale(webView)
+        XCTAssertGreaterThan(speakingScale, 1.10)
+
+        let listening = ReferenceShaderState(theme: theme, speaking: false, connected: true, energy: 0,
+                                             reduceMotion: false, sceneActive: true, visible: true)
+        _ = try await apply(listening, to: webView)
+        let releaseScale = try await scale(webView)
+        XCTAssertGreaterThan(releaseScale, 1.05, "Speech ending should start a smooth release")
+        try await Task.sleep(for: .seconds(1))
+        let restingScale = try await scale(webView)
+        XCTAssertLessThan(restingScale, 1.02)
 
         let paused = ReferenceShaderState(theme: theme, speaking: true, connected: true, energy: 0.65,
                                           reduceMotion: false, sceneActive: false, visible: true)
@@ -96,6 +108,8 @@ final class ReferenceShaderWebKitTests: XCTestCase {
         XCTAssertEqual(inactive["mode"] as? String, "listening")
         XCTAssertEqual(inactive["intensity"] as? Double, 0)
         XCTAssertEqual(inactive["paused"] as? Bool, true)
+        let pausedScale = try await scale(webView)
+        XCTAssertEqual(pausedScale, 1, accuracy: 0.001)
     }
 
     private func apply(_ state: ReferenceShaderState, to webView: WKWebView) async throws -> [String: Any] {
@@ -113,6 +127,14 @@ final class ReferenceShaderWebKitTests: XCTestCase {
         """
         let value = try await webView.evaluateJavaScript(js)
         return try XCTUnwrap(value as? [String: Any])
+    }
+
+    private func scale(_ webView: WKWebView) async throws -> Double {
+        let value = try await webView.evaluateJavaScript("""
+            (() => { const circle = document.getElementById('avatar');
+              return circle.getBoundingClientRect().width / circle.clientWidth; })()
+            """)
+        return try XCTUnwrap(value as? Double)
     }
 
     private final class NavigationDelegate: NSObject, WKNavigationDelegate {
