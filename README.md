@@ -19,7 +19,8 @@ This service owns the realtime voice runtime:
 - building runtime instructions/prompts for the active session
 - speaking an agent's `SPOKEN_OPENING` once before the caller's first turn,
   including for Yoruba, Hausa, and Igbo agents; when absent, the configured
-  language's default opening applies
+  language's default opening applies. The Yoruba default welcomes the caller
+  to MoMo and asks for their name.
 - running the stable voice pipeline
 - selecting and invoking tools
 - persisting conversation and session activity
