@@ -435,6 +435,7 @@ def deploy(release, revision, enable_hausa_research=False, momo_feedback_agent_i
     updates['ODION_IGBO_QWEN_PHONE_CANDIDATE'] = '1'
     updates['ODION_SANFRID_PIDGIN'] = '1'
     updates['ODION_SBPN_LARGE_TEST'] = '1'
+    updates['ODION_YORUBA_VOXCPM2_URL'] = 'http://127.0.0.1:18110/v1/audio/speech'
     updates[VOICE_AUTH_DISABLED_KEY] = VOICE_AUTH_DISABLED
     updates.update(reply_grace_env(reply_grace_ms, reply_grace_agent_ids))
     updates.update(inactivity_pilot_env(inactivity_pilot_agent_ids))
