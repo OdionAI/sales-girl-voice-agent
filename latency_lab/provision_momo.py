@@ -20,7 +20,7 @@ MOMO_COMPLAINT_INSTRUCTIONS = (
     "and an accurate description of the issue, the customer's answers and the requested follow-up. "
     "Do not merely say you will log it: use the tool. Follow the application's existing confirmation "
     "step before ticket creation. Only after the tool confirms success, tell the customer the issue "
-    "has been logged, share the actual returned ticket reference, and assure them they will receive "
+    "has been logged without reading out a ticket number or reference, and assure them they will receive "
     "feedback within twenty-four hours. This is a promise of feedback, not a guarantee of resolution "
     "or a refund within that time. If ticket creation fails, explain that it was not logged and offer "
     "to retry; never invent a ticket reference or claim successful escalation."
