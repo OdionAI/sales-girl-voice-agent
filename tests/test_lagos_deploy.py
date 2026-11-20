@@ -69,6 +69,7 @@ class LagosReleaseTests(unittest.TestCase):
             updates['ODION_IGBO_QWEN_PHONE_CANDIDATE'] = '1'
             updates['ODION_SANFRID_PIDGIN'] = '1'
             updates['ODION_YORUBA_VOXCPM2_URL'] = 'http://127.0.0.1:18110/v1/audio/speech'
+            updates['ODION_YORUBA_VOXCPM2_SBPN_LOCAL_PORT'] = '18119'
             updates['ODION_SBPN_LARGE_TEST'] = '1'
             updates[release.VOICE_AUTH_DISABLED_KEY] = release.VOICE_AUTH_DISABLED
             updates.update(release.reply_grace_env(reply_grace_ms, reply_grace_agent_ids))

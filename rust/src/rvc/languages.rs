@@ -7,6 +7,25 @@ pub const SBPN_MODEL: &str = "ogunlao/SBPN_multilingual_base";
 pub const SBPN_LARGE_MODEL: &str = "ogunlao/SBPN_multilingual_large";
 const VOXCPM2_VOICE: &str = "voxcpm2-yoruba";
 const VOXCPM2_MODEL: &str = "voxcpm2";
+pub fn is_yoruba_voxcpm2(config: &Config) -> bool {
+    code(&config.tts_language) == "yo"
+        && config.tts_model == VOXCPM2_MODEL
+        && config.tts_voice == VOXCPM2_VOICE
+}
+fn sbpn_local_port(config: &Config, voice_port: Option<String>, shared_port: Option<String>) -> Option<String> {
+    if is_yoruba_voxcpm2(config) {
+        voice_port.or(shared_port)
+    } else {
+        shared_port
+    }
+}
+fn optional_port_env(name: &str) -> Result<Option<String>, String> {
+    match std::env::var(name) {
+        Ok(value) => Ok(Some(value)),
+        Err(std::env::VarError::NotPresent) => Ok(None),
+        Err(_) => Err("invalid SBPN Large local tunnel port".into()),
+    }
+}
 fn voxcpm2_url(url: &str) -> Result<String, String> {
     let parsed = reqwest::Url::parse(url).map_err(|_| "invalid VoxCPM2 route")?;
     let loopback = matches!(parsed.host_str(), Some("127.0.0.1" | "::1" | "localhost"));
@@ -287,8 +306,13 @@ pub fn apply(config: &mut Config, context: &AgentContext, overrides: &Value) -> 
     config.stt_batch_url = gateway(config, text(values, "sbpn_url"))?;
     if std::env::var("ODION_SBPN_LARGE_TEST").as_deref() == Ok("1") {
         config.stt_model = SBPN_LARGE_MODEL.into();
-        config.stt_ws_url = match std::env::var("ODION_SBPN_LARGE_TEST_LOCAL_PORT") {
-            Ok(value) => {
+        let local_port = sbpn_local_port(
+            config,
+            optional_port_env("ODION_YORUBA_VOXCPM2_SBPN_LOCAL_PORT")?,
+            optional_port_env("ODION_SBPN_LARGE_TEST_LOCAL_PORT")?,
+        );
+        config.stt_ws_url = match local_port {
+            Some(value) => {
                 let port = value
                     .parse::<u16>()
                     .ok()
@@ -296,11 +320,10 @@ pub fn apply(config: &mut Config, context: &AgentContext, overrides: &Value) -> 
                     .ok_or("invalid SBPN Large local tunnel port")?;
                 format!("ws://127.0.0.1:{port}/v1/realtime")
             }
-            Err(std::env::VarError::NotPresent) => gateway(
+            None => gateway(
                 config,
                 "ws://102.88.137.124:8080/asr-sbpn-large-test/v1/realtime",
             )?,
-            Err(_) => return Err("invalid SBPN Large local tunnel port".into()),
         };
     }
     config.stt_batch_timeout_seconds = 120.0;
@@ -431,7 +454,7 @@ pub fn tts_requests(config: &Config, input: &str) -> Result<Vec<TtsRequest>, Str
             std::collections::HashMap::from([("content-type".into(), "audio/pcm".into())]);
         let mut timeout = 60.0;
         let mut sample_rate = 24000;
-        if code == "yo" && config.tts_model == VOXCPM2_MODEL && config.tts_voice == VOXCPM2_VOICE {
+        if is_yoruba_voxcpm2(config) {
             body["voice"] = serde_json::json!("default");
             body["stream_format"] = serde_json::json!("audio");
             sample_rate = 48000;
@@ -581,6 +604,17 @@ mod tests {
         assert!(voxcpm2_url("https://example.com/tts?key=secret").is_err());
         assert!(voxcpm2_url("http://127.0.0.1:18110/v1/audio/speech").is_ok());
         assert!(voxcpm2_url("https://gateway.example.com/v1/audio/speech").is_ok());
+    }
+    #[test]
+    fn voxcpm2_sbpn_tunnel_is_scoped_to_its_voice() {
+        let mut c = config();
+        c.tts_language = "Yoruba".into();
+        c.tts_model = "voxcpm2".into();
+        c.tts_voice = "voxcpm2-yoruba".into();
+        assert_eq!(sbpn_local_port(&c, Some("18119".into()), Some("18911".into())).as_deref(), Some("18119"));
+        c.tts_voice = "balogun".into();
+        assert_eq!(sbpn_local_port(&c, Some("18119".into()), Some("18911".into())).as_deref(), Some("18911"));
+        assert_eq!(sbpn_local_port(&c, Some("18119".into()), None), None);
     }
     #[test]
     fn voxcpm2_saved_voice_keeps_yoruba_asr_while_selecting_private_tts() {
