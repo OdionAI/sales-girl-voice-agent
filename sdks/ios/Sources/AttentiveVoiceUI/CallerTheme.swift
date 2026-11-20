@@ -20,6 +20,7 @@ enum CallerTheme {
     static let endInk = Color(light: 0x8F181F, dark: 0xFFB9BE)
     static let red = Color(light: 0xB33A32, dark: 0xF8867E)
     static let green = Color(light: 0x278564, dark: 0x70DBAF)
+    static let avatarDiameter: CGFloat = 123
 }
 
 private extension Color {
@@ -80,21 +81,27 @@ struct CallerAvatar: View {
 
     var body: some View {
         Group {
-            if let image {
-                image.resizable().scaledToFill()
-            } else if let animated = AnimatedAgentTheme(key: themeKey) {
+            if image == nil, let animated = AnimatedAgentTheme(key: themeKey) {
                 ReferenceAnimatedAvatar(theme: animated, speaking: speaking, connected: connected,
                                         energy: audioLevel.energy, reduceMotion: reduceMotion,
                                         sceneActive: scenePhase == .active, ready: $animationReady)
-            } else if let fillColor {
-                fillColor
             } else {
-                Image(assetName, bundle: .module).resizable().scaledToFill()
+                Group {
+                    if let image {
+                        image.resizable().scaledToFill()
+                    } else if let fillColor {
+                        fillColor
+                    } else {
+                        Image(assetName, bundle: .module).resizable().scaledToFill()
+                    }
+                }
+                .frame(width: CallerTheme.avatarDiameter, height: CallerTheme.avatarDiameter)
+                .clipShape(Circle())
+                .scaleEffect(scale)
+                .animation(reduceMotion ? nil : .interpolatingSpring(mass: 0.68, stiffness: 300, damping: 22), value: scale)
             }
         }
-            .frame(width: 123, height: 123).clipShape(Circle()).scaleEffect(scale)
-            .animation(reduceMotion ? nil : .interpolatingSpring(mass: 0.68, stiffness: 300, damping: 22), value: scale)
-            .frame(width: 204, height: 204).accessibilityHidden(true)
+        .frame(width: 204, height: 204).accessibilityHidden(true)
     }
 }
 #endif
