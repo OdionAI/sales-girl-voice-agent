@@ -59,8 +59,9 @@ struct CallerAvatar: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
     private var scale: Double {
-        if image == nil, AnimatedAgentTheme(key: themeKey) != nil { return 1 }
-        return speaking && !reduceMotion ? 1 + Double(audioLevel.energy) * 0.25 : 1
+        guard connected, speaking, !reduceMotion, scenePhase == .active,
+              audioLevel.energy > 0.01 else { return 1 }
+        return 1 + Double(audioLevel.energy) * 0.25
     }
 
     private var assetName: String {

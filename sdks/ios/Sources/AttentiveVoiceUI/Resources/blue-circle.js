@@ -148,7 +148,7 @@ vec3 softGamutMap(vec3 linearRgb) {
     
     if (C > maxChroma * 0.7) {
         float knee = maxChroma * 0.7;
-        C = knee + (maxChroma - knee) * tanh((C - knee) / (maxChroma - knee + 0.001));
+        C = knee + (maxChroma - knee) * tanh(min((C - knee) / (maxChroma - knee + 0.001), 6.0));
     }
     
     return clamp(oklabToLinear(vec3(L, C * cos(h), C * sin(h))), 0.0, 1.0);
