@@ -176,6 +176,18 @@ fn igbo_qwen_phone_candidates(text: &str) -> Option<String> {
     (!phones.is_empty()).then(|| phones.join(", "))
 }
 
+fn yoruba_qwen_phone_candidates(text: &str) -> Option<String> {
+    let phones: Vec<_> = super::text::digit_runs(text)
+        .into_iter()
+        .filter_map(|digits| match (digits.len(), digits.as_str()) {
+            (11, s) if s.starts_with('0') => Some(digits),
+            (13, s) if s.starts_with("234") => Some(format!("+{digits}")),
+            _ => None,
+        })
+        .collect();
+    (!phones.is_empty()).then(|| phones.join(", "))
+}
+
 impl Providers {
     pub fn new(config: Arc<Config>, trace: Trace) -> Result<Self, String> {
         let tts_reference = if !super::languages::uses_sbpn(&config.tts_language)
@@ -856,9 +868,10 @@ impl Providers {
                 json!({"language":"English","chars":raw.len(),"source":"candidate"}),
             );
         }
-        if super::languages::code(&self.config.tts_language) == "ig"
-            || super::languages::is_yoruba_voxcpm2(&self.config)
-        {
+        if super::languages::is_yoruba_voxcpm2(&self.config) {
+            return yoruba_qwen_phone_candidates(&text);
+        }
+        if super::languages::code(&self.config.tts_language) == "ig" {
             return igbo_qwen_phone_candidates(&text);
         }
         (!text.trim().is_empty()).then_some(text)
@@ -2047,6 +2060,12 @@ mod native_language_wire_tests {
 
 #[cfg(test)]
 mod sbpn_wire_tests {
+    #[test]
+    fn yoruba_qwen_extracts_complete_spoken_phone_numbers_only() {
+        assert_eq!(super::yoruba_qwen_phone_candidates("zero eight zero one two three four five six seven eight").as_deref(), Some("08012345678"));
+        assert_eq!(super::yoruba_qwen_phone_candidates("PIN one two three four"), None);
+        assert_eq!(super::yoruba_qwen_phone_candidates("zero eight zero one two three four five six"), None);
+    }
     #[test]
     fn igbo_qwen_only_passes_nigerian_phone_numbers() {
         assert_eq!(
