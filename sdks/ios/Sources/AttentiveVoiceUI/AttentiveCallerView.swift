@@ -2,7 +2,7 @@
 import AttentiveVoice
 import SwiftUI
 
-/// Optional caller UI. Retain the call in the host; do not replace it during a call.
+/// Presents a retained call and starts it with the supplied request when opened.
 /// Set initial listening preferences with the call's `audioInput` initializer argument.
 @available(iOS 17, *)
 @MainActor
@@ -13,24 +13,28 @@ public struct AttentiveCallerView: View {
     private let onSettings: (() -> Void)?
     @Binding private var request: CallRequest
     private let microphoneOnStart: Bool
+    private let showsContactForm: Bool
 
+    /// Set showsContactForm to let the caller enter contact information and make repeated calls.
     public init(call: AttentiveCall, request: Binding<CallRequest>,
                 configuration: CallerUIConfiguration = .init(),
                 enrollment: VoiceEnrollment? = nil,
                 microphoneOnStart: Bool = true,
-                onSettings: (() -> Void)? = nil) {
+                onSettings: (() -> Void)? = nil,
+                showsContactForm: Bool = false) {
         self.call = call
         self.enrollment = enrollment
         self.configuration = configuration
         self.onSettings = onSettings
         _request = request
         self.microphoneOnStart = microphoneOnStart
+        self.showsContactForm = showsContactForm
     }
 
     public var body: some View {
         CallerContent(call: call, request: $request, configuration: configuration,
                       enrollment: enrollment, microphoneOnStart: microphoneOnStart,
-                      onSettings: onSettings)
+                      onSettings: onSettings, startsAutomatically: !showsContactForm)
             .id(ContentIdentity(call: ObjectIdentifier(call), enrollment: enrollment.map(ObjectIdentifier.init)))
     }
 
@@ -51,16 +55,17 @@ struct CallerContent: View {
     let onSettings: (() -> Void)?
     let startCall: (() async throws -> Void)?
     let startsAutomatically: Bool
-    let onCallEnded: (() -> Void)?
     @State private var panel: Panel?
     @State private var draft = ""
     @State private var animationReady = false
+    @State private var closing = false
+    @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
 
     private enum Panel { case bank, transcript }
 
-    private var showsCall: Bool { controls.active || startsAutomatically }
+    private var showsCall: Bool { controls.active || startsAutomatically || closing }
     private var needsAnimatedAvatar: Bool {
         configuration.avatar == nil && AnimatedAgentTheme(key: configuration.themeKey) != nil
     }
@@ -76,9 +81,36 @@ struct CallerContent: View {
         }
     }
 
+    private func start() async throws {
+        if let startCall {
+            try await waitForAnimation()
+            try Task.checkCancellation()
+            try await startCall()
+        } else {
+            var next = request
+            if next.endUserContact.contains("@") {
+                next.endUserContact = next.endUserContact
+                    .trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                if !startsAutomatically { request.endUserContact = next.endUserContact }
+            }
+            try await waitForAnimation()
+            try Task.checkCancellation()
+            try await call.start(next, microphoneEnabled: microphoneOnStart)
+        }
+    }
+
+    private func endCall(dismissAfterEnding: Bool) {
+        guard !closing, call.state != .ending else { return }
+        closing = dismissAfterEnding
+        Task {
+            await controls.end()
+            if dismissAfterEnding { dismiss() }
+        }
+    }
+
     init(call: AttentiveCall, request: Binding<CallRequest>, configuration: CallerUIConfiguration,
          enrollment: VoiceEnrollment?, microphoneOnStart: Bool, onSettings: (() -> Void)?,
-         startsAutomatically: Bool = false, onCallEnded: (() -> Void)? = nil,
+         startsAutomatically: Bool = false,
          startCall: (() async throws -> Void)? = nil) {
         self.call = call
         _request = request
@@ -87,7 +119,6 @@ struct CallerContent: View {
         self.onSettings = onSettings
         self.startCall = startCall
         self.startsAutomatically = startsAutomatically
-        self.onCallEnded = onCallEnded
         _controls = StateObject(wrappedValue: CallerControls(call: call, enrollment: enrollment))
     }
 
@@ -134,21 +165,7 @@ struct CallerContent: View {
                             StartCallCard(contact: $request.endUserContact, enrollment: controls.enrollment,
                                           enrollmentBusy: controls.enrollmentBusy, configuration: configuration,
                                           requiresContact: startCall == nil, starting: controls.starting) {
-                                if let startCall {
-                                    Task { await controls.start { try await waitForAnimation(); try await startCall() } }
-                                    return
-                                }
-                                if request.endUserContact.contains("@") {
-                                    request.endUserContact = request.endUserContact
-                                        .trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-                                }
-                                let next = request
-                                Task {
-                                    await controls.start {
-                                        try await waitForAnimation()
-                                        try await call.start(next, microphoneEnabled: microphoneOnStart)
-                                    }
-                                }
+                                Task { await controls.start { try await start() } }
                             }
                             .padding(.horizontal, 24).padding(.vertical, 20)
                             .frame(maxWidth: .infinity)
@@ -178,9 +195,9 @@ struct CallerContent: View {
                     .frame(width: min(390, max(0, geometry.size.width - 24)))
                     .frame(height: min(max(0, geometry.size.height - 68),
                                        panel == .bank && call.toolActivity.isEmpty ? 550 : 760), alignment: .top)
-                    .background(.white).clipShape(RoundedRectangle(cornerRadius: 14))
+                    .background(CallerTheme.raisedSurface).clipShape(RoundedRectangle(cornerRadius: 14))
                     .overlay(RoundedRectangle(cornerRadius: 14).stroke(CallerTheme.border, lineWidth: 1))
-                    .shadow(color: CallerTheme.ink.opacity(0.14), radius: 20, x: 0, y: 18)
+                    .shadow(color: CallerTheme.shadow.opacity(0.14), radius: 20, x: 0, y: 18)
                     .padding(.top, 64).padding(.trailing, 12)
                     .transition(.opacity.combined(with: .offset(y: -8)))
                 }
@@ -193,9 +210,9 @@ struct CallerContent: View {
                     } label: {
                         Image(systemName: panel == nil ? "line.3.horizontal" : "xmark")
                             .font(.system(size: 18)).contentTransition(.symbolEffect(.replace))
-                            .frame(width: 44, height: 44).background(.white, in: Circle())
+                            .frame(width: 44, height: 44).background(CallerTheme.raisedSurface, in: Circle())
                             .overlay(Circle().stroke(CallerTheme.border, lineWidth: 1))
-                            .shadow(color: CallerTheme.ink.opacity(0.08), radius: 12, x: 0, y: 6)
+                            .shadow(color: CallerTheme.shadow.opacity(0.08), radius: 12, x: 0, y: 6)
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel(panel == nil
@@ -203,8 +220,12 @@ struct CallerContent: View {
                         : "Close floating panel")
                     .accessibilityIdentifier(panel == nil
                         ? "bankMenu" : "closePanel")
-                    .padding(.top, 8).padding(.trailing, 16)
+                    .padding(.top, 16).padding(.leading, 16)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
+
+                CallerCloseButton { endCall(dismissAfterEnding: true) }
+                    .disabled(closing || call.state == .ending)
             }
         }
         .foregroundStyle(CallerTheme.ink)
@@ -215,12 +236,16 @@ struct CallerContent: View {
         .tint(configuration.accentColor)
         .onAppear { controls.appear() }
         .task {
-            if startsAutomatically, let startCall {
-                await controls.startAutomatically { try await waitForAnimation(); try await startCall() }
+            if startsAutomatically, !closing, !controls.active {
+                await controls.startAutomatically { try await start() }
             }
         }
         .onChange(of: call.state) { _, state in
-            if startsAutomatically, state == .ended { onCallEnded?() }
+            if state == .ended {
+                panel = nil
+                draft = ""
+                if startsAutomatically && !closing { dismiss() }
+            }
         }
         .onChange(of: scenePhase) { _, phase in
             if phase == .background { controls.enrollment?.cancel() }
@@ -231,7 +256,7 @@ struct CallerContent: View {
         )) {
             Button("OK", role: .cancel) {
                 controls.errorMessage = nil
-                if startsAutomatically { Task { await controls.end() } }
+                if startsAutomatically { endCall(dismissAfterEnding: true) }
             }
         } message: { Text(controls.errorMessage ?? "") }
     }
@@ -259,17 +284,18 @@ struct CallerContent: View {
                         .background(CallerTheme.control, in: Circle())
                 }.tint(CallerTheme.ink).accessibilityLabel("More call options")
             }
-            Button { Task { await controls.end() } } label: {
+            Button { endCall(dismissAfterEnding: startsAutomatically) } label: {
                 Label("END CALL", systemImage: "phone.down").font(.system(size: 12, weight: .medium))
                     .padding(.horizontal, 16).frame(minHeight: 44)
                     .background(CallerTheme.endFill, in: Capsule())
             }
-            .buttonStyle(.plain).foregroundStyle(CallerTheme.endInk).disabled(call.state == .ending)
+            .buttonStyle(.plain).foregroundStyle(CallerTheme.endInk)
+            .disabled(closing || call.state == .ending)
             .accessibilityLabel("End call").accessibilityIdentifier("endCall")
         }
         .padding(8).background(CallerTheme.surface, in: Capsule())
         .overlay(Capsule().stroke(CallerTheme.border, lineWidth: 1))
-        .shadow(color: CallerTheme.ink.opacity(0.08), radius: 20, x: 0, y: 12)
+        .shadow(color: CallerTheme.shadow.opacity(0.08), radius: 20, x: 0, y: 12)
         .fixedSize(horizontal: false, vertical: true)
     }
 
@@ -324,7 +350,7 @@ private struct StartCallCard: View {
         .padding(22).frame(maxWidth: 340)
         .background(CallerTheme.surface, in: RoundedRectangle(cornerRadius: 28))
         .overlay(RoundedRectangle(cornerRadius: 28).stroke(CallerTheme.border, lineWidth: 1))
-        .shadow(color: CallerTheme.ink.opacity(0.08), radius: 30, x: 0, y: 20)
+        .shadow(color: CallerTheme.shadow.opacity(0.08), radius: 30, x: 0, y: 20)
     }
 }
 
@@ -367,7 +393,7 @@ private struct VoiceEnrollmentControl: View {
                         else { Image(systemName: "mic") }
                         Text(enrollment.stage == .saving ? "Saving voice..." : enrollment.isEnrolled ? "Re-record my voice" : "Record my voice")
                     }.font(.system(size: 13, weight: .medium)).frame(maxWidth: .infinity, minHeight: 44)
-                        .background(.white, in: Capsule())
+                        .background(CallerTheme.raisedSurface, in: Capsule())
                         .overlay(Capsule().stroke(CallerTheme.border, lineWidth: 1))
                 }.buttonStyle(.plain).disabled(enrollment.isBusy || enrollment.stage == .checking)
                     .accessibilityIdentifier("recordVoice")

@@ -14,18 +14,20 @@ struct SDKClient: Sendable, CustomStringConvertible, CustomDebugStringConvertibl
     private let apiKey: String
     private let agentID: String
     private let customerID: String?
+    private let phoneNumber: String?
     private let voiceLanguage: VoiceAccent?
     private let voiceGender: VoiceGender?
     private let session: URLSession
     private let baseURL: URL
 
     // Tests can inject a URLSession, but customer apps do not supply service endpoints.
-    init(apiKey: String, agentID: String, customerID: String? = nil,
+    init(apiKey: String, agentID: String, customerID: String? = nil, phoneNumber: String? = nil,
          voiceLanguage: VoiceAccent? = nil, voiceGender: VoiceGender? = nil, session: URLSession? = nil,
          baseURL: URL = URL(string: "https://attentive.odion.ai/api/sdk/v1/")!) {
         self.apiKey = apiKey
         self.agentID = agentID
         self.customerID = customerID
+        self.phoneNumber = phoneNumber
         self.voiceLanguage = voiceLanguage
         self.voiceGender = voiceGender
         self.baseURL = baseURL
@@ -64,6 +66,10 @@ struct SDKClient: Sendable, CustomStringConvertible, CustomDebugStringConvertibl
            customerID.range(of: #"^[a-zA-Z0-9_-]{1,64}$"#, options: .regularExpression) != customerID.startIndex..<customerID.endIndex {
             throw CallError.invalidRequest
         }
+        if let phoneNumber,
+           phoneNumber.range(of: #"^(0[0-9]{10}|\+[1-9][0-9]{7,14})$"#, options: .regularExpression) != phoneNumber.startIndex..<phoneNumber.endIndex {
+            throw CallError.invalidRequest
+        }
     }
 
     private func post<Value: Decodable>(_ path: String, callerToken: String?) async throws -> Value {
@@ -78,6 +84,7 @@ struct SDKClient: Sendable, CustomStringConvertible, CustomDebugStringConvertibl
         var body = ["agentId": agentID]
         if path == "calls" {
             if let customerID { body["customerId"] = customerID }
+            if let phoneNumber { body["phoneNumber"] = phoneNumber }
             if let voiceLanguage { body["voiceLanguage"] = voiceLanguage.rawValue }
             if let voiceGender { body["voiceGender"] = voiceGender.rawValue }
         }

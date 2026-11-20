@@ -13,7 +13,8 @@ struct CallScreen: View {
                             configuration: model.appearance,
                             enrollment: ProcessInfo.processInfo.arguments.contains("--generic-ui") ? nil : model.callerEnrollment,
                             microphoneOnStart: model.configuration.microphoneOnStart,
-                            onSettings: { showSettings = true })
+                            onSettings: { showSettings = true },
+                            showsContactForm: true)
             .sheet(isPresented: $showSettings) { CallerSettings(model: model) }
             .alert("Invalid configuration", isPresented: Binding(
                 get: { model.errorMessage != nil },

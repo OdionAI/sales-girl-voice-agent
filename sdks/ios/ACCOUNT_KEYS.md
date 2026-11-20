@@ -36,10 +36,11 @@ Custom `AttentiveCallerView` integrations can opt back in with
 `CallerUIConfiguration.showsAccountMenu` and `showsCallOptions`.
 Dismissing it ends the call
 and cancels startup, including a pending caller-token request.
-End call dismisses a presented sheet or full-screen cover. For an embedded caller
-that should wait for a tap, pass `startsAutomatically: false` to retain the SDK's
-Start call button. Do not leave an automatically starting caller in a hidden tab.
-Custom multi-field entry forms are not provided by this release.
+Close and End Call dismiss an automatically started call. Pass
+`startsAutomatically: false` if you want a reusable Start Call button with the
+same caller identity supplied in code. To collect an email or phone number in
+the UI, use `AttentiveCallerView` with
+[`showsContactForm: true`](CALLER_UI.md#add-the-caller-to-your-app).
 
 For active calls in the background, the host must enable the Audio background
 mode (`UIBackgroundModes` containing `audio`) and test interruption/route changes
@@ -56,6 +57,25 @@ Set [noise control and response sensitivity](LISTENING_CONTROLS.md) in the
 `audioInput` parameter of `AttentiveAgentView`. These settings stay in code and
 do not add buttons, sliders, or menus to the caller.
 
+### Call screen appearance
+
+Set `appearance` when presenting `AttentiveAgentView` in a sheet or full-screen
+cover. The default `.system` follows the host app's effective iOS appearance.
+Use `.light` or `.dark` to fix the appearance of the call presentation.
+
+```swift
+AttentiveAgentView(
+    apiKey: "YOUR_API_KEY",
+    agentID: "YOUR_AGENT_ID",
+    customerID: signedInCustomerID,
+    appearance: .dark,
+    callerToken: fetchCallerToken
+)
+```
+
+This setting applies to the call screen and its controls. The dashboard still
+chooses the agent's avatar, color, and animation.
+
 Keep the key/agent pair stable while the view is presented. To change agents,
 dismiss the caller first, then present a new view (or change its SwiftUI identity
 with `.id(agentID)`). Never switch tenants mid-call.
@@ -70,6 +90,30 @@ Set `voiceLanguage: .enNG` (Nigerian) or `.enUS` (American), and
 `voiceGender: .female` or `.male` in `AttentiveAgentView` before `callerToken:`.
 Both default to `nil`, preserving the service default and existing requests.
 These preferences add no controls. See [examples and compatibility](VOICE_SETTINGS.md).
+
+## Caller's phone number
+
+Provide the signed-in customer's own mobile number when starting a call, if your
+backend supports the phone number field:
+
+```swift
+AttentiveAgentView(
+    apiKey: "YOUR_API_KEY",
+    agentID: "YOUR_AGENT_ID",
+    customerID: signedInCustomer.id,
+    phoneNumber: signedInCustomer.phoneNumber,
+    callerToken: { try await yourBackend.fetchCallerToken() }
+)
+```
+
+The headless `AttentiveCall` initializer accepts the same `phoneNumber`
+argument. It is optional. Use an 11-digit local number beginning with `0`,
+such as `08161540638`, or an international number beginning with `+` and
+8 to 15 digits, such as `+2348161540638`. Spaces and punctuation are not
+accepted. The field is sent only when a call starts, not when loading agent
+configuration. The matching server support must be deployed before sending
+this field. A phone number supplies caller context; it does not authenticate
+a customer or authorize a transaction.
 
 ## Your own UI
 
