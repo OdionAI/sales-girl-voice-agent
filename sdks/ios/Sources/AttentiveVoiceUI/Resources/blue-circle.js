@@ -148,7 +148,7 @@ vec3 softGamutMap(vec3 linearRgb) {
     
     if (C > maxChroma * 0.7) {
         float knee = maxChroma * 0.7;
-        C = knee + (maxChroma - knee) * tanh((C - knee) / (maxChroma - knee + 0.001));
+        C = knee + (maxChroma - knee) * tanh(min((C - knee) / (maxChroma - knee + 0.001), 6.0));
     }
     
     return clamp(oklabToLinear(vec3(L, C * cos(h), C * sin(h))), 0.0, 1.0);
@@ -372,6 +372,8 @@ export class BlueCircle extends HTMLElement {
     this.elapsed = 0;
     this.smoothedIntensity = 0;
     this.targetIntensity = 0;
+    this.orbScale = 1;
+    this.scaleVelocity = 0;
     this.applyColors();
     this.applyTexture();
     this.visible = false;
@@ -390,9 +392,8 @@ export class BlueCircle extends HTMLElement {
   }
   resize() {
     const ratio = Math.min(devicePixelRatio || 1, 2);
-    const bounds = this.getBoundingClientRect();
-    this.canvas.width = Math.max(1, Math.round(bounds.width * ratio));
-    this.canvas.height = Math.max(1, Math.round(bounds.height * ratio));
+    this.canvas.width = Math.max(1, Math.round(this.clientWidth * ratio));
+    this.canvas.height = Math.max(1, Math.round(this.clientHeight * ratio));
     this.gl.viewport(0, 0, this.canvas.width, this.canvas.height);
     this.gl.uniform2f(this.resolutionLocation, this.canvas.width, this.canvas.height);
     this.gl.uniform1f(this.pixelRatioLocation, ratio);
@@ -405,7 +406,14 @@ export class BlueCircle extends HTMLElement {
     cancelAnimationFrame(this.frame);
     this.frame = 0;
     this.lastTime = null;
-    if (!this.visible || document.hidden || this.motion.matches) return;
+    if (!this.visible || document.hidden || this.motion.matches || this.nativePaused) {
+      this.smoothedIntensity = 0;
+      this.orbScale = 1;
+      this.scaleVelocity = 0;
+      this.style.transform = "";
+      this.canvas.style.transform = "";
+      return;
+    }
     const tick = time => {
       if (this.lastTime !== null) {
         const delta = Math.min(time - this.lastTime, 100);
@@ -413,9 +421,21 @@ export class BlueCircle extends HTMLElement {
         const target = mode === "talking" ? this.intensity : 0;
         const response = target > this.smoothedIntensity ? 70 : 240;
         this.smoothedIntensity += (target - this.smoothedIntensity) * (1 - Math.exp(-delta / response));
-        const rate = mode === "listening" ? 0.28 : mode === "talking" ? 0.55 + this.smoothedIntensity * 3 : 1;
+        const rate = 0.28 + 0.27 * Math.min(1, this.smoothedIntensity / 0.1) + this.smoothedIntensity * 3;
         this.elapsed += delta * rate;
-        this.canvas.style.transform = mode === "talking" ? `scale(${1 + this.smoothedIntensity * 0.09})` : "";
+        this.canvas.style.transform = `scale(${1 + this.smoothedIntensity * 0.09})`;
+
+        // Drive both layers from the same smoothed audio and display clock.
+        // Advance the web caller's spring in small steps after a slower frame.
+        const targetScale = 1 + this.smoothedIntensity * 0.25;
+        const steps = Math.max(1, Math.ceil(delta * 0.12));
+        const stepSeconds = delta / (1000 * steps);
+        for (let i = 0; i < steps; i++) {
+          const acceleration = (300 * (targetScale - this.orbScale) - 22 * this.scaleVelocity) / 0.68;
+          this.scaleVelocity += acceleration * stepSeconds;
+          this.orbScale += this.scaleVelocity * stepSeconds;
+        }
+        this.style.transform = `scale(${this.orbScale})`;
       }
       this.lastTime = time;
       this.draw();
