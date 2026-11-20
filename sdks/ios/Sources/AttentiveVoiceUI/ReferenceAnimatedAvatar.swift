@@ -26,6 +26,8 @@ struct ReferenceAnimatedAvatar: View {
                     Color(.sRGB, red: Double((value >> 16) & 255) / 255,
                           green: Double((value >> 8) & 255) / 255, blue: Double(value & 255) / 255)
                 }, startPoint: .topLeading, endPoint: .bottomTrailing)
+                    .frame(width: CallerTheme.avatarDiameter, height: CallerTheme.avatarDiameter)
+                    .clipShape(Circle())
             }
             ReferenceShaderView(state: state, onReady: { available in
                 rendererFailed = !available
@@ -87,7 +89,8 @@ struct ReferenceShaderView: UIViewRepresentable {
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
     <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'">
     <style>html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent}
-    blue-circle{display:block;width:100%;height:100%}</style>
+    body{display:grid;place-items:center}
+    blue-circle{display:block;width:\(CallerTheme.avatarDiameter)px;height:\(CallerTheme.avatarDiameter)px;will-change:transform}</style>
     </head><body><blue-circle id="avatar"></blue-circle></body></html>
     """
 
@@ -97,16 +100,12 @@ struct ReferenceShaderView: UIViewRepresentable {
               let source = try? String(contentsOf: jsURL, encoding: .utf8),
               let image = try? Data(contentsOf: pngURL),
               source.contains("export class BlueCircle"),
-              source.contains("new URL('./fallback.png', import.meta.url)"),
-              source.contains("if (!this.visible || document.hidden || this.motion.matches) return;") else { return nil }
-        // The GLSL and visual timing remain unchanged. These adaptations allow the
-        // module and fallback image to run locally and honour native app lifecycle.
+              source.contains("new URL('./fallback.png', import.meta.url)") else { return nil }
+        // Load the shader module and fallback locally without network access.
         let bundled = source
             .replacingOccurrences(of: "export class BlueCircle", with: "class BlueCircle")
             .replacingOccurrences(of: "new URL('./fallback.png', import.meta.url)",
                                   with: "'data:image/png;base64,\(image.base64EncodedString())'")
-            .replacingOccurrences(of: "if (!this.visible || document.hidden || this.motion.matches) return;",
-                                  with: "if (!this.visible || document.hidden || this.motion.matches || this.nativePaused) return;")
         return bundled + """
 
         window.attentiveSetAnimation = function(state) {
