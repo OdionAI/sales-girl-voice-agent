@@ -718,6 +718,21 @@ impl Providers {
                     return Err("native-language TTS voice or PCM contract mismatch".into());
                 }
             }
+            if request.sample_rate == 48000 {
+                for (key, expected) in [
+                    ("x-audio-sample-rate", "48000"),
+                    ("x-sample-rate", "48000"),
+                    ("x-audio-channels", "1"),
+                    ("x-channels", "1"),
+                ]
+                {
+                    if let Some(actual) = response.headers().get(key) {
+                        if actual.to_str().ok() != Some(expected) {
+                            return Err("native-language TTS PCM contract mismatch".into());
+                        }
+                    }
+                }
+            }
             self.usage.tts_accepted(&request.text);
             let mut stream = response.bytes_stream();
             let mut carry = Vec::new();
@@ -725,7 +740,11 @@ impl Providers {
             let mut output_samples = 0usize;
             let mut chunks = 0usize;
             let mut first = true;
-            let mut resampler = (request.sample_rate != 24000).then(CallResampler::default);
+            let mut resampler = match request.sample_rate {
+                24000 => None,
+                16000 | 48000 => Some(CallResampler::new(request.sample_rate)),
+                _ => return Err("unsupported native-language TTS sample rate".into()),
+            };
             while let Some(chunk) = stream.next().await {
                 let chunk = chunk.map_err(|_| "native-language TTS stream failed")?;
                 received += chunk.len();
@@ -1157,23 +1176,40 @@ impl Asr {
         let _ = self.commands.send(AsrCommand::Recover).await;
     }
 }
-#[derive(Default)]
 struct CallResampler {
     resampler: livekit::webrtc::native::audio_resampler::AudioResampler,
     pending: Vec<i16>,
+    input_rate: u32,
+}
+impl Default for CallResampler {
+    fn default() -> Self {
+        Self::new(16000)
+    }
 }
 impl CallResampler {
+    fn new(input_rate: u32) -> Self {
+        Self {
+            resampler: Default::default(),
+            pending: Vec::new(),
+            input_rate,
+        }
+    }
     fn push(&mut self, pcm: Vec<i16>) -> Vec<i16> {
         self.pending.extend(pcm);
-        let count = self.pending.len() / 160 * 160;
+        let frame_size = (self.input_rate / 100) as usize;
+        let count = self.pending.len() / frame_size * frame_size;
         let tail = self.pending.split_off(count);
         let input = std::mem::replace(&mut self.pending, tail);
-        let mut output = Vec::with_capacity(count / 2 * 3);
-        for frame in input.as_chunks::<160>().0 {
-            output.extend_from_slice(
-                self.resampler
-                    .remix_and_resample(frame, 160, 1, 16000, 1, 24000),
-            );
+        let mut output = Vec::with_capacity(count * 24000 / self.input_rate as usize);
+        for frame in input.chunks_exact(frame_size) {
+            output.extend_from_slice(self.resampler.remix_and_resample(
+                frame,
+                frame_size as u32,
+                1,
+                self.input_rate,
+                1,
+                24000,
+            ));
         }
         output
     }
@@ -1182,8 +1218,8 @@ impl CallResampler {
         if count == 0 {
             return vec![];
         }
-        let mut output = self.push(vec![0; 160 - count]);
-        output.truncate((count * 3).div_ceil(2));
+        let mut output = self.push(vec![0; (self.input_rate / 100) as usize - count]);
+        output.truncate((count * 24000).div_ceil(self.input_rate as usize));
         output
     }
 }
@@ -1802,9 +1838,12 @@ mod native_language_wire_tests {
         let voice = body["voice"].as_str().unwrap_or("");
         let mut response = Response::builder()
             .status(StatusCode::OK)
-            .header("content-type", "audio/pcm")
-            .header("x-audio-sample-rate", "24000")
-            .header("x-audio-channels", "1");
+            .header("content-type", "audio/pcm");
+        if body["model"] != "voxcpm2" || fake.wrong_voice.load(Ordering::SeqCst) {
+            response = response
+                .header("x-audio-sample-rate", "24000")
+                .header("x-audio-channels", "1");
+        }
         if matches!(voice, "maro" | "rukky") {
             for (key, value) in [
                 (
@@ -1902,6 +1941,41 @@ mod native_language_wire_tests {
         server.abort();
     }
     #[tokio::test]
+    async fn voxcpm2_streams_headerless_pcm_and_rejects_conflicting_rate() {
+        let (mut p, fake, server) = setup("yo", "balogun").await;
+        let config = Arc::get_mut(&mut p.config).unwrap();
+        config.tts_model = "voxcpm2".into();
+        config.tts_voice = "voxcpm2-yoruba".into();
+        fake.hold.store(true, Ordering::SeqCst);
+        let (tx, mut rx) = mpsc::channel(8);
+        let task = tokio::spawn(async move { p.tts("Ẹ káàárọ̀.", 1, 1, &tx).await });
+        let mut pcm = tokio::time::timeout(Duration::from_secs(2), rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!task.is_finished());
+        fake.release.notify_one();
+        while let Some(part) = rx.recv().await {
+            pcm.extend(part);
+        }
+        task.await.unwrap().unwrap();
+        assert_eq!(pcm.len(), 2400);
+        let requests = fake.requests.lock().unwrap();
+        assert_eq!(requests[0]["voice"], "default");
+        assert_eq!(requests[0]["stream_format"], "audio");
+        drop(requests);
+        server.abort();
+        let (mut p, fake, server) = setup("yo", "balogun").await;
+        let config = Arc::get_mut(&mut p.config).unwrap();
+        config.tts_model = "voxcpm2".into();
+        config.tts_voice = "voxcpm2-yoruba".into();
+        fake.wrong_voice.store(true, Ordering::SeqCst);
+        let (tx, mut rx) = mpsc::channel(8);
+        assert!(p.tts("Ẹ káàárọ̀.", 1, 1, &tx).await.is_err());
+        assert!(rx.try_recv().is_err());
+        server.abort();
+    }
+    #[tokio::test]
     async fn wrong_dynamic_voice_is_rejected_before_pcm_and_cancellation_stops_later_segments() {
         let (p, fake, server) = setup("pcm", "maro").await;
         fake.wrong_voice.store(true, Ordering::SeqCst);
@@ -1934,6 +2008,26 @@ mod native_language_wire_tests {
         assert_eq!(full.len(), (input.len() * 3).div_ceil(2));
         for size in [1, 73, 160, 1600, 2401] {
             let mut resampler = CallResampler::default();
+            let mut actual = Vec::new();
+            for part in input.chunks(size) {
+                actual.extend(resampler.push(part.to_vec()));
+            }
+            actual.extend(resampler.finish());
+            assert_eq!(actual, full);
+            assert!(resampler.finish().is_empty());
+        }
+    }
+    #[test]
+    fn voxcpm2_resampling_preserves_duration_and_packet_boundaries() {
+        let input = (0..48079)
+            .map(|i| ((i as f64 * 0.05).sin() * 1000.0) as i16)
+            .collect::<Vec<_>>();
+        let mut expected = CallResampler::new(48000);
+        let mut full = expected.push(input.clone());
+        full.extend(expected.finish());
+        assert_eq!(full.len(), input.len().div_ceil(2));
+        for size in [1, 73, 480, 1600, 2401] {
+            let mut resampler = CallResampler::new(48000);
             let mut actual = Vec::new();
             for part in input.chunks(size) {
                 actual.extend(resampler.push(part.to_vec()));

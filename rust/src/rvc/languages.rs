@@ -5,6 +5,22 @@ use serde_json::Value;
 use std::sync::OnceLock;
 pub const SBPN_MODEL: &str = "ogunlao/SBPN_multilingual_base";
 pub const SBPN_LARGE_MODEL: &str = "ogunlao/SBPN_multilingual_large";
+const VOXCPM2_VOICE: &str = "voxcpm2-yoruba";
+const VOXCPM2_MODEL: &str = "voxcpm2";
+fn voxcpm2_url(url: &str) -> Result<String, String> {
+    let parsed = reqwest::Url::parse(url).map_err(|_| "invalid VoxCPM2 route")?;
+    let loopback = matches!(parsed.host_str(), Some("127.0.0.1" | "::1" | "localhost"));
+    if !(parsed.scheme() == "https" || parsed.scheme() == "http" && loopback)
+        || parsed.host_str().is_none()
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.query().is_some()
+        || parsed.fragment().is_some()
+    {
+        return Err("VoxCPM2 requires HTTPS or a local secure tunnel".into());
+    }
+    Ok(url.into())
+}
 pub fn data() -> &'static Value {
     static DATA: OnceLock<Value> = OnceLock::new();
     DATA.get_or_init(|| {
@@ -200,7 +216,18 @@ pub fn apply(config: &mut Config, context: &AgentContext, overrides: &Value) -> 
         config.tts_model = text(profile, "model").into();
         config.tts_voice = text(profile, "voice").into();
         config.tts_url = gateway(config, text(profile, "url"))?;
-        if language == "ig" && std::env::var("ODION_CHINEDU_IGBO").as_deref() == Ok("1") {
+        if language == "yo"
+            && [requested, saved]
+                .into_iter()
+                .find(|v| !v.is_empty())
+                .is_some_and(|v| v.trim().eq_ignore_ascii_case(VOXCPM2_VOICE))
+        {
+            let url = std::env::var("ODION_YORUBA_VOXCPM2_URL")
+                .map_err(|_| "VoxCPM2 route is not configured")?;
+            config.tts_model = VOXCPM2_MODEL.into();
+            config.tts_voice = VOXCPM2_VOICE.into();
+            config.tts_url = voxcpm2_url(&url)?;
+        } else if language == "ig" && std::env::var("ODION_CHINEDU_IGBO").as_deref() == Ok("1") {
             config.tts_model = "igbo-ljspeech-vits-epoch236".into();
             config.tts_voice = "chinedu".into();
             config.tts_seed = "17".into();
@@ -404,7 +431,11 @@ pub fn tts_requests(config: &Config, input: &str) -> Result<Vec<TtsRequest>, Str
             std::collections::HashMap::from([("content-type".into(), "audio/pcm".into())]);
         let mut timeout = 60.0;
         let mut sample_rate = 24000;
-        if code == "pcm" && !dynamic {
+        if code == "yo" && config.tts_model == VOXCPM2_MODEL && config.tts_voice == VOXCPM2_VOICE {
+            body["voice"] = serde_json::json!("default");
+            body["stream_format"] = serde_json::json!("audio");
+            sample_rate = 48000;
+        } else if code == "pcm" && !dynamic {
             body["model"] = values["ejiro_model"].clone();
             body["voice"] = values["pidgin_voice"].clone();
             body["seed"] = serde_json::json!(17);
@@ -527,6 +558,51 @@ mod tests {
     }
     fn config() -> Config {
         serde_json::from_str(include_str!("../../fixtures/reference-config.json")).unwrap()
+    }
+    #[test]
+    fn voxcpm2_request_uses_its_own_pcm_contract() {
+        let mut c = config();
+        c.tts_language = "Yoruba".into();
+        c.tts_model = VOXCPM2_MODEL.into();
+        c.tts_voice = VOXCPM2_VOICE.into();
+        let requests = tts_requests(&c, "Ẹ káàbọ̀.").unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].body["model"], "voxcpm2");
+        assert_eq!(requests[0].body["voice"], "default");
+        assert_eq!(requests[0].body["stream_format"], "audio");
+        assert_eq!(requests[0].sample_rate, 48000);
+        assert_eq!(requests[0].headers.len(), 1);
+        assert_eq!(requests[0].headers["content-type"], "audio/pcm");
+    }
+    #[test]
+    fn voxcpm2_rejects_unprotected_remote_and_credential_urls() {
+        assert!(voxcpm2_url("http://10.205.50.7:8110/v1/audio/speech").is_err());
+        assert!(voxcpm2_url("https://user:pass@example.com/tts").is_err());
+        assert!(voxcpm2_url("https://example.com/tts?key=secret").is_err());
+        assert!(voxcpm2_url("http://127.0.0.1:18110/v1/audio/speech").is_ok());
+        assert!(voxcpm2_url("https://gateway.example.com/v1/audio/speech").is_ok());
+    }
+    #[test]
+    fn voxcpm2_saved_voice_keeps_yoruba_asr_while_selecting_private_tts() {
+        let original = std::env::var_os("ODION_YORUBA_VOXCPM2_URL");
+        std::env::set_var("ODION_YORUBA_VOXCPM2_URL", "http://127.0.0.1:18110/v1/audio/speech");
+        let context = AgentContext {
+            tts_language_hint: "Yoruba".into(),
+            tts_voice_id: "voxcpm2-yoruba".into(),
+            ..Default::default()
+        };
+        let mut selected = config();
+        let result = apply(&mut selected, &context, &serde_json::json!({}));
+        if let Some(value) = original {
+            std::env::set_var("ODION_YORUBA_VOXCPM2_URL", value);
+        } else {
+            std::env::remove_var("ODION_YORUBA_VOXCPM2_URL");
+        }
+        result.unwrap();
+        assert_eq!(selected.tts_voice, "voxcpm2-yoruba");
+        assert_eq!(selected.tts_model, "voxcpm2");
+        assert_eq!(selected.tts_url, "http://127.0.0.1:18110/v1/audio/speech");
+        assert_eq!(selected.stt_model, SBPN_MODEL);
     }
     #[test]
     fn native_yoruba_uses_stable_model_alias_for_saved_balogun() {
