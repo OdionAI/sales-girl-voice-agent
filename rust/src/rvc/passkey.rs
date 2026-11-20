@@ -172,6 +172,7 @@ enum State {
 struct Private {
     state: State,
     device: Option<String>,
+    phone: Option<String>,
 }
 struct Inner {
     config: Config,
@@ -237,6 +238,7 @@ impl Flow {
             state: Mutex::new(Private {
                 state: State::Idle,
                 device: None,
+                phone: None,
             }),
             emit,
             deliver,
@@ -433,6 +435,15 @@ impl Flow {
         );
         result("ceremony_started","I've sent the approval to your app. Please confirm it with your Face ID, then I'll finish it.")
     }
+    /// Caller phone number from the latest session_context message, if the SDK
+    /// supplied one. Available from call start, not only during the ceremony.
+    pub(crate) fn phone(&self) -> Option<String> {
+        self.0
+            .state
+            .lock()
+            .ok()
+            .and_then(|private| private.phone.clone())
+    }
     pub(crate) fn receive(&self, raw: &[u8]) -> Inbound {
         if raw.len() > MAX_BYTES {
             return Inbound::Ignore;
@@ -454,11 +465,16 @@ impl Flow {
                 .as_str()
                 .filter(|s| !s.trim().is_empty() && s.len() <= 512)
                 .map(str::to_string);
+            private.phone = value["phoneNumber"]
+                .as_str()
+                .map(str::trim)
+                .filter(|s| !s.is_empty() && s.len() <= 24 && s.chars().all(|c| c.is_ascii_digit() || c == '+'))
+                .map(str::to_string);
             self.0.trace.emit(
                 "passkey_session_context",
                 0,
                 0,
-                json!({"device_present":private.device.is_some()}),
+                json!({"device_present":private.device.is_some(),"phone_present":private.phone.is_some()}),
             );
             return Inbound::Ignore;
         }
