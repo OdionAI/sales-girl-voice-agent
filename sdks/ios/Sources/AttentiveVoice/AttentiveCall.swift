@@ -65,7 +65,8 @@ public final class AttentiveCall: ObservableObject {
             authorizer = UnavailablePasskeyAuthorizer()
             #endif
         }
-        return PasskeyCoordinator(configuration: passkeyConfiguration, authorizer: authorizer, diagnostics: passkeyDiagnostics,
+        return PasskeyCoordinator(configuration: passkeyConfiguration, authorizer: authorizer,
+            phoneNumber: sdkClient?.phoneNumber, diagnostics: passkeyDiagnostics,
             send: { [weak self] data in
                 guard let self, let transport = self.transport, self.attempt != nil else { throw PasskeyFailure.unavailable }
                 try await transport.sendPasskeyMessage(data)
