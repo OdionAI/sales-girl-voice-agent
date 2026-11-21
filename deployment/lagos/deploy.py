@@ -18,6 +18,12 @@ PROJECT = 'odion-recovery-lagos'
 CONTAINER = 'odion-recovery-lagos-voice-1'
 RELEASE_ROOT = Path('/opt/attentive/releases/voice-ci')
 HAUSA_RESEARCH_KEY = 'RVC_LAB_ENABLE_HAUSA_TWB_VOICES'
+# Huawei MaaS (ModelArts) serves DeepSeek v4.1-flash on an OpenAI-compatible
+# /v2 endpoint; the direct api.deepseek.com account is unfunded. Both values
+# stay overridable per deploy (vars.RVC_LAB_DEEPSEEK_*), but these defaults keep
+# a plain main push from reverting the worker to the dead endpoint.
+DEFAULT_DEEPSEEK_BASE_URL = 'https://api-ap-southeast-1.modelarts-maas.com/v2'
+DEFAULT_DEEPSEEK_MODEL = 'deepseek-v4.1-flash'
 REPLY_GRACE_MS_KEY = 'RVC_LAB_REPLY_GRACE_MS'
 REPLY_GRACE_AGENT_IDS_KEY = 'RVC_LAB_REPLY_GRACE_AGENT_IDS'
 INACTIVITY_PILOT_AGENT_IDS_KEY = 'RVC_LAB_INACTIVITY_PILOT_AGENT_IDS'
@@ -403,9 +409,10 @@ def inactivity_pilot_env(agent_ids=None):
 
 def deploy(release, revision, enable_hausa_research=False, momo_feedback_agent_id='',
            reply_grace_ms='0', reply_grace_agent_ids='', llm_provider='qwen',
-           deepseek_model='deepseek-flash', deepseek_reasoning_effort='high',
+           deepseek_model=DEFAULT_DEEPSEEK_MODEL, deepseek_reasoning_effort='high',
            deepseek_api_key='', inactivity_pilot_agent_ids=None,
-           balogun_number_capture_enabled=False):
+           balogun_number_capture_enabled=False,
+           deepseek_base_url=DEFAULT_DEEPSEEK_BASE_URL):
     if not re.fullmatch(r'[0-9a-f]{40}', revision):
         raise ValueError('Expected a full Git commit SHA')
     if (release.parent != RELEASE_ROOT
@@ -453,8 +460,11 @@ def deploy(release, revision, enable_hausa_research=False, momo_feedback_agent_i
             raise ValueError('DeepSeek reasoning effort must be low, high, or max')
         if not str(deepseek_api_key).strip():
             raise ValueError('DeepSeek API key is required when DeepSeek is selected')
+        base_url = str(deepseek_base_url).strip().rstrip('/')
+        if not re.fullmatch(r'https?://[^\s]{4,300}', base_url):
+            raise ValueError('Invalid DeepSeek/MaaS base URL')
         updates.update({
-            'RVC_LAB_DEEPSEEK_BASE_URL': 'https://api.deepseek.com',
+            'RVC_LAB_DEEPSEEK_BASE_URL': base_url,
             'RVC_LAB_DEEPSEEK_MODEL': model,
             'RVC_LAB_DEEPSEEK_THINKING': 'false',
             'RVC_LAB_DEEPSEEK_REASONING_EFFORT': effort,
@@ -561,7 +571,8 @@ if __name__ == '__main__':
     parser.add_argument('--reply-grace-agent-ids', default='')
     parser.add_argument('--inactivity-pilot-agent-ids')
     parser.add_argument('--llm-provider', default='qwen')
-    parser.add_argument('--deepseek-model', default='deepseek-flash')
+    parser.add_argument('--deepseek-model', default=DEFAULT_DEEPSEEK_MODEL)
+    parser.add_argument('--deepseek-base-url', default=DEFAULT_DEEPSEEK_BASE_URL)
     parser.add_argument('--deepseek-reasoning-effort', default='high')
     parser.add_argument('--deepseek-api-key-stdin', action='store_true')
     parser.add_argument('--balogun-number-capture-enabled', action='store_true')
@@ -594,4 +605,5 @@ if __name__ == '__main__':
                    args.reply_grace_agent_ids, args.llm_provider,
                    args.deepseek_model, args.deepseek_reasoning_effort,
                    deepseek_api_key, args.inactivity_pilot_agent_ids,
-                   balogun_number_capture_enabled=args.balogun_number_capture_enabled)
+                   balogun_number_capture_enabled=args.balogun_number_capture_enabled,
+                   deepseek_base_url=args.deepseek_base_url)

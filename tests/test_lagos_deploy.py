@@ -34,7 +34,8 @@ BASE_ROUTE = {
 class LagosReleaseTests(unittest.TestCase):
     def exercise_release(self, *, enabled=False, old_value=None, drift=False,
                          reply_grace_ms='0', reply_grace_agent_ids='',
-                         llm_provider='qwen', deepseek_api_key=''):
+                         llm_provider='qwen', deepseek_api_key='',
+                         deepseek_model=None):
         with TemporaryDirectory() as directory:
             root = Path(directory)
             revision = 'a' * 40
@@ -78,8 +79,8 @@ class LagosReleaseTests(unittest.TestCase):
             updates['RVC_LAB_DEEPSEEK_API_KEY'] = deepseek_api_key if llm_provider == 'deepseek' else ''
             if llm_provider == 'deepseek':
                 updates.update({
-                    'RVC_LAB_DEEPSEEK_BASE_URL': 'https://api.deepseek.com',
-                    'RVC_LAB_DEEPSEEK_MODEL': 'deepseek-flash',
+                    'RVC_LAB_DEEPSEEK_BASE_URL': release.DEFAULT_DEEPSEEK_BASE_URL,
+                    'RVC_LAB_DEEPSEEK_MODEL': deepseek_model or release.DEFAULT_DEEPSEEK_MODEL,
                     'RVC_LAB_DEEPSEEK_THINKING': 'false',
                     'RVC_LAB_DEEPSEEK_REASONING_EFFORT': 'high',
                     'RVC_LAB_DEEPSEEK_API_KEY': deepseek_api_key,
@@ -120,7 +121,7 @@ class LagosReleaseTests(unittest.TestCase):
                     with self.assertRaisesRegex(RuntimeError, 'environment or mounts'):
                         release.deploy(target, revision, enabled, AGENT_ID,
                                        reply_grace_ms, reply_grace_agent_ids,
-                                       llm_provider, 'deepseek-flash', 'high', deepseek_api_key)
+                                       llm_provider, deepseek_model or release.DEFAULT_DEEPSEEK_MODEL, 'high', deepseek_api_key)
                     self.assertFalse((target / 'DEPLOYED').exists())
                     rollback = json.loads((target / 'voice-rollback.json').read_text())
                     rollback_env = {key: previous_env.get(key) for key in updates}
@@ -138,7 +139,7 @@ class LagosReleaseTests(unittest.TestCase):
                 else:
                     release.deploy(target, revision, enabled, AGENT_ID,
                                    reply_grace_ms, reply_grace_agent_ids,
-                                   llm_provider, 'deepseek-flash', 'high', deepseek_api_key)
+                                   llm_provider, deepseek_model or release.DEFAULT_DEEPSEEK_MODEL, 'high', deepseek_api_key)
                     self.assertTrue((target / 'DEPLOYED').exists())
                 override = json.loads((target / 'voice-ci.json').read_text())['services']['voice']
                 self.assertEqual(override.get('environment', {}), previous_env | updates)
