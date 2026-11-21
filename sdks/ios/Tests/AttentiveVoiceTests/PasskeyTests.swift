@@ -242,9 +242,26 @@ final class PasskeyCoordinatorTests: XCTestCase {
     func testAbsentDeviceIdentifierIsExplicitNullAndDisabledSendsNothing() async throws {
         let fixture = PasskeyFixture(); try await fixture.ready()
         XCTAssertEqual(fixture.messages.first?["deviceImei"], .null)
+        XCTAssertNil(fixture.messages.first?["phoneNumber"])
         fixture.coordinator.suspend()
-        let disabled = PasskeyCoordinator(configuration: .disabled, authorizer: FakePasskeyAuthorizer(), send: { _ in XCTFail() }, status: { _ in XCTFail() })
+        let disabled = PasskeyCoordinator(configuration: .disabled, authorizer: FakePasskeyAuthorizer(),
+                                          phoneNumber: "08000000000", send: { _ in XCTFail() }, status: { _ in XCTFail() })
         disabled.receive(.ready); disabled.receive(.message(Data()))
+    }
+
+    func testConnectionContextIncludesPhoneNumberAlongsideDeviceIdentifier() async throws {
+        for phoneNumber in ["08000000000", "+2348000000000"] {
+            let fixture = PasskeyFixture(phoneNumber: phoneNumber, deviceIdentifier: "test-device")
+            defer { fixture.coordinator.suspend() }
+            try await fixture.ready()
+            XCTAssertEqual(fixture.messages, [[
+                "type": .string("session_context"),
+                "correlationId": .string(fixture.context),
+                "deviceImei": .string("test-device"),
+                "phoneNumber": .string(phoneNumber),
+            ]])
+            XCTAssertEqual(fixture.authorizer.requests, 0)
+        }
     }
 }
 
@@ -259,15 +276,24 @@ private func ceremonyPayload(expiry: Date = Date().addingTimeInterval(60)) -> [S
 @MainActor
 private final class PasskeyFixture {
     let authorizer = FakePasskeyAuthorizer()
+    let phoneNumber: String?
+    let deviceIdentifier: String?
     var messages: [[String: JSONValue]] = []
     var statuses: [AuthenticationStatus.Status] = []
     var context = ""
     var failSend = false
-    lazy var coordinator = PasskeyCoordinator(configuration: .init(relyingPartyIdentifiers: ["auth.example.com"]), authorizer: authorizer,
+    lazy var coordinator = PasskeyCoordinator(
+        configuration: .init(relyingPartyIdentifiers: ["auth.example.com"], deviceIdentifier: deviceIdentifier),
+        authorizer: authorizer, phoneNumber: phoneNumber,
         send: { [unowned self] data in
             if failSend { throw PasskeyFailure.unavailable }
             messages.append(try JSONDecoder().decode([String: JSONValue].self, from: data))
         }, status: { [unowned self] in statuses.append($0) })
+    init(phoneNumber: String? = nil, deviceIdentifier: String? = nil) {
+        self.phoneNumber = phoneNumber
+        self.deviceIdentifier = deviceIdentifier
+    }
+
     func ready() async throws {
         let count = messages.count
         coordinator.receive(.ready)

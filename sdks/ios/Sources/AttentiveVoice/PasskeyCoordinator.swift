@@ -20,6 +20,7 @@ final class PasskeyCoordinator {
     private enum Phase { case prompting, awaitingVerification }
     private let configuration: AttentivePasskeyConfiguration
     private let authorizer: any PasskeyAuthorizing
+    private let phoneNumber: String?
     private let diagnostics: PasskeyDiagnostics?
     private let send: (Data) async throws -> Void
     private let status: (AuthenticationStatus.Status) -> Void
@@ -31,9 +32,11 @@ final class PasskeyCoordinator {
     private var timeout: Task<Void, Never>?
     private var contextWork: Task<Void, Never>?
 
-    init(configuration: AttentivePasskeyConfiguration, authorizer: any PasskeyAuthorizing, diagnostics: PasskeyDiagnostics? = nil,
+    init(configuration: AttentivePasskeyConfiguration, authorizer: any PasskeyAuthorizing,
+         phoneNumber: String? = nil, diagnostics: PasskeyDiagnostics? = nil,
          send: @escaping (Data) async throws -> Void, status: @escaping (AuthenticationStatus.Status) -> Void) {
         self.configuration = configuration; self.authorizer = authorizer; self.send = send; self.status = status
+        self.phoneNumber = phoneNumber
         self.diagnostics = diagnostics
     }
 
@@ -48,8 +51,11 @@ final class PasskeyCoordinator {
             contextWork = Task { [weak self] in
                 guard let self else { return }
                 do {
-                    try await self.emit(type: "session_context", correlation: connection.uuidString, additional: [
-                        "deviceImei": self.configuration.deviceIdentifier.map(JSONValue.string) ?? .null])
+                    var context: [String: JSONValue] = [
+                        "deviceImei": self.configuration.deviceIdentifier.map(JSONValue.string) ?? .null,
+                    ]
+                    if let phoneNumber = self.phoneNumber { context["phoneNumber"] = .string(phoneNumber) }
+                    try await self.emit(type: "session_context", correlation: connection.uuidString, additional: context)
                     self.diagnostics?.record(.context, .succeeded)
                 } catch {
                     guard self.connectionID == connection else { return }
