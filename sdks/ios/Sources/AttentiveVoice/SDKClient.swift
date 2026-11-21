@@ -14,7 +14,7 @@ struct SDKClient: Sendable, CustomStringConvertible, CustomDebugStringConvertibl
     private let apiKey: String
     private let agentID: String
     private let customerID: String?
-    private let phoneNumber: String?
+    let phoneNumber: String?
     private let voiceLanguage: VoiceAccent?
     private let voiceGender: VoiceGender?
     private let session: URLSession
