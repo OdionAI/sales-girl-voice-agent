@@ -124,12 +124,25 @@ final class RealtimeCallTransport: NSObject, CallTransport {
     private func updatePasskeyPeer() {
         guard passkeysEnabled, transportConnected, !closing else { return }
         let agents = room.remoteParticipants.values.filter { $0.kind == .agent }
-        let peer = agents.count == 1 ? agents.first?.identity : nil
-        if peer == nil { passkeyDiagnostics?.record(.connection, .ignored, reason: .unavailable) }
-        guard peer != passkeyPeer else { return }
-        if passkeyPeer != nil { onPasskeyEvent?(.unavailable) }
-        passkeyPeer = peer
-        if peer != nil { onPasskeyEvent?(.ready) }
+        let agent = agents.count == 1 ? agents.first : nil
+        if let passkeyPeer {
+            guard passkeyPeer != agent?.identity else { return }
+            self.passkeyPeer = nil
+            onPasskeyEvent?(.unavailable)
+        }
+        guard let agent, let identity = agent.identity else {
+            passkeyDiagnostics?.record(.connection, .ignored, reason: .unavailable)
+            return
+        }
+
+        // The agent can join the room before its call loop is ready to receive context.
+        switch AgentState(rawValue: agent.attributes["lk.agent.state"] ?? "") {
+        case .listening, .thinking, .speaking:
+            passkeyPeer = identity
+            onPasskeyEvent?(.ready)
+        default:
+            break
+        }
     }
 
     func setAudioInputConfiguration(_ configuration: AttentiveAudioInputConfiguration) async throws {
