@@ -30,6 +30,7 @@ from livekit.agents import llm, stt
 from livekit.agents._exceptions import APIConnectionError, APIStatusError
 from livekit.agents.llm import LLMStream
 from livekit.agents.llm.tool_context import find_function_tools
+from livekit.agents.voice.agent_activity import AgentActivity
 from livekit.plugins import deepgram, google, groq, openai, silero
 
 from agent.conversation_memory import (
@@ -1776,6 +1777,11 @@ _RUNTIME_OVERRIDE_KEYS = (
     "llm_base_url",
     "llm_api_key",
     "llm_disable_thinking",
+    "voice_lab_pattern",
+    "turn_preemptive_generation",
+    "turn_preemptive_tts",
+    "turn_preemptive_max_retries",
+    "turn_preemptive_max_speech_duration",
 )
 
 
@@ -1788,6 +1794,113 @@ def _normalize_runtime_overrides(raw: Any) -> dict[str, str]:
         if value:
             normalized[key] = value
     return normalized
+
+
+def _override_bool(overrides: dict[str, str], key: str, default: bool | None = None) -> bool | None:
+    raw = str((overrides or {}).get(key) or "").strip().lower()
+    if raw in {"1", "true", "yes", "on"}:
+        return True
+    if raw in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
+def _preemptive_generation_options(userdata: dict[str, Any] | None) -> dict[str, Any]:
+    overrides = _normalize_runtime_overrides((userdata or {}).get("runtime_overrides"))
+    enabled = _override_bool(overrides, "turn_preemptive_generation", True)
+    preemptive_tts = _override_bool(overrides, "turn_preemptive_tts", False) or False
+    try:
+        max_retries = int(str(overrides.get("turn_preemptive_max_retries") or "3").strip() or "3")
+    except ValueError:
+        max_retries = 3
+    try:
+        max_speech_duration = float(
+            str(overrides.get("turn_preemptive_max_speech_duration") or "10").strip() or "10"
+        )
+    except ValueError:
+        max_speech_duration = 10.0
+    return {
+        "enabled": bool(enabled),
+        "preemptive_tts": bool(preemptive_tts),
+        "max_retries": max(1, max_retries),
+        "max_speech_duration": max(1.0, max_speech_duration),
+    }
+
+
+def _publish_preemptive_from_activity(activity: Any, event: str, **values: Any) -> None:
+    session = getattr(activity, "_session", None)
+    userdata = getattr(session, "userdata", None) if session is not None else None
+    if not isinstance(userdata, dict):
+        return
+    transcript = str(values.get("transcript") or "")[:160]
+    logger.info(
+        "[PREEMPTIVE] event=%s transcript=%s extra=%s",
+        event,
+        transcript,
+        {key: value for key, value in values.items() if key != "transcript"},
+    )
+    if event == "preemptive_start":
+        userdata["preemptive_pending"] = True
+    elif event in {"preemptive_release", "preemptive_discard"}:
+        userdata["preemptive_pending"] = False
+    publisher = userdata.get("_publish_voice_lab_metric")
+    if callable(publisher):
+        publisher(event, **values)
+
+
+def _install_preemptive_voice_lab_hooks() -> None:
+    if getattr(AgentActivity.on_preemptive_generation, "_voice_lab_wrapped", False):
+        return
+
+    original_preemptive = AgentActivity.on_preemptive_generation
+    original_cancel = AgentActivity._cancel_preemptive_generation
+    original_schedule = AgentActivity._schedule_speech
+
+    def wrapped_preemptive(self: Any, info: Any) -> None:
+        original_preemptive(self, info)
+        current = getattr(self, "_preemptive_generation", None)
+        transcript = str(getattr(info, "new_transcript", "") or "")
+        if current is None:
+            return
+        _publish_preemptive_from_activity(
+            self,
+            "preemptive_start",
+            transcript=transcript,
+            attempt=int(getattr(self, "_preemptive_generation_count", 0) or 0),
+        )
+
+    def wrapped_cancel(self: Any) -> None:
+        current = getattr(self, "_preemptive_generation", None)
+        if current is not None:
+            info = getattr(current, "info", None)
+            _publish_preemptive_from_activity(
+                self,
+                "preemptive_discard",
+                reason="cancelled",
+                transcript=str(getattr(info, "new_transcript", "") or ""),
+            )
+        original_cancel(self)
+
+    def wrapped_schedule(self: Any, speech: Any, priority: int, force: bool = False) -> Any:
+        current = getattr(self, "_preemptive_generation", None)
+        if current is not None and getattr(current, "speech_handle", None) is speech:
+            created_at = float(getattr(current, "created_at", 0.0) or time.time())
+            info = getattr(current, "info", None)
+            _publish_preemptive_from_activity(
+                self,
+                "preemptive_release",
+                lead_ms=round((time.time() - created_at) * 1000, 1),
+                transcript=str(getattr(info, "new_transcript", "") or ""),
+            )
+        return original_schedule(self, speech, priority, force=force)
+
+    wrapped_preemptive._voice_lab_wrapped = True
+    AgentActivity.on_preemptive_generation = wrapped_preemptive
+    AgentActivity._cancel_preemptive_generation = wrapped_cancel
+    AgentActivity._schedule_speech = wrapped_schedule
+
+
+_install_preemptive_voice_lab_hooks()
 
 
 WEB_METADATA_WAIT_SECONDS = 3
@@ -2156,7 +2269,13 @@ def _wire_session_timeline(
             or 0
         )
         if not turn_id or turn_index <= 0:
-            return
+            if str(event).startswith("preemptive_"):
+                turn_id = turn_id or f"turn-preemptive-{int(time.time() * 1000)}"
+                turn_index = turn_index if turn_index > 0 else max(
+                    1, int(userdata.get("turn_index") or 1)
+                )
+            else:
+                return
         payload = {
             "type": "odion.voice_lab.metric",
             "event": event,
@@ -2182,6 +2301,29 @@ def _wire_session_timeline(
                 )
 
         _track_background_task(userdata, _publish())
+
+    userdata["_publish_voice_lab_metric"] = _publish_voice_lab_metric
+    if voice_lab_metrics_enabled:
+        preemptive = _preemptive_generation_options(userdata)
+        overrides = _runtime_overrides_from_userdata(userdata)
+        logger.info(
+            "Voice Lab turn pattern: stt=%s model=%s pattern=%s preemptive=%s preemptive_tts=%s",
+            overrides.get("stt_provider") or "default",
+            overrides.get("stt_model") or "default",
+            overrides.get("voice_lab_pattern") or "manual",
+            preemptive["enabled"],
+            preemptive["preemptive_tts"],
+        )
+        _publish_voice_lab_metric(
+            "preemptive_config",
+            enabled=preemptive["enabled"],
+            preemptive_tts=preemptive["preemptive_tts"],
+            max_retries=preemptive["max_retries"],
+            max_speech_duration=preemptive["max_speech_duration"],
+            pattern=str(overrides.get("voice_lab_pattern") or ""),
+            stt_provider=str(overrides.get("stt_provider") or ""),
+            stt_model=str(overrides.get("stt_model") or ""),
+        )
 
     async def _update_live_agent_instructions(instructions: str) -> None:
         current_agent = getattr(session, "current_agent", None)
@@ -2302,6 +2444,9 @@ def _wire_session_timeline(
                 int(getattr(metrics, "completion_tokens", 0) or 0),
                 bool(getattr(metrics, "cancelled", False)),
             )
+            if bool(getattr(metrics, "cancelled", False)) and userdata.get("preemptive_pending"):
+                userdata["preemptive_pending"] = False
+                _publish_voice_lab_metric("preemptive_discard", reason="regenerated")
             if llm_ttft_ms > 0 and not bool(getattr(metrics, "cancelled", False)):
                 _publish_voice_lab_metric(
                     "llm_first_token",
@@ -3766,6 +3911,7 @@ def _build_session_for_language(
     session_vad = (
         odion_stt.endpointing_vad if isinstance(odion_stt, OdionSTT) else None
     )
+    preemptive = _preemptive_generation_options(userdata)
     turn_handling = TurnHandlingOptions(
         endpointing=EndpointingOptions(
             min_delay=TURN_MIN_ENDPOINTING_DELAY,
@@ -3779,6 +3925,14 @@ def _build_session_for_language(
             resume_false_interruption=False,
             false_interruption_timeout=None,
         ),
+        preemptive_generation=preemptive,
+    )
+    logger.info(
+        "AgentSession turn handling: preemptive=%s preemptive_tts=%s max_retries=%s max_speech=%.1fs",
+        preemptive["enabled"],
+        preemptive["preemptive_tts"],
+        preemptive["max_retries"],
+        preemptive["max_speech_duration"],
     )
     session_options: dict[str, Any] = {
         "stt": stt_engine,
@@ -3953,6 +4107,8 @@ def _build_stt_engine_for_language(*, language: str, userdata: dict[str, Any]) -
     stt_kwargs: dict[str, Any] = {
         "language": _deepgram_stt_language_for_language(lang),
         "model": model,
+        "interim_results": True,
+        "no_delay": True,
     }
     if provider == "custom" and base_url:
         stt_kwargs["base_url"] = base_url

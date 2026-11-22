@@ -12,3 +12,4 @@ SQLAlchemy>=2.0.0
 httpx>=0.28.0
 langfuse>=3.0.0
 speechbrain>=1.0.0
+onnxruntime>=1.17.0

@@ -14,10 +14,16 @@ logger = logging.getLogger(__name__)
 DEFAULT_SAMPLE_RATE = 16000
 DEFAULT_THRESHOLD = 0.85
 ECAPA_THRESHOLD = 0.4
+WEMA_DEFAULT_THRESHOLD = 0.60
 MIN_SECONDS = 1.2
 EMBED_BANDS = 40
 PITCH_BINS = 24
+# Wema/ALAT parity: the bank's flow rejects clips shorter than 1 second and
+# keeps up to three enrolled voiceprints per voice profile.
+WEMA_MIN_SECONDS = 1.0
+MAX_WEMA_PRINTS = 3
 _encoder = None
+_wema = None
 
 
 def voice_auth_root() -> Path:
@@ -38,7 +44,13 @@ def voice_auth_db_path() -> Path:
 
 def voice_auth_threshold() -> float:
     raw = str(os.getenv("VOICE_AUTH_COSINE_THRESHOLD") or "").strip()
-    default = ECAPA_THRESHOLD if voice_auth_embedder() == "ecapa" else DEFAULT_THRESHOLD
+    embedder = voice_auth_embedder()
+    if embedder == "wema":
+        default = WEMA_DEFAULT_THRESHOLD
+    elif embedder == "ecapa":
+        default = ECAPA_THRESHOLD
+    else:
+        default = DEFAULT_THRESHOLD
     try:
         value = float(raw) if raw else default
     except ValueError:
@@ -48,7 +60,7 @@ def voice_auth_threshold() -> float:
 
 def voice_auth_embedder() -> str:
     raw = str(os.getenv("VOICE_AUTH_EMBEDDER") or "").strip().lower()
-    if raw in {"ecapa", "numpy"}:
+    if raw in {"ecapa", "numpy", "wema"}:
         return raw
     try:
         import speechbrain  # noqa: F401
@@ -56,6 +68,35 @@ def voice_auth_embedder() -> str:
     except Exception:
         return "numpy"
     return "ecapa"
+
+
+def _wema_engine():
+    """Lazy handle to the Wema/ALAT ONNX pipeline (denoiser + speaker encoder)."""
+    global _wema
+    if _wema is None:
+        try:
+            from . import wema_voiceprint as module
+        except ImportError:  # loaded as a standalone module (tests/tools)
+            import wema_voiceprint as module
+
+        _wema = module
+    return _wema
+
+
+def _wema_store():
+    """Lazy handle to the reader of Wema's stored voiceprints (Blob Storage)."""
+    try:
+        from . import wema_store as module
+    except ImportError:
+        import wema_store as module
+
+    return module
+
+
+def voice_auth_store() -> str:
+    """Where enrolled voiceprints live: 'local' (ours) or 'wema' (their Blob Storage)."""
+    raw = str(os.getenv("VOICE_AUTH_STORE") or "local").strip().lower()
+    return raw if raw in {"local", "wema"} else "local"
 
 
 def normalize_owner_email(value: str) -> str:
@@ -75,8 +116,60 @@ def _connect() -> sqlite3.Connection:
         )
         """
     )
+    # Wema/ALAT parity store: up to MAX_WEMA_PRINTS voiceprints per owner, each
+    # tagged with the model pair that produced it, so a model swap cannot be
+    # compared against stale enrolments.
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS voice_prints (
+            owner_email TEXT NOT NULL,
+            model_tag TEXT NOT NULL,
+            embedding BLOB NOT NULL,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
     conn.commit()
     return conn
+
+
+def _store_wema_print(email: str, model_tag: str, vector: np.ndarray) -> int:
+    with _connect() as conn:
+        conn.execute(
+            "INSERT INTO voice_prints (owner_email, model_tag, embedding) VALUES (?, ?, ?)",
+            (email, model_tag, _dump_embedding(vector)),
+        )
+        conn.execute(
+            """
+            DELETE FROM voice_prints
+            WHERE owner_email = ? AND model_tag = ?
+              AND rowid NOT IN (
+                  SELECT rowid FROM voice_prints
+                  WHERE owner_email = ? AND model_tag = ?
+                  ORDER BY created_at DESC, rowid DESC LIMIT ?
+              )
+            """,
+            (email, model_tag, email, model_tag, MAX_WEMA_PRINTS),
+        )
+        conn.commit()
+        row = conn.execute(
+            "SELECT COUNT(*) FROM voice_prints WHERE owner_email = ? AND model_tag = ?",
+            (email, model_tag),
+        ).fetchone()
+    return int(row[0]) if row else 0
+
+
+def _load_wema_prints(email: str, model_tag: str) -> list[np.ndarray]:
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT embedding FROM voice_prints
+            WHERE owner_email = ? AND model_tag = ?
+            ORDER BY created_at DESC, rowid DESC LIMIT ?
+            """,
+            (email, model_tag, MAX_WEMA_PRINTS),
+        ).fetchall()
+    return [_load_embedding(row[0]) for row in rows]
 
 
 def pcm_to_wav_bytes(samples: np.ndarray, sample_rate: int = DEFAULT_SAMPLE_RATE) -> bytes:
@@ -317,6 +410,10 @@ def _embed_ecapa(audio: np.ndarray) -> np.ndarray:
 
 def embed_pcm(samples: np.ndarray, sample_rate: int = DEFAULT_SAMPLE_RATE) -> np.ndarray:
     audio = resample_mono(samples, sample_rate, DEFAULT_SAMPLE_RATE)
+    if voice_auth_embedder() == "wema":
+        if audio.size < int(WEMA_MIN_SECONDS * DEFAULT_SAMPLE_RATE):
+            raise ValueError("Audio is too short to enroll or compare.")
+        return _wema_engine().embed(audio)
     if audio.size < int(MIN_SECONDS * DEFAULT_SAMPLE_RATE):
         raise ValueError("Audio is too short to enroll or compare.")
     peak = float(np.max(np.abs(audio)) or 1.0)
@@ -347,6 +444,23 @@ def enroll_pcm(owner_email: str, samples: np.ndarray, sample_rate: int = DEFAULT
     email = normalize_owner_email(owner_email)
     if not email or "@" not in email:
         raise ValueError("A valid email is required to enroll a voice.")
+    if voice_auth_embedder() == "wema":
+        engine = _wema_engine()
+        vector = embed_pcm(samples, sample_rate)
+        tag = engine.model_tag()
+        prints = _store_wema_print(email, tag, vector)
+        logger.info(
+            "[VOICE-AUTH] enrolled (wema) owner=%s dim=%s model_tag=%s prints=%s",
+            email, vector.size, tag, prints,
+        )
+        return {
+            "enrolled": True,
+            "owner_email": email,
+            "dim": int(vector.size),
+            "embedder": "wema",
+            "model_tag": tag,
+            "prints": prints,
+        }
     vector = embed_pcm(samples, sample_rate)
     with _connect() as conn:
         conn.execute(
@@ -389,7 +503,97 @@ def load_embedding(owner_email: str) -> np.ndarray | None:
 
 
 def is_enrolled(owner_email: str) -> bool:
+    if voice_auth_embedder() == "wema":
+        email = normalize_owner_email(owner_email)
+        if not email:
+            return False
+        return bool(_load_wema_prints(email, _wema_engine().model_tag()))
     return load_embedding(owner_email) is not None
+
+
+def _compare_wema(
+    email: str,
+    samples: np.ndarray,
+    sample_rate: int,
+    cutoff: float,
+) -> dict[str, Any]:
+    """Wema/ALAT parity compare: denoise -> embed -> cosine vs enrolled prints."""
+    engine = _wema_engine()
+    tag = engine.model_tag()
+    prints = _load_wema_prints(email, tag)
+    base = {"threshold": cutoff, "owner_email": email, "embedder": "wema", "model_tag": tag}
+    if not prints:
+        return {**base, "matched": False, "enrolled": False, "score": 0.0, "reason": "not_enrolled"}
+    audio = resample_mono(samples, sample_rate, DEFAULT_SAMPLE_RATE)
+    if audio.size < int(WEMA_MIN_SECONDS * DEFAULT_SAMPLE_RATE):
+        return {**base, "matched": False, "enrolled": True, "score": 0.0, "reason": "audio_too_short"}
+    try:
+        live = engine.embed(audio)
+    except Exception:
+        logger.exception("[VOICE-AUTH] wema embed failed")
+        return {**base, "matched": False, "enrolled": True, "score": 0.0, "reason": "voice_verification_unavailable"}
+    scores = [cosine_similarity(print, live) for print in prints]
+    best = max(scores)
+    matched = best >= cutoff
+    return {
+        **base,
+        "matched": matched,
+        "enrolled": True,
+        "score": best,
+        "scores": scores,
+        "prints": len(prints),
+        "reason": "" if matched else "below_threshold",
+    }
+
+
+def is_enrolled_customer(customer_id: str) -> bool:
+    cid = str(customer_id or "").strip()
+    if not cid:
+        return False
+    try:
+        return bool(_wema_store().prints_for_customer(cid))
+    except Exception:
+        logger.exception("[VOICE-AUTH] wema store lookup failed")
+        return False
+
+
+def compare_customer(
+    customer_id: str,
+    samples: np.ndarray,
+    sample_rate: int = DEFAULT_SAMPLE_RATE,
+    threshold: float | None = None,
+) -> dict[str, Any]:
+    """Fetch the caller's stored voiceprints from Wema and compare a live clip."""
+    engine = _wema_engine()
+    store = _wema_store()
+    tag = engine.model_tag()
+    cutoff = voice_auth_threshold() if threshold is None else float(threshold)
+    base = {"threshold": cutoff, "customer_id": str(customer_id or ""), "embedder": "wema",
+            "store": "wema", "model_tag": tag}
+    prints = store.prints_for_customer(str(customer_id or ""))
+    if not prints:
+        return {**base, "matched": False, "enrolled": False, "score": 0.0, "reason": "not_enrolled"}
+    audio = resample_mono(samples, sample_rate, DEFAULT_SAMPLE_RATE)
+    if audio.size < int(WEMA_MIN_SECONDS * DEFAULT_SAMPLE_RATE):
+        return {**base, "matched": False, "enrolled": True, "score": 0.0, "reason": "audio_too_short"}
+    try:
+        live = engine.embed(audio)
+    except Exception:
+        logger.exception("[VOICE-AUTH] wema embed failed")
+        return {**base, "matched": False, "enrolled": True, "score": 0.0,
+                "reason": "voice_verification_unavailable"}
+    scores = [cosine_similarity(print, live) for print in prints]
+    best = max(scores)
+    matched = best >= cutoff
+    return {
+        **base,
+        "matched": matched,
+        "enrolled": True,
+        "score": best,
+        "scores": scores,
+        "prints": len(prints),
+        "reason": "" if matched else "below_threshold",
+    }
 
 
 def compare_pcm(
@@ -400,6 +604,8 @@ def compare_pcm(
 ) -> dict[str, Any]:
     email = normalize_owner_email(owner_email)
     cutoff = voice_auth_threshold() if threshold is None else float(threshold)
+    if voice_auth_embedder() == "wema":
+        return _compare_wema(email, samples, sample_rate, cutoff)
     if sidecar_url() and voice_auth_embedder() == "ecapa" and not _local_ecapa_ready():
         return _compare_pcm_remote(email, samples, sample_rate, cutoff)
     stored = load_embedding(email)
@@ -471,6 +677,38 @@ def compare_pcm(
     }
 
 
+def _compare_clips_wema(
+    left_samples: np.ndarray,
+    left_rate: int,
+    right_samples: np.ndarray,
+    right_rate: int,
+    cutoff: float,
+) -> dict[str, Any]:
+    engine = _wema_engine()
+    tag = engine.model_tag()
+    base = {"threshold": cutoff, "embedder": "wema", "model_tag": tag}
+    left_audio = resample_mono(left_samples, left_rate, DEFAULT_SAMPLE_RATE)
+    right_audio = resample_mono(right_samples, right_rate, DEFAULT_SAMPLE_RATE)
+    if (left_audio.size < int(WEMA_MIN_SECONDS * DEFAULT_SAMPLE_RATE)
+            or right_audio.size < int(WEMA_MIN_SECONDS * DEFAULT_SAMPLE_RATE)):
+        return {**base, "matched": False, "score": 0.0, "pitch_score": 0.0, "reason": "audio_too_short"}
+    try:
+        left = engine.embed(left_audio)
+        right = engine.embed(right_audio)
+    except Exception:
+        logger.exception("[VOICE-AUTH] wema compare failed")
+        return {**base, "matched": False, "score": 0.0, "pitch_score": 0.0,
+                "reason": "voice_verification_unavailable"}
+    score = cosine_similarity(left, right)
+    return {
+        **base,
+        "matched": score >= cutoff,
+        "score": score,
+        "pitch_score": 0.0,
+        "reason": "" if score >= cutoff else "below_threshold",
+    }
+
+
 def compare_clips(
     left_samples: np.ndarray,
     left_rate: int,
@@ -479,6 +717,8 @@ def compare_clips(
     threshold: float | None = None,
 ) -> dict[str, Any]:
     cutoff = voice_auth_threshold() if threshold is None else float(threshold)
+    if voice_auth_embedder() == "wema":
+        return _compare_clips_wema(left_samples, left_rate, right_samples, right_rate, cutoff)
     left_segment = last_speech_segment(left_samples, left_rate)
     right_segment = last_speech_segment(right_samples, right_rate)
     left_quality = speech_quality(left_samples, left_rate)

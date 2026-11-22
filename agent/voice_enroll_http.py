@@ -6,11 +6,14 @@ from aiohttp import web
 
 from .voice_auth import (
     compare_clips,
+    compare_customer,
     compare_pcm,
     enroll_wav_bytes,
     is_enrolled,
+    is_enrolled_customer,
     normalize_owner_email,
     pcm_from_wav_bytes,
+    voice_auth_store,
     voice_auth_threshold,
 )
 
@@ -92,12 +95,15 @@ async def _compare(request: web.Request) -> web.Response:
 async def _verify(request: web.Request) -> web.Response:
     reader = await request.multipart()
     email = ""
+    customer_id = ""
     audio = b""
     threshold = None
     async for part in reader:
         name = str(part.name or "")
         if name == "email":
             email = normalize_owner_email((await part.text()) or "")
+        elif name in {"customer_id", "customerId", "profile_id", "voice_profile_id"}:
+            customer_id = (await part.text() or "").strip()
         elif name in {"audio", "file"}:
             audio = await part.read()
         elif name == "threshold":
@@ -106,13 +112,18 @@ async def _verify(request: web.Request) -> web.Response:
                 threshold = float(raw) if raw else None
             except ValueError:
                 threshold = None
-    if not email or "@" not in email:
-        return web.json_response({"detail": "A valid email is required."}, status=400)
     if not audio:
         return web.json_response({"detail": "Voice audio is required."}, status=400)
+    use_wema_store = voice_auth_store() == "wema" and bool(customer_id)
+    if not use_wema_store and (not email or "@" not in email):
+        return web.json_response({"detail": "A valid email is required."}, status=400)
     try:
         samples, sample_rate = pcm_from_wav_bytes(audio)
-        result = compare_pcm(email, samples, sample_rate, threshold=threshold)
+        result = (
+            compare_customer(customer_id, samples, sample_rate, threshold=threshold)
+            if use_wema_store else
+            compare_pcm(email, samples, sample_rate, threshold=threshold)
+        )
     except ValueError as exc:
         return web.json_response({"detail": str(exc)}, status=400)
     except Exception as exc:  # noqa: BLE001
@@ -122,6 +133,11 @@ async def _verify(request: web.Request) -> web.Response:
 
 
 async def _status(request: web.Request) -> web.Response:
+    customer_id = str(request.query.get("customer_id") or request.query.get("profile_id") or "").strip()
+    if voice_auth_store() == "wema" and customer_id:
+        return web.json_response(
+            {"customer_id": customer_id, "enrolled": is_enrolled_customer(customer_id)}
+        )
     email = normalize_owner_email(request.query.get("email") or "")
     if not email or "@" not in email:
         return web.json_response({"detail": "A valid email is required."}, status=400)
@@ -147,11 +163,17 @@ async def _serve() -> None:
     try:
         from .voice_auth import _ecapa_encoder, voice_auth_embedder
 
-        if voice_auth_embedder() == "ecapa":
+        embedder = voice_auth_embedder()
+        if embedder == "wema":
+            from . import wema_voiceprint as wema
+
+            await asyncio.to_thread(wema.warmup)
+            logger.info("[VOICE-AUTH] Wema models warm (tag=%s)", wema.model_tag())
+        elif embedder == "ecapa":
             await asyncio.to_thread(_ecapa_encoder)
             logger.info("[VOICE-AUTH] ECAPA encoder ready")
     except Exception:
-        logger.exception("[VOICE-AUTH] ECAPA warmup failed; enroll will retry on demand")
+        logger.exception("[VOICE-AUTH] embedder warmup failed; will retry on demand")
     await asyncio.Event().wait()
 
 
