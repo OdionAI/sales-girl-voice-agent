@@ -103,6 +103,26 @@ def normalize_owner_email(value: str) -> str:
     return str(value or "").strip().lower()
 
 
+def normalize_owner_key(value: str) -> str:
+    """Accept an email OR a phone number as a voice-auth owner key.
+
+    Emails pass through lowercased; phone numbers are normalized to E.164
+    (Nigerian local '0...' -> '+234...', '00...' -> '+...')."""
+    raw = str(value or "").strip().lower()
+    if "@" in raw:
+        return raw
+    digits = "".join(ch for ch in raw if ch.isdigit())
+    if not digits:
+        return ""
+    if raw.startswith("+"):
+        return "+" + digits
+    if digits.startswith("00"):
+        return "+" + digits[2:]
+    if digits.startswith("0"):
+        return "+234" + digits[1:]
+    return "+" + digits
+
+
 def _connect() -> sqlite3.Connection:
     path = voice_auth_db_path()
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -442,8 +462,8 @@ def _load_embedding(payload: bytes) -> np.ndarray:
 
 def enroll_pcm(owner_email: str, samples: np.ndarray, sample_rate: int = DEFAULT_SAMPLE_RATE) -> dict[str, Any]:
     email = normalize_owner_email(owner_email)
-    if not email or "@" not in email:
-        raise ValueError("A valid email is required to enroll a voice.")
+    if not email or ("@" not in email and not email.startswith("+")):
+        raise ValueError("A valid email or phone number is required to enroll a voice.")
     if voice_auth_embedder() == "wema":
         engine = _wema_engine()
         vector = embed_pcm(samples, sample_rate)
