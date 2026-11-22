@@ -296,6 +296,9 @@ def _tool_metadata_from_userdata(userdata: dict[str, Any]) -> dict[str, Any]:
         "live_data_endpoint": str(userdata.get("live_data_endpoint") or ""),
         "conversation_id": conversation_id,
         "session_id": session_id,
+        "wema_customer_id": str(userdata.get("wema_customer_id") or ""),
+        "wema_account_number": str(userdata.get("wema_account_number") or ""),
+        "wema_phone_number": str(userdata.get("wema_phone_number") or ""),
         "end_user_id": str(userdata.get("end_user_id") or ""),
         "end_user_name": str(userdata.get("end_user_name") or ""),
         "caller_phone_e164": str(userdata.get("caller_phone_e164") or ""),
@@ -1673,14 +1676,149 @@ def _web_room_context_from_name(room_name: str) -> tuple[str, str, str, str, str
     return email, business_id, config_agent_id, configured_name, end_user_name
 
 
+SPOKEN_FORM_STYLE = """
+
+Spoken output style (mandatory — this is text that will be spoken aloud):
+- Phone numbers, account numbers and one-time codes: write every digit as a separate word, comma separated, in order. Example: 08161540638 is written "zero, eight, one, six, one, five, four, zero, six, three, eight". Never skip, merge, shorten or summarise digits.
+- Money amounts: write the value in words followed by "naira", for example "one thousand five hundred naira". Never read an amount as bare digits.
+- Never read internal ids, operation ids or reference codes aloud unless the caller explicitly asks for them.
+"""
+
+# Brand-specific wording: only Wema agents should be told to say these.
+WEMA_SPOKEN_FORM_STYLE = """
+- Never spell a name out letter by letter. The assistant's own name is written "Saw" (capital S, then lowercase "aw"); never write "SAW" or "S.A.W".
+- The mobile network is written "Glo" (capital G, lowercase "lo"); never write "GLO" or "G.L.O".
+"""
+
+
+def _with_spoken_form_style(instructions: str, userdata: dict[str, Any] | None = None) -> str:
+    """Append the TTS-facing rendering rules once per prompt."""
+    text = str(instructions or "")
+    if "Spoken output style (mandatory" in text:
+        return text
+    block = SPOKEN_FORM_STYLE
+    if userdata and _is_wema_session(userdata):
+        block = SPOKEN_FORM_STYLE + WEMA_SPOKEN_FORM_STYLE
+    return f"{text.rstrip()}{block}"
+
+
+FAST_AIRTIME_MARKER = "Fast purchase flow"
+
+_NETWORK_PREFIXES: dict[str, set[str]] = {
+    "GLO": {"0805", "0807", "0705", "0811", "0815", "0905", "0915"},
+    "MTN": {"0803", "0806", "0703", "0706", "0813", "0816", "0810", "0814",
+            "0903", "0906", "0913", "0916"},
+    "AIRTEL": {"0802", "0808", "0708", "0812", "0701", "0902", "0901", "0904",
+               "0907", "0912"},
+    "9MOBILE": {"0809", "0817", "0818", "0908", "0909"},
+}
+
+
+def _local_phone(raw: str) -> str:
+    digits = re.sub(r"\D", "", str(raw or ""))
+    if digits.startswith("234") and len(digits) == 13:
+        return "0" + digits[3:]
+    return digits
+
+
+def _network_for_number(raw: str) -> str:
+    digits = _local_phone(raw)
+    prefix = digits[:4]
+    for network, prefixes in _NETWORK_PREFIXES.items():
+        if prefix in prefixes:
+            return network
+    return ""
+
+
+def _with_session_facts(instructions: str, userdata: dict[str, Any]) -> str:
+    """Add the caller's own number and the short purchase journeys to the prompt."""
+    text = str(instructions or "")
+    if not _is_wema_session(userdata):
+        return text
+    if FAST_AIRTIME_MARKER in text:
+        return text
+    primary = _local_phone(str(userdata.get("wema_phone_number") or ""))
+    alt = _local_phone(str(os.environ.get("WEMA_DEFAULT_CALLER_PHONE_MTN") or ""))
+    if alt == primary:
+        alt = ""
+    lines = ["", "Session facts (authoritative — these override any conflicting instruction):"]
+    if primary:
+        network = _network_for_number(primary)
+        label = f" ({network})" if network else ""
+        lines.append(
+            f"- The caller's own phone number on file is {primary}{label}. Use it "
+            "whenever they say 'my phone', 'my line', 'for myself', or name no other "
+            "number. Say it digit by digit as words when confirming; never as bare digits."
+        )
+    else:
+        lines.append(
+            "- The caller's own phone number is not on file. If the purchase needs a "
+            "number, ask for it once and continue."
+        )
+    if alt:
+        alt_network = _network_for_number(alt)
+        lines.append(
+            f"- If the caller refers to their own {alt_network or 'second'} line "
+            f"specifically, the number for that line is {alt}."
+        )
+    lines += [
+        "- Any other number the caller dictates is used exactly as given; infer the "
+        "network from its prefix (0805/0807/0705/0811/0815/0905/0915 = Glo; "
+        "0803/0806/0703/0706/0813/0816/0810/0814/0903/0906/0913/0916 = MTN; "
+        "0802/0808/0708/0812/0701/0902/0901/0904/0907/0912 = Airtel; "
+        "0809/0817/0818/0908/0909 = 9mobile).",
+        "",
+        f"{FAST_AIRTIME_MARKER} — keep purchases to a single confirmation:",
+        "- Be proactive. Never ask for anything you can infer, and never ask a second "
+        "question after the caller has confirmed. One question, then act.",
+        "- Airtime: assume the caller means their own number. If they state an amount, "
+        "use exactly that amount; if they do not, propose 500 naira. Confirm in one "
+        "sentence — 'I can buy 500 naira airtime for <number>, should I go ahead?' — "
+        "then call wema_prepare_airtime_purchase, and on approval call "
+        "wema_execute_prepared with the returned operation_id immediately.",
+        "- Data: assume the caller means their own number. If they name a size, plan or "
+        "amount, use it; otherwise call wema_list_data_plans for that network and "
+        "propose the plan closest to 1,000 naira in one sentence. On approval call "
+        "wema_prepare_data_purchase, then wema_execute_prepared immediately.",
+        "- Omit source_account on prepare calls: the service selects the account with "
+        "the highest available balance that covers the amount. Report which account was "
+        "used only after execution, never as a question.",
+        "- If the caller says the purchase is for someone else, ask for that number "
+        "once, then follow the same single-confirmation path for it.",
+        "- Do not describe the preview as a second question, and do not read out "
+        "operation ids or reference codes.",
+    ]
+    return f"{text.rstrip()}\n" + "\n".join(lines) + "\n"
+
+
+def _call_channel_for_identity(identity_type: str, end_user_id: str) -> str:
+    """Pick the conversations-service channel for a caller.
+
+    Web callers are identified by email, and the conversations API rejects an
+    email external_id on the voice channel ("Invalid phone number."), which
+    silently drops the conversation and every later session/message write.
+    """
+    if str(identity_type or "").strip().lower() == "web":
+        return "web"
+    if "@" in str(end_user_id or ""):
+        return "web"
+    return "voice"
+
+
 def _normalize_end_user_id(value: str) -> str:
     raw = str(value or "").strip()
     if not raw:
         return ""
     if "@" in raw:
         return raw.lower()
+    # Only treat the value as a phone number when it is one. Opaque caller ids
+    # (the SDK sends values like "user_ECF593EB") must not be reduced to their
+    # digits, which would both corrupt the identity and break conversation
+    # lookups; give them an email-shaped form the conversations API accepts.
     digits = "".join(ch for ch in raw if ch.isdigit())
-    return f"+{digits}" if digits else ""
+    if digits and len(digits) == len(raw.lstrip("+")):
+        return f"+{digits}"
+    return f"{raw.lower()}@sdk.invalid"
 
 
 def _room_name_from_ctx(ctx: JobContext) -> str:
@@ -1869,9 +2007,56 @@ def _extract_session_extras_from_ctx(ctx: JobContext) -> dict[str, Any]:
         session_kind = str(payload.get("session_kind") or "").strip().lower()
         if session_kind:
             extras["session_kind"] = session_kind
+        # The dashboard puts the caller's verified Wema profile here for the
+        # LiveKit path; the banking tools reject every action without it.
+        wema_context = payload.get("wema_context")
+        if isinstance(wema_context, dict):
+            customer_id = str(wema_context.get("customer_id") or "").strip()
+            account_number = str(wema_context.get("account_number") or "").strip()
+            phone_number = str(wema_context.get("phone_number") or "").strip()
+            if customer_id:
+                extras["wema_customer_id"] = customer_id
+            if account_number:
+                extras["wema_account_number"] = account_number
+            if phone_number:
+                extras["wema_phone_number"] = phone_number
         if extras:
             return extras
     return {}
+
+
+WEMA_BUSINESS_ID = str(
+    os.environ.get("WEMA_BUSINESS_ID") or "a0c8cda2-3b46-4ee0-898c-48f9a4d3a444"
+).strip()
+
+
+def _is_wema_session(userdata: dict[str, Any]) -> bool:
+    """True only for Wema sessions, so Wema policy never reaches other agents."""
+    business = str(userdata.get("business_id") or "").strip()
+    if business and business == WEMA_BUSINESS_ID:
+        return True
+    tools = userdata.get("enabled_tool_names") or []
+    return any(str(name).startswith("wema_") for name in tools)
+
+
+def _apply_callerd_defaults(session: dict[str, Any]) -> dict[str, Any]:
+    """Fall back to operator-configured caller facts for staged Wema testing.
+
+    Real values from participant metadata always win. Gated to Wema: without
+    this, every business on the worker would inherit the Wema test caller.
+    """
+    if not _is_wema_session(session):
+        return session
+    phone = str(os.environ.get("WEMA_DEFAULT_CALLER_PHONE") or "").strip()
+    customer = str(os.environ.get("WEMA_DEFAULT_CUSTOMER_ID") or "").strip()
+    account = str(os.environ.get("WEMA_DEFAULT_ACCOUNT_NUMBER") or "").strip()
+    if phone and not session.get("wema_phone_number"):
+        session["wema_phone_number"] = phone
+    if customer and not session.get("wema_customer_id"):
+        session["wema_customer_id"] = customer
+    if account and not session.get("wema_account_number"):
+        session["wema_account_number"] = account
+    return session
 
 
 def _outbound_call_ref_from_job_and_attributes(ctx: JobContext) -> str:
@@ -2209,6 +2394,14 @@ async def _init_session_userdata(ctx: JobContext, language: str) -> dict[str, An
         conversation_id,
     )
 
+    # An empty caller tts_mode normalises to "auto"; treat that as unset so the
+    # worker-level pin (VOICE_AGENT_TTS_MODE / ODION_TTS_EXPERIMENT_SEED) applies.
+    _requested_tts_mode = str(runtime_overrides.get("tts_mode") or "").strip().lower()
+    if _requested_tts_mode in {"", "auto"}:
+        _requested_tts_mode = (
+            str(os.getenv("VOICE_AGENT_TTS_MODE") or "").strip().lower() or "auto"
+        )
+
     userdata = {
         "client_id": os.getenv("AGENT_CLIENT_ID", "sales-girl-internal"),
         "agent_id": AGENT_NAME,
@@ -2220,7 +2413,7 @@ async def _init_session_userdata(ctx: JobContext, language: str) -> dict[str, An
         "entry_surface": str(job_metadata.get("entry_surface") or "").strip(),
         "session_owner": str(job_metadata.get("owner") or "").strip(),
         "route_number": str(job_metadata.get("route_number") or "").strip(),
-        "tts_mode": runtime_overrides.get("tts_mode") or "auto",
+        "tts_mode": _requested_tts_mode,
         "tts_owner_id": runtime_overrides.get("tts_owner_id") or "",
         "tts_voice_id": runtime_overrides.get("tts_voice_id") or "",
         "tts_language_hint": runtime_overrides.get("tts_language_hint") or "",
@@ -2240,6 +2433,8 @@ async def _init_session_userdata(ctx: JobContext, language: str) -> dict[str, An
         "session_kind": "",
         "usage_meter": UsageMeter(),
     } | participant_overrides | _extract_session_extras_from_ctx(ctx)
+    # Wema-only defaults; gated so other businesses never inherit a test caller.
+    _apply_callerd_defaults(userdata)
     if outbound_call:
         userdata.update(
             {
@@ -2946,8 +3141,9 @@ async def _instructions_with_context(base_prompt: str, userdata: dict[str, Any])
             "- Never read ticket IDs or internal reference codes aloud unless the caller explicitly asks for a reference. Confirm tickets naturally without citing numbers.\n"
             "- If a tool, lookup, or knowledge check fails, respond naturally without mentioning tools, APIs, or knowledge bases. Say you could not find that information or complete that request, then continue helpfully."
         )
-    channel = (
-        "web" if str(userdata.get("identity_type") or "").lower() == "web" else "voice"
+    channel = _call_channel_for_identity(
+        str(userdata.get("identity_type") or ""),
+        str(userdata.get("end_user_id") or end_user_id or ""),
     )
     business_id = _normalize_business_id(str(userdata.get("business_id") or ""))
     config_agent_id = str(
@@ -3943,8 +4139,8 @@ def _build_session_for_language(
             enabled=True,
             mode="vad",
             min_duration=TURN_MIN_INTERRUPTION_DURATION,
-            min_words=0,
-            resume_false_interruption=False,
+            min_words=1,
+            resume_false_interruption=True,
             false_interruption_timeout=None,
         ),
     )
@@ -4165,9 +4361,19 @@ def _build_tts_engine_for_language(
     )
     override_base_url = str(runtime_overrides.get("tts_base_url") or "").strip()
     override_api_key = str(runtime_overrides.get("tts_api_key") or "").strip()
-    fallback_tts: Any = (
-        deepgram.TTS(model=_deepgram_tts_model_for_language(lang))
-    )
+    fallback_tts: Any = None
+
+    def _deepgram_fallback() -> Any:
+        """Build the Deepgram fallback lazily.
+
+        Hosts that speak through the Odion/Qwen TTS stack have no Deepgram key at
+        all, and constructing the plugin eagerly raised before the Odion branch
+        was ever reached.
+        """
+        nonlocal fallback_tts
+        if fallback_tts is None:
+            fallback_tts = deepgram.TTS(model=_deepgram_tts_model_for_language(lang))
+        return fallback_tts
     odion_enabled = ENABLE_ODION_TTS_FR if is_fr else ENABLE_ODION_TTS_EN
     fallback_label = "French" if is_fr else "English"
 
@@ -4253,8 +4459,11 @@ def _build_tts_engine_for_language(
         ).strip()
         or ("French" if is_fr else "English")
     )
+    _ud_mode = str(userdata.get("tts_mode") or "").strip().lower()
     tts_mode_override = _normalize_tts_mode(
-        userdata.get("tts_mode") or os.getenv("VOICE_AGENT_TTS_MODE") or ""
+        (_ud_mode if _ud_mode not in {"", "auto"} else "")
+        or os.getenv("VOICE_AGENT_TTS_MODE")
+        or ""
     )
     tts_owner_id_override = str(userdata.get("tts_owner_id") or "").strip()
     tts_voice_id_override = str(userdata.get("tts_voice_id") or "").strip()
@@ -4295,7 +4504,7 @@ def _build_tts_engine_for_language(
             "FR" if is_fr else "EN",
             fallback_label,
         )
-        return fallback_tts
+        return _deepgram_fallback()
     if not odion_enabled and runtime_odion_tts_requested:
         logger.info(
             "Using runtime Odion TTS override for %s session even though ENABLE_ODION_TTS_%s=false.",
@@ -4383,7 +4592,7 @@ def _build_tts_engine_for_language(
             fallback_label,
             exc,
         )
-    return fallback_tts
+    return _deepgram_fallback()
 
 
 async def _wait_for_job_shutdown(ctx: JobContext) -> str:
@@ -4444,17 +4653,21 @@ async def entrypoint(ctx: JobContext):
         instructions = _instructions_with_preloaded_ops_context(
             base_prompt, preloaded_context
         )
-        instructions = await _instructions_with_context(instructions, userdata)
+        instructions = _with_session_facts(
+            _with_spoken_form_style(
+                await _instructions_with_context(instructions, userdata), userdata
+            ),
+            userdata,
+        )
         instructions = await _instructions_with_initial_knowledge_context(
             instructions, userdata
         )
         userdata["base_instructions"] = instructions
         started_at = conv_api_utcnow()
         business_id = str(userdata.get("business_id") or "")
-        call_channel = (
-            "web"
-            if str(userdata.get("identity_type") or "").lower() == "web"
-            else "voice"
+        call_channel = _call_channel_for_identity(
+            str(userdata.get("identity_type") or ""),
+            str(userdata.get("end_user_id") or ""),
         )
         await _authorize_billing_start_or_raise(
             userdata=userdata,
@@ -4627,17 +4840,21 @@ async def entrypoint(ctx: JobContext):
         instructions = _instructions_with_preloaded_ops_context(
             base_prompt, preloaded_context
         )
-        instructions = await _instructions_with_context(instructions, userdata)
+        instructions = _with_session_facts(
+            _with_spoken_form_style(
+                await _instructions_with_context(instructions, userdata), userdata
+            ),
+            userdata,
+        )
         instructions = await _instructions_with_initial_knowledge_context(
             instructions, userdata
         )
         userdata["base_instructions"] = instructions
         started_at = conv_api_utcnow()
         business_id = str(userdata.get("business_id") or "")
-        call_channel = (
-            "web"
-            if str(userdata.get("identity_type") or "").lower() == "web"
-            else "voice"
+        call_channel = _call_channel_for_identity(
+            str(userdata.get("identity_type") or ""),
+            str(userdata.get("end_user_id") or ""),
         )
         await _authorize_billing_start_or_raise(
             userdata=userdata,

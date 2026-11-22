@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import logging
 import os
+import re
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -190,6 +191,8 @@ def _metadata_headers(metadata: dict[str, Any], tool_name: str) -> dict[str, str
         "X-Conversation-Id": str(metadata.get("conversation_id") or ""),
         "X-Session-Id": str(metadata.get("session_id") or ""),
         "X-End-User-Id": str(metadata.get("end_user_id") or ""),
+        # Wema banking actions are refused without the verified customer id.
+        "X-Wema-Customer-Id": str(metadata.get("wema_customer_id") or ""),
     }
     return {key: value for key, value in headers.items() if value}
 
@@ -274,6 +277,61 @@ def _failure_payload(tool_name: str, message: str, *, http_status: int | None = 
     return payload
 
 
+def _declared_types(prop_schema: dict[str, Any]) -> set[str]:
+    """Collect the JSON types a property accepts, including anyOf/oneOf branches."""
+    types: set[str] = set()
+    direct = prop_schema.get("type")
+    if isinstance(direct, str):
+        types.add(direct)
+    elif isinstance(direct, list):
+        types.update(t for t in direct if isinstance(t, str))
+    for key in ("anyOf", "oneOf"):
+        branches = prop_schema.get(key)
+        if isinstance(branches, list):
+            for branch in branches:
+                if isinstance(branch, dict) and isinstance(branch.get("type"), str):
+                    types.add(branch["type"])
+    return types
+
+
+def _coerce_arguments(
+    schema: dict[str, Any], raw_arguments: dict[str, Any]
+) -> dict[str, Any]:
+    """Match argument types to the tool's declared schema.
+
+    Models emit natural JSON (amount=100) while several tool services declare
+    string fields and reject anything else with "Invalid tool arguments";
+    every such mismatch reads to the caller as "that service is unavailable".
+    """
+    if not isinstance(raw_arguments, dict):
+        return raw_arguments
+    properties = schema.get("properties") or {}
+    coerced = dict(raw_arguments)
+    for key, value in raw_arguments.items():
+        prop_schema = properties.get(key)
+        if not isinstance(prop_schema, dict) or isinstance(value, bool):
+            continue
+        declared = _declared_types(prop_schema)
+        if not declared:
+            continue
+        if "string" in declared and isinstance(value, (int, float)):
+            coerced[key] = str(value)
+            continue
+        if "string" in declared and isinstance(value, str):
+            # "1,000" -> "1000": tool services validate numeric strings strictly.
+            compact = value.strip().replace(",", "")
+            if compact != value and compact.isdigit():
+                coerced[key] = compact
+            continue
+        if ("integer" in declared or "number" in declared) and isinstance(value, str):
+            text = value.strip().replace(",", "")
+            if text and re.fullmatch(r"-?\d+", text) and "integer" in declared:
+                coerced[key] = int(text)
+            elif text and re.fullmatch(r"-?\d+(\.\d+)?", text) and "number" in declared:
+                coerced[key] = float(text) if "." in text else int(text)
+    return coerced
+
+
 async def invoke_dynamic_http_tool(
     *,
     tool: dict[str, Any],
@@ -284,6 +342,7 @@ async def invoke_dynamic_http_tool(
     method = str(tool.get("method") or "POST").strip().upper() or "POST"
     url = str(tool.get("url") or "").strip()
     schema = _normalize_schema(tool.get("request_schema"))
+    raw_arguments = _coerce_arguments(schema, raw_arguments)
     validation_error = _validate_arguments(schema, raw_arguments)
     if validation_error:
         return _failure_payload(
@@ -310,6 +369,12 @@ async def invoke_dynamic_http_tool(
     # never persisted in an agent tool definition returned by agent-config.
     headers.update(_conversation_service_auth_headers(url))
     headers.update(_metadata_headers(metadata, tool_name))
+    # Execution is only accepted when the confirmation header echoes the
+    # prepared operation id, so mirror the argument the model supplied.
+    if tool_name == "wema_execute_prepared":
+        operation_id = str(raw_arguments.get("operation_id") or "").strip()
+        if operation_id:
+            headers["X-Wema-Confirmed-Operation"] = operation_id
     request_kwargs: dict[str, Any] = {
         "method": method,
         "url": url,

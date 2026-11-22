@@ -410,7 +410,9 @@ class OdionSTT(stt.STT):
         return {
             "audio_base64": base64.b64encode(wav_bytes).decode("ascii"),
             "language": _display_language(language, model=self._model),
-            "context": "",
+            # Domain vocabulary matters: without it the recogniser hears "glue"
+            # for Glo and mangles network names and airtime phrasing.
+            "context": str(os.environ.get("RVC_LAB_STT_CONTEXT") or "").strip(),
         }
 
     def stream(
@@ -623,11 +625,19 @@ class _OdionRealtimeSTTStream(stt.RecognizeStream):
             self._emit_usage()
 
     async def _connect_ws(self) -> aiohttp.ClientWebSocketResponse:
+        # Domain vocabulary from the operator (Nigerian English, bank and
+        # network names, digit-by-digit numbers). The Rust worker always sent
+        # this; without it the recogniser hears "glue" for Glo and drops digits.
+        stt_context = str(os.environ.get("RVC_LAB_STT_CONTEXT") or "").strip()
         try:
             ws = await asyncio.wait_for(
                 self._odion_stt._ensure_session().ws_connect(
                     self._odion_stt.endpoint,
-                    headers={"User-Agent": "SalesGirlVoiceAgent/1.0"},
+                    params={"context": stt_context} if stt_context else None,
+                    headers={
+                        "User-Agent": "SalesGirlVoiceAgent/1.0",
+                        **({"X-STT-Context": stt_context} if stt_context else {}),
+                    },
                     heartbeat=20,
                 ),
                 timeout=self._conn_options.timeout,
