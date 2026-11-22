@@ -61,6 +61,11 @@ from agent.billing_hooks import (
 from agent.agent_config_api import get_runtime_config as get_agent_runtime_config
 from agent import outbound_call_api
 from agent.dynamic_tools import build_dynamic_http_tools
+from agent.stanbic_voice import (
+    build_stanbic_voice_tools,
+    stanbic_voice_enabled,
+    wrap_stt_with_voice_tap,
+)
 from agent.ops_api import (
     create_ticket as ops_create_ticket,
     get_account_overview as ops_get_account_overview,
@@ -4130,22 +4135,40 @@ def _build_session_for_language(
     session_vad = (
         odion_stt.endpointing_vad if isinstance(odion_stt, OdionSTT) else None
     )
-    turn_handling = TurnHandlingOptions(
-        endpointing=EndpointingOptions(
-            min_delay=TURN_MIN_ENDPOINTING_DELAY,
-            max_delay=TURN_MAX_ENDPOINTING_DELAY,
-        ),
-        interruption=InterruptionOptions(
+    # Stanbic demo sessions: calmer barge-in so speakerphone echo does not
+    # shred the agent's speech (a 2-char echo fragment must not interrupt).
+    # Real callers barge in with 3+ words and still cut in fine.
+    # Endpointing is also slower: callers spelling their name pause between
+    # letters, and a 0.65s silence window would cut them off mid-spelling.
+    if stanbic_voice_enabled(userdata):
+        interruption_opts = InterruptionOptions(
+            enabled=True,
+            mode="vad",
+            min_duration=max(TURN_MIN_INTERRUPTION_DURATION, 0.6),
+            min_words=3,
+            resume_false_interruption=True,
+            false_interruption_timeout=None,
+        )
+        endpointing_opts = EndpointingOptions(min_delay=1.2, max_delay=2.0)
+    else:
+        interruption_opts = InterruptionOptions(
             enabled=True,
             mode="vad",
             min_duration=TURN_MIN_INTERRUPTION_DURATION,
             min_words=1,
             resume_false_interruption=True,
             false_interruption_timeout=None,
-        ),
+        )
+        endpointing_opts = EndpointingOptions(
+            min_delay=TURN_MIN_ENDPOINTING_DELAY,
+            max_delay=TURN_MAX_ENDPOINTING_DELAY,
+        )
+    turn_handling = TurnHandlingOptions(
+        endpointing=endpointing_opts,
+        interruption=interruption_opts,
     )
     session_options: dict[str, Any] = {
-        "stt": stt_engine,
+        "stt": wrap_stt_with_voice_tap(stt_engine, userdata),
         "llm": session_llm,
         "userdata": userdata,
         "turn_handling": turn_handling,
@@ -4166,11 +4189,16 @@ def _build_session_for_language(
 
 
 def _trigger_first_turn(
-    session: AgentSession, *, language: str, business_use_case: str
+    session: AgentSession,
+    *,
+    language: str,
+    business_use_case: str,
+    kickoff_override: str | None = None,
 ) -> None:
     try:
         session.generate_reply(
-            user_input=_kickoff_prompt_for_language(language, business_use_case),
+            user_input=kickoff_override
+            or _kickoff_prompt_for_language(language, business_use_case),
             input_modality="text",
         )
     except Exception as exc:  # noqa: BLE001
@@ -4709,6 +4737,16 @@ async def entrypoint(ctx: JobContext):
             active_agent_config,
             excluded_tool_names=set(BUILTIN_RUNTIME_TOOL_NAMES),
         )
+        stanbic_tools = build_stanbic_voice_tools(userdata)
+        if stanbic_tools:
+            dynamic_tools = list(dynamic_tools or []) + stanbic_tools
+            logger.info(
+                "Registered Stanbic voice tools: %s",
+                [
+                    str(getattr(getattr(tool, "info", None), "name", "")).strip()
+                    for tool in stanbic_tools
+                ],
+            )
         if dynamic_tools:
             logger.info(
                 "Registered dynamic runtime tools: %s",
@@ -4758,7 +4796,17 @@ async def entrypoint(ctx: JobContext):
                 call_channel=call_channel,
             )
             _trigger_first_turn(
-                session, language="en", business_use_case=business_use_case
+                session,
+                language="en",
+                business_use_case=business_use_case,
+                kickoff_override=(
+                    "Start the conversation now. First silently call the check_voice_enrollment tool — never mention this check to the caller. "
+                    "Then greet the caller in English: introduce yourself briefly by name, and based on the tool result either "
+                    "note that this is their first time calling and offer to set up their account, or welcome them back. "
+                    "Keep the opening to one or two warm sentences."
+                    if stanbic_voice_enabled(userdata)
+                    else None
+                ),
             )
             if is_recording_enabled():
                 async def _start_recording_after_join_en() -> None:
