@@ -43,6 +43,7 @@ async fn trial_llm_is_tenant_and_agent_scoped_and_streams_from_mock() {
         model: "bonsai-test".into(),
         api_key: "local-test-only".into(),
         first_output_timeout_seconds: 30.0,
+        exclusive: false,
     };
     trial.validate().unwrap();
     let mut original: Config =

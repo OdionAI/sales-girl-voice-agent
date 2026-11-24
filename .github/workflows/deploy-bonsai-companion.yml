@@ -1,0 +1,71 @@
+name: Deploy isolated Bonsai companion
+
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: Start only the isolated companion (false is a read-only plan)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lagos-bonsai-companion
+  cancel-in-progress: false
+
+jobs:
+  rust-tests:
+    if: inputs.apply
+    uses: ./.github/workflows/rust-unit-tests.yml
+  companion:
+    needs: rust-tests
+    if: always() && !cancelled() && ((!inputs.apply && needs.rust-tests.result == 'skipped') || (inputs.apply && github.ref == 'refs/heads/main' && needs.rust-tests.result == 'success'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+      - name: Test companion isolation
+        run: python3 -m unittest tests.test_bonsai_companion
+      - name: Configure pinned Lagos SSH route
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.LAGOS_SSH_PRIVATE_KEY || secrets.HUAWEI_SSH_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "$SSH_PRIVATE_KEY"
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/lagos_deploy_key
+          chmod 600 ~/.ssh/lagos_deploy_key
+          cp deployment/lagos/known_hosts ~/.ssh/lagos_known_hosts
+          cp deployment/lagos/ssh_config ~/.ssh/config
+          chmod 600 ~/.ssh/config ~/.ssh/lagos_known_hosts
+          ssh-keygen -y -f ~/.ssh/lagos_deploy_key >/dev/null
+      - name: Build companion image on CI
+        if: inputs.apply
+        run: |
+          set -euo pipefail
+          docker build --build-arg RUN_NATIVE_TESTS=false -f deployment/lagos/Dockerfile -t "attentive/voice:bonsai-ci-${GITHUB_SHA}" .
+          docker save "attentive/voice:bonsai-ci-${GITHUB_SHA}" | ssh lagos-app docker load
+      - name: Plan or start only the companion
+        env:
+          TRIAL_KEY: ${{ secrets.BONSAI_TRIAL_API_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "$TRIAL_KEY"
+          image="attentive/voice:bonsai-ci-${GITHUB_SHA}"
+          remote="/tmp/odion-bonsai-ci-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.py"
+          ssh lagos-app 'umask 077; mktemp /tmp/odion-bonsai-ci-XXXXXXXX.py' > /tmp/companion-remote-path
+          remote="$(cat /tmp/companion-remote-path)"
+          trap 'ssh lagos-app rm -f "$remote" || true' EXIT
+          ssh lagos-app "cat > '$remote'" < deployment/lagos/bonsai_companion.py
+          if [[ '${{ inputs.apply }}' == 'true' ]]; then
+            printf '%s' "$TRIAL_KEY" | ssh lagos-app python3 "$remote" --secret-stdin --image "$image" --apply
+          else
+            printf '%s' "$TRIAL_KEY" | ssh lagos-app python3 "$remote" --secret-stdin --image "$image"
+          fi
+      - name: Remove runner SSH key
+        if: always()
+        run: rm -f ~/.ssh/lagos_deploy_key

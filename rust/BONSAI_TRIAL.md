@@ -15,6 +15,9 @@ passed the normal dev, staging, and production gates, configure all of:
 - `RVC_LAB_TRIAL_LLM_FIRST_OUTPUT_TIMEOUT_SECONDS`: trial-only timeout; select
   between 0.2 and 120 seconds after measuring realistic prompts. The production
   default is 5 seconds; the HTTP client also has a 120-second total timeout.
+- `RVC_LAB_TRIAL_LLM_EXCLUSIVE=true` on a dedicated companion worker rejects
+  any signed job outside the tenant and agent allowlist before loading its
+  agent configuration. Do not register that companion under the shared name.
 
 The trial uses the existing `qwen` provider wire format, with thinking disabled.
 The endpoint must support streaming chat completions, the worker's Qwen request
@@ -22,7 +25,7 @@ fields and tool calls before real calls are enabled. There is no automatic
 fallback after a selected trial request fails.
 
 Incomplete configuration rejects worker startup. To roll back, remove all
-six trial settings and redeploy via the normal release process; other calls
+trial settings and redeploy via the normal release process; other calls
 continue using their original provider. Do not change the default DeepSeek
 configuration or the existing Qwen service. Validate account isolation, a
 different-tenant negative case, real call audio and request tracing at each

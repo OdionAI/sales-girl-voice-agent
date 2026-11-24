@@ -19,6 +19,7 @@ pub struct LlmTrial {
     pub model: String,
     pub api_key: String,
     pub first_output_timeout_seconds: f64,
+    pub exclusive: bool,
 }
 impl LlmTrial {
     pub fn validate(&self) -> Result<(), String> {
@@ -28,6 +29,7 @@ impl LlmTrial {
             && self.model.is_empty()
             && self.api_key.is_empty()
             && self.first_output_timeout_seconds == 0.0
+            && !self.exclusive
         {
             return Ok(());
         }
@@ -50,11 +52,13 @@ impl LlmTrial {
         }
         Ok(())
     }
+    fn matches(&self, business: &str, agent: &str) -> bool {
+        !business.is_empty()
+            && business == self.business_id
+            && self.agent_ids.iter().any(|id| id == agent)
+    }
     pub(super) fn apply(&self, config: &mut super::Config, business: &str, agent: &str) -> bool {
-        if business != self.business_id
-            || business.is_empty()
-            || !self.agent_ids.iter().any(|id| id == agent)
-        {
+        if !self.matches(business, agent) {
             return false;
         }
         config.llm_provider = "qwen".into();
@@ -173,6 +177,14 @@ pub async fn prepare_call(
         .clone()
         .ok_or("platform services are not configured")?;
     let scope = verifier.dispatch(metadata, room, &platform.agent.token, now)?;
+    config.llm_trial.validate()?;
+    if config.llm_trial.exclusive
+        && !config
+            .llm_trial
+            .matches(scope.business_id(), scope.agent_id())
+    {
+        return Err("trial worker scope is not authorized".into());
+    }
     let services = Services::new(platform, scope, trace)?;
     let context = services.load_agent().await?;
     resolve_call(config, services, context, room)
@@ -184,6 +196,14 @@ pub(crate) fn resolve_call(
     context: AgentContext,
     room: &str,
 ) -> Result<PreparedCall, String> {
+    config.llm_trial.validate()?;
+    if config.llm_trial.exclusive
+        && !config
+            .llm_trial
+            .matches(services.scope().business_id(), services.scope().agent_id())
+    {
+        return Err("trial worker scope is not authorized".into());
+    }
     validate_capabilities(&context)?;
     let caller = services.scope().caller().to_string();
     let claims = services.scope().claims();
@@ -915,6 +935,7 @@ mod tests {
             model: "bonsai-test".into(),
             api_key: "fixture-only".into(),
             first_output_timeout_seconds: 45.0,
+            exclusive: true,
         };
         let scoped = prepare_call(
             trial_config.clone(),
@@ -929,7 +950,29 @@ mod tests {
         assert_eq!(scoped.config.llm_model, "bonsai-test");
         assert_eq!(scoped.config.llm_first_output_timeout_seconds, 45.0);
         trial_config.llm_trial.business_id = "other-business".into();
+        let direct_service =
+            Services::new(PlatformConfig::default(), scope(), Trace::default()).unwrap();
+        let direct = resolve_call(
+            trial_config.clone(),
+            direct_service,
+            AgentContext::default(),
+            "room-a",
+        );
+        assert!(
+            matches!(direct, Err(ref error) if error == "trial worker scope is not authorized")
+        );
         let other = prepare_call(
+            trial_config.clone(),
+            &metadata,
+            "room-a",
+            &super::super::identity::Verifier::default(),
+            1000.0,
+            Trace::default(),
+        )
+        .await;
+        assert!(matches!(other, Err(ref error) if error == "trial worker scope is not authorized"));
+        trial_config.llm_trial.exclusive = false;
+        let shared = prepare_call(
             trial_config,
             &metadata,
             "room-a",
@@ -939,8 +982,7 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(other.config.llm_provider, "deepseek");
-        assert_ne!(other.config.llm_model, "bonsai-test");
+        assert_eq!(shared.config.llm_provider, "deepseek");
         assert!(prepare_call(
             config,
             &metadata,
