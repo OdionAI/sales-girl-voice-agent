@@ -90,6 +90,7 @@ def main():
             handle.write(f"{key}={value}\n")
     created = False
     try:
+        run("docker", "run", "--rm", "--network", "host", "--memory", "2g", "--cpus", "2", "--env-file", path, args.image, "--check-env", stdout=subprocess.DEVNULL)
         run("docker", "run", "-d", "--name", NAME, "--network", "host", "--restart", "no", "--memory", "2g", "--cpus", "2", "--env-file", path, args.image, stdout=subprocess.DEVNULL)
         created = True
         for _ in range(30):
