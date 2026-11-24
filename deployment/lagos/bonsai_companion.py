@@ -28,6 +28,7 @@ def environment(source_env, api_key):
     values.update({
         "RVC_LAB_LIVEKIT_AGENT_NAME": "rvc-bonsai-demo",
         "RVC_LAB_LIVEKIT_WORKER_PORT": "18084",
+        "RVC_LAB_MAX_JOBS": "1",
         "RVC_LAB_TRACE_DIR": "/tmp/bonsai-traces",
         "LIVEKIT_RECORDING_ENABLED": "false",
         "RVC_LAB_TRIAL_LLM_BUSINESS_ID": BUSINESS,
@@ -38,6 +39,7 @@ def environment(source_env, api_key):
         "RVC_LAB_TRIAL_LLM_FIRST_OUTPUT_TIMEOUT_SECONDS": "90",
         "RVC_LAB_TRIAL_LLM_EXCLUSIVE": "true",
     })
+    values.pop("RVC_AICC_SIP_ROUTE", None)
     return values
 
 

@@ -17,13 +17,15 @@ spec.loader.exec_module(module)
 
 class CompanionTests(unittest.TestCase):
     def test_exclusive_scope_and_shared_default_are_preserved(self):
-        env = module.environment(["RVC_LAB_LLM_PROVIDER=deepseek", "TOKEN=private"], "local-test")
+        env = module.environment(["RVC_LAB_LLM_PROVIDER=deepseek", "RVC_AICC_SIP_ROUTE=fixture", "TOKEN=private"], "local-test")
         self.assertEqual(env["RVC_LAB_LLM_PROVIDER"], "deepseek")
         self.assertEqual(env["RVC_LAB_TRIAL_LLM_EXCLUSIVE"], "true")
         self.assertEqual(env["RVC_LAB_TRIAL_LLM_BUSINESS_ID"], module.BUSINESS)
         self.assertEqual(env["RVC_LAB_TRIAL_LLM_AGENT_IDS"].split(","), list(module.AGENTS))
         self.assertEqual(env["RVC_LAB_LIVEKIT_AGENT_NAME"], "rvc-bonsai-demo")
         self.assertEqual(env["RVC_LAB_LIVEKIT_WORKER_PORT"], "18084")
+        self.assertEqual(env["RVC_LAB_MAX_JOBS"], "1")
+        self.assertNotIn("RVC_AICC_SIP_ROUTE", env)
         self.assertEqual(env["RVC_LAB_TRIAL_LLM_FIRST_OUTPUT_TIMEOUT_SECONDS"], "90")
         self.assertEqual(env["LIVEKIT_RECORDING_ENABLED"], "false")
 
