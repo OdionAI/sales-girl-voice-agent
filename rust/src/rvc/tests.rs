@@ -16,6 +16,88 @@ use std::{
     time::Duration,
 };
 use tokio::net::TcpListener;
+
+#[tokio::test]
+async fn trial_llm_is_tenant_and_agent_scoped_and_streams_from_mock() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let app = Router::new().route(
+        "/v1/chat/completions",
+        post(|Json(body): Json<Value>| async move {
+            assert_eq!(body["model"], "bonsai-test");
+            assert_eq!(body["stream"], true);
+            (
+                [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+                format!(
+                    "data: {}\n\ndata: [DONE]\n\n",
+                    json!({"choices":[{"delta":{"content":"Hello from trial."}}]})
+                ),
+            )
+        }),
+    );
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let trial = platform::LlmTrial {
+        business_id: "test-tenant".into(),
+        agent_ids: vec!["test-agent".into()],
+        base_url: format!("http://{address}/v1"),
+        model: "bonsai-test".into(),
+        api_key: "local-test-only".into(),
+        first_output_timeout_seconds: 30.0,
+    };
+    trial.validate().unwrap();
+    let mut original: Config =
+        serde_json::from_str(include_str!("../../fixtures/reference-config.json")).unwrap();
+    original.llm_provider = "deepseek".into();
+    original.llm_base_url = "https://api.deepseek.com/v1".into();
+    original.llm_model = "deepseek-chat".into();
+    for (business, agent) in [
+        ("other-tenant", "test-agent"),
+        ("test-tenant", "other-agent"),
+        ("", "test-agent"),
+    ] {
+        let mut candidate = original.clone();
+        assert!(!trial.apply(&mut candidate, business, agent));
+        assert_eq!(candidate.llm_provider, original.llm_provider);
+        assert_eq!(candidate.llm_base_url, original.llm_base_url);
+        assert_eq!(candidate.llm_model, original.llm_model);
+        assert_eq!(
+            candidate.llm_first_output_timeout_seconds,
+            original.llm_first_output_timeout_seconds
+        );
+    }
+    assert!(platform::LlmTrial {
+        model: "missing-other-fields".into(),
+        ..Default::default()
+    }
+    .validate()
+    .is_err());
+    let mut selected = original.clone();
+    assert!(trial.apply(&mut selected, "test-tenant", "test-agent"));
+    assert_eq!(selected.llm_provider, "qwen");
+    assert_eq!(selected.llm_first_output_timeout_seconds, 30.0);
+    let p = providers::Providers::new(Arc::new(selected), Trace::default()).unwrap();
+    let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+    let task = tokio::spawn(async move {
+        p.llm(
+            vec![json!({"role":"user","content":"Hello"})],
+            vec![],
+            false,
+            1,
+            1,
+            tx,
+        )
+        .await
+    });
+    let mut text = String::new();
+    while let Some(event) = rx.recv().await {
+        if let providers::LlmEvent::Text(chunk) = event {
+            text.push_str(&chunk);
+        }
+    }
+    task.await.unwrap().unwrap();
+    assert_eq!(text, "Hello from trial.");
+    server.abort();
+}
 #[derive(Default)]
 struct Fixture {
     requests: Mutex<Vec<Value>>,
