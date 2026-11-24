@@ -54,7 +54,9 @@ jobs:
           TRIAL_KEY: ${{ secrets.BONSAI_TRIAL_API_KEY }}
         run: |
           set -euo pipefail
-          test -n "$TRIAL_KEY"
+          # Current model is protected by the loopback-only SSH path, not an
+          # HTTP API key. The worker still requires a nonempty bearer value.
+          TRIAL_KEY="${TRIAL_KEY:-loopback-no-provider-auth}"
           image="attentive/voice:bonsai-ci-${GITHUB_SHA}"
           remote="/tmp/odion-bonsai-ci-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.py"
           ssh lagos-app 'umask 077; mktemp /tmp/odion-bonsai-ci-XXXXXXXX.py' > /tmp/companion-remote-path

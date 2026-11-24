@@ -11,7 +11,10 @@ passed the normal dev, staging, and production gates, configure all of:
 - `RVC_LAB_TRIAL_LLM_AGENT_IDS=1330ef61-4341-430d-b83d-23f5780cbe0f,6826e3d5-4870-47a1-b98b-c4d4742bf391,24568766-e169-4ffd-bbbf-7d8160c6f89b,f3f7a4fc-e2ed-4ac2-bc4f-8320dc78e108,1d08fd00-1675-409c-8a52-c4debb891c72`
 - `RVC_LAB_TRIAL_LLM_BASE_URL`: reachable OpenAI-compatible API base, including `/v1` if required.
 - `RVC_LAB_TRIAL_LLM_MODEL`: exact model identifier advertised by that endpoint.
-- `RVC_LAB_TRIAL_LLM_API_KEY`: secret from the approved secret store, never a URL or repository file.
+- `RVC_LAB_TRIAL_LLM_API_KEY`: the client requires a nonempty bearer value.
+  This loopback-only pilot does not validate that value; the restricted SSH
+  tunnel is the access control. Use a secret store if HTTP authentication is
+  added later, and never place a real key in a URL or repository file.
 - `RVC_LAB_TRIAL_LLM_FIRST_OUTPUT_TIMEOUT_SECONDS`: trial-only timeout; select
   between 0.2 and 120 seconds after measuring realistic prompts. The production
   default is 5 seconds; the HTTP client also has a 120-second total timeout.
