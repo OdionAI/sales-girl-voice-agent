@@ -99,6 +99,8 @@ pub struct Config {
     #[serde(default = "default_reasoning_effort")]
     pub llm_reasoning_effort: String,
     pub llm_provider: String,
+    #[serde(default)]
+    pub llm_trial: platform::LlmTrial,
     pub llm_first_output_timeout_seconds: f64,
     pub llm_empty_retries: usize,
     pub llm_empty_retry_delay_seconds: f64,
@@ -202,6 +204,7 @@ impl Config {
         Ok(c)
     }
     pub fn validate(&self) -> Result<(), String> {
+        self.llm_trial.validate()?;
         if !self.max_utterance_seconds.is_finite()
             || !(1.0..=3600.0).contains(&self.max_utterance_seconds)
         {

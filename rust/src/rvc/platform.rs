@@ -9,6 +9,72 @@ use std::{
     time::Duration,
 };
 
+/// An operator-only trial. Both the verified tenant and agent must match.
+#[derive(Clone, Default, Deserialize, Serialize)]
+#[serde(default)]
+pub struct LlmTrial {
+    pub business_id: String,
+    pub agent_ids: Vec<String>,
+    pub base_url: String,
+    pub model: String,
+    pub api_key: String,
+    pub first_output_timeout_seconds: f64,
+    pub exclusive: bool,
+}
+impl LlmTrial {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.business_id.is_empty()
+            && self.agent_ids.is_empty()
+            && self.base_url.is_empty()
+            && self.model.is_empty()
+            && self.api_key.is_empty()
+            && self.first_output_timeout_seconds == 0.0
+            && !self.exclusive
+        {
+            return Ok(());
+        }
+        let url = reqwest::Url::parse(&self.base_url).map_err(|_| "invalid trial LLM URL")?;
+        if self.business_id.trim().is_empty()
+            || self.agent_ids.is_empty()
+            || self.agent_ids.iter().any(|id| id.trim().is_empty())
+            || self.model.trim().is_empty()
+            || self.api_key.trim().is_empty()
+            || !self.first_output_timeout_seconds.is_finite()
+            || !(0.2..=120.0).contains(&self.first_output_timeout_seconds)
+            || !matches!(url.scheme(), "http" | "https")
+            || url.host_str().is_none()
+            || !url.username().is_empty()
+            || url.password().is_some()
+            || url.query().is_some()
+            || url.fragment().is_some()
+        {
+            return Err("incomplete or invalid trial LLM configuration".into());
+        }
+        Ok(())
+    }
+    fn matches(&self, business: &str, agent: &str) -> bool {
+        !business.is_empty()
+            && business == self.business_id
+            && self.agent_ids.iter().any(|id| id == agent)
+    }
+    pub(super) fn apply(&self, config: &mut super::Config, business: &str, agent: &str) -> bool {
+        if !self.matches(business, agent) {
+            return false;
+        }
+        config.llm_provider = "qwen".into();
+        config.llm_base_url = self
+            .base_url
+            .trim_end_matches('/')
+            .trim_end_matches("/chat/completions")
+            .into();
+        config.llm_model = self.model.clone();
+        config.llm_api_key = self.api_key.clone();
+        config.llm_enable_thinking = false;
+        config.llm_first_output_timeout_seconds = self.first_output_timeout_seconds;
+        true
+    }
+}
+
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct Endpoint {
@@ -111,6 +177,14 @@ pub async fn prepare_call(
         .clone()
         .ok_or("platform services are not configured")?;
     let scope = verifier.dispatch(metadata, room, &platform.agent.token, now)?;
+    config.llm_trial.validate()?;
+    if config.llm_trial.exclusive
+        && !config
+            .llm_trial
+            .matches(scope.business_id(), scope.agent_id())
+    {
+        return Err("trial worker scope is not authorized".into());
+    }
     let services = Services::new(platform, scope, trace)?;
     let context = services.load_agent().await?;
     resolve_call(config, services, context, room)
@@ -122,6 +196,14 @@ pub(crate) fn resolve_call(
     context: AgentContext,
     room: &str,
 ) -> Result<PreparedCall, String> {
+    config.llm_trial.validate()?;
+    if config.llm_trial.exclusive
+        && !config
+            .llm_trial
+            .matches(services.scope().business_id(), services.scope().agent_id())
+    {
+        return Err("trial worker scope is not authorized".into());
+    }
     validate_capabilities(&context)?;
     let caller = services.scope().caller().to_string();
     let claims = services.scope().claims();
@@ -154,6 +236,13 @@ pub(crate) fn resolve_call(
             _ => {}
         }
     }
+    let trial = config.llm_trial.clone();
+    trial.validate()?;
+    trial.apply(
+        &mut config,
+        services.scope().business_id(),
+        services.scope().agent_id(),
+    );
     for (key, target) in [
         ("stt_model", &mut config.stt_model),
         ("stt_context", &mut config.stt_context),
@@ -837,6 +926,63 @@ mod tests {
             super::super::profiles::clone_seed("access-ghana-cindy")
         );
         assert_eq!(prepared.config.agent_context.agent_id, "agent-a");
+        let mut trial_config = config.clone();
+        trial_config.llm_provider = "deepseek".into();
+        trial_config.llm_trial = LlmTrial {
+            business_id: "business-a".into(),
+            agent_ids: vec!["agent-a".into()],
+            base_url: "http://127.0.0.1:19043/v1".into(),
+            model: "bonsai-test".into(),
+            api_key: "fixture-only".into(),
+            first_output_timeout_seconds: 45.0,
+            exclusive: true,
+        };
+        let scoped = prepare_call(
+            trial_config.clone(),
+            &metadata,
+            "room-a",
+            &super::super::identity::Verifier::default(),
+            1000.0,
+            Trace::default(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(scoped.config.llm_model, "bonsai-test");
+        assert_eq!(scoped.config.llm_first_output_timeout_seconds, 45.0);
+        trial_config.llm_trial.business_id = "other-business".into();
+        let direct_service =
+            Services::new(PlatformConfig::default(), scope(), Trace::default()).unwrap();
+        let direct = resolve_call(
+            trial_config.clone(),
+            direct_service,
+            AgentContext::default(),
+            "room-a",
+        );
+        assert!(
+            matches!(direct, Err(ref error) if error == "trial worker scope is not authorized")
+        );
+        let other = prepare_call(
+            trial_config.clone(),
+            &metadata,
+            "room-a",
+            &super::super::identity::Verifier::default(),
+            1000.0,
+            Trace::default(),
+        )
+        .await;
+        assert!(matches!(other, Err(ref error) if error == "trial worker scope is not authorized"));
+        trial_config.llm_trial.exclusive = false;
+        let shared = prepare_call(
+            trial_config,
+            &metadata,
+            "room-a",
+            &super::super::identity::Verifier::default(),
+            1000.0,
+            Trace::default(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(shared.config.llm_provider, "deepseek");
         assert!(prepare_call(
             config,
             &metadata,
@@ -847,7 +993,7 @@ mod tests {
         )
         .await
         .is_err());
-        assert_eq!(state.requests.lock().unwrap().len(), 1);
+        assert_eq!(state.requests.lock().unwrap().len(), 3);
         server.abort();
     }
 }

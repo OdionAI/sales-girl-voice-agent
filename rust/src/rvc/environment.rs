@@ -111,6 +111,15 @@ pub fn from_lookup(get: impl Fn(&str) -> Option<String>) -> Result<OperatorConfi
         &["RVC_LAB_ENABLE_HAUSA_TWB_VOICES"],
         "false"
     ))?);
+    voice["llm_trial"] = json!({
+        "business_id": value(&["RVC_LAB_TRIAL_LLM_BUSINESS_ID"], ""),
+        "agent_ids": ids(&value(&["RVC_LAB_TRIAL_LLM_AGENT_IDS"], "")),
+        "base_url": value(&["RVC_LAB_TRIAL_LLM_BASE_URL"], ""),
+        "model": value(&["RVC_LAB_TRIAL_LLM_MODEL"], ""),
+        "api_key": value(&["RVC_LAB_TRIAL_LLM_API_KEY"], ""),
+        "first_output_timeout_seconds": number(&value(&["RVC_LAB_TRIAL_LLM_FIRST_OUTPUT_TIMEOUT_SECONDS"], "0"))?,
+        "exclusive": boolean(&value(&["RVC_LAB_TRIAL_LLM_EXCLUSIVE"], "false"))?
+    });
     voice["input_noise_suppression"] = json!(value(&["RVC_INPUT_NOISE_SUPPRESSION"], "0") == "1");
     voice["input_noise_agent_ids"] = json!(ids(&value(&["RVC_INPUT_NOISE_AGENT_IDS"], "")));
     voice["input_noise_implementation"] =
